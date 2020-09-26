@@ -28,24 +28,28 @@ A lightweight python library to to perform ETL (Extract, Transform, Load)
 
 1. Define configuration
     - [ ] **Required**: Open `configuration/environment/database.yaml` with an example at `configuration/environment/example/database.yaml`
-        - `database_alias` (**Required**): Alias that will be used to get database configuration throughout scripts (string)
+        - `database_alias` (**Required**): Database alias that will be used to get configuration throughout scripts (string)
         - `database_type` (**Required**): Database installation that will be connected to with options of [oracle, mysql, postgresql] (string)
         - `database_user` (**Required**): Database user credential (string)
         - `database_password` (**Required**): Database password credential (string)
     - [ ] **Required**: Create `configuration/environment/runtime.yaml` (COMING SOON)
     - [ ] **Required**: Create `configuration/job/<fileName>.yaml` with an example at `configuration/job/example/job.yaml`
-        - `workers` (**Required**): Number of cores to concurrently run through multiprocessing (number)
-        - `jobName` (**Required**): Alias that will be used for logging (string)
-        - `active` (**Required**): On/Off status for jobs with options of [true, false] (boolean)
+        - `workers` (**Required**): Number of cores to concurrently run with multiprocessing (number)
+        - `jobName` (**Required**): Job alias that will be used for logging (string)
+        - `active` (**Required**): Job run status with options of [true, false] (boolean)
         - `refresh` (**Required**): Number of seconds before rerunning the job (number)
-        - `predecessors` (**Optional**): Jobs that should run before defined in the file (list -> string)
-        - `sourceDatabase` (**Required**): Database alias that data will be extracted from (string)
-        - `targetDatabase` (**Required**): Database alias that data will be loaded into (string)
+        - `predecessors` (**Optional**): Jobs that should run before (list -> string)
+        - `sourceDatabase` (**Required**): Source database alias where data is extracted from (string)
+        - `targetDatabase` (**Required**): Target database alias where data is loaded to (string)
         - `insertStrategy` (**Required**): Strategy for inserting data with options of [swap, upsert] (string)
-        - `chunkSize` (**Required**): Number of rows that will be inserted to create chunks for performance (number)
-        - `targetTableStage` (**Optional**): Initial staging table load that is required when `insertStrategy`=swap and used by default for upsert (string)
-        - `targetTableFinal` (**Required**): Final table load (string)
-        - `columnTransforms` (**Optional**): Transformations applied to columns (list -> string)
-        - `preTargetAdhocQueries` (**Optional**): Queries that will be run before loading data (list -> string)
-        - `postTargetAdhocQueries` (**Optional**): Queries that will be run after loading data (list -> string)
-        - `sourceQuery` (**Required**): Query to extract data from source data (string)
+            - `swap': Inserts data into a staging table and renames staging table to final table
+            - `upsert': Inserts data from memory or inserts data from staging table when `targetTableStage` is populated into target table
+        - `chunkSize` (**Required**): Number of rows that will be included in each chunk when inserting for performance (number)
+        - `targetTableStage` (**Optional**): Staging table in target database (string)
+            - Required when `insertStrategy=swap`
+            - Used by default if populated when `insertStrategy=upsert`
+        - `targetTableFinal` (**Required**): Target table in target database (string)
+        - `columnTransforms` (**Optional**): Transformations currently limited to currency (MORE COMING SOON) applied to columns (list -> string)
+        - `preTargetAdhocQueries` (**Optional**): Queries that will be run on target database before loading data (list -> string)
+        - `postTargetAdhocQueries` (**Optional**): Queries that will run on target database after loading data (list -> string)
+        - `sourceQuery` (**Required**): Query to extract data from source database (string)
