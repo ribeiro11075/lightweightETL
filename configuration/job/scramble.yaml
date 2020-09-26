@@ -1,6 +1,6 @@
 workers: 4
 jobs:
-  <jobName>:
+  <placeholder>:
     active: true
     predecessors:
     -

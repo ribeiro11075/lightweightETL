@@ -1,13 +1,13 @@
 workers: 10
 jobs:
-  test:
+  <placeholder>:
     active: true
     refresh: 0
     predecessors:
     -
     sourceDatabase: test
     targetDatabase: test
-    insertStrategy: append
+    insertStrategy: swap
     chunkSize: 100
     targetTableStage: links2
     targetaTableFinal: links3

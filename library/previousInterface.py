@@ -14,6 +14,8 @@ class PREVIOUS():
 
 	def addPrevious(self, job):
 
+		self.previous = {} if self.previous is None else self.previous
+
 		# set current time to latest integration job run
 		self.previous[job] = time.time()
 

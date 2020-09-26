@@ -147,9 +147,7 @@ class DATABASE():
 
 			# execute query & commit
 			# increment index to track rows to insert with chunking
-			print("TEST")
 			self.cursor.executemany(query, data[index:index + chunkSize])
-			print("WOMP")
 			self.connection.commit()
 			index += chunkSize
 
@@ -166,63 +164,40 @@ class DATABASE():
 		self._chunkInsert(table=table, data=data, chunkSize=chunkSize, query=query)
 
 
-	# Needs work to fix PostgreSQL + MySQL
-	def append(self, table, data, chunkSize=100):
+	def upsert(self, table, data, chunkSize=100):
 
-		# get column names of table
+		# get primary and non-primary columns of target table
+		# dynamically create column placeholder variables syntax
 		allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=table)
+		allColumnVariables = len(allColumns) * ['%s']
 
-		# check if the target table only has primary keys and unique columns since it would not require the duplicate portion of the insert statement
-		# create dynamic SQL
-		if not primaryKeyColumns:
-			self.insert(table=table, data=data, chunkSize=chunkSize)
-		else:
+		# check if mysql or postgresql database
+		# dynamically create column selection syntax for values to be updated
+		if self.type == 'mysql':
+			nonPrimaryKeyColumnVariables = [column + '=VALUES(' + column + ')' for column in nonPrimaryKeyColumns]
+			query = "INSERT INTO {} ({}) VALUES ({}) ON DUPLICATE KEY UPDATE {}".format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ', '.join(nonPrimaryKeyColumnVariables))
+		elif self.type == 'postgresql':
+			nonPrimaryKeyColumnVariables = [column + '=EXCLUDED.' + column for column in nonPrimaryKeyColumns]
+			query = query="INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO UPDATE SET {}".format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ','.join(primaryKeyColumns), ', '.join(nonPrimaryKeyColumnVariables))
 
-			if self.type == 'mysql':
-				duplicateColumnNames = [column + '=VALUES(' + column + ')' for column in nonPrimaryKeyColumns]
-				columnVariables = len(allColumns) * ['%s']
-				query = "INSERT INTO {} ({}) VALUES ({}) ON DUPLICATE KEY UPDATE {}".format(table, ', '.join(allColumns), ', '.join(columnVariables), ', '.join(duplicateColumnNames))
-				self._chunkInsert(table=table, data=data, chunkSize=chunkSize, query=query)
-			elif self.type == 'postgresql':
-				print('test')
-				allColumnVariables = len(allColumns) * ['%s']
-				nonPrimaryKeyColumnVariables = len(nonPrimaryKeyColumns) * ['%s']
-				print(nonPrimaryKeyColumnVariables)
-
-				query = query="INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO UPDATE SET ({})=({})".format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ','.join(primaryKeyColumns), ', '.join(nonPrimaryKeyColumns), ','.join(nonPrimaryKeyColumnVariables))
-				print(query)
-				self.cursor.executemany(query, data)
-				print("TESTICLE")
+			self._chunkInsert(table=table, data=data, chunkSize=chunkSize, query=query)
 
 
-	# Needs work to fix PostgreSQL + MySQL
-	def appendFromStage(self, targetTable, stageTable):
+	def upsertFromStage(self, targetTable, stageTable):
 
-		# get table columns
-		# get non-primary key columns
-		columns = self.getAllColumnNames(table=targetTable)
-		nonPrimaryKeyColumns= self.getNonPrimaryColumnNames(table=targetTable)
+		# get primary and non-primary columns of target table
+		allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=targetTable)
 
-		# check if the target table only has primary keys and unique columns since it would not require the duplicate portion of the insert statement
-		# create dynamic SQL
-		if not nonPrimaryKeyColumns:
-			query = "INSERT IGNORE INTO " + targetTable + " (" + ' ,'.join(columns) + ") SELECT " + ', '.join(columns) + " FROM " + stageTable
-		else:
+		# check if mysql or postgresql database
+		# dynamically create column selection syntax for values to be updated
+		if self.type == 'mysql':
+			nonPrimaryKeyColumnVariables = [column + '=VALUES(' + column + ')' for column in nonPrimaryKeyColumns]
+			query = "INSERT INTO {} ({}) SELECT {} FROM {} ON DUPLICATE KEY UPDATE {}".format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable, ', '.join(nonPrimaryKeyColumnVariables))
+		elif self.type == 'postgresql':
+			nonPrimaryKeyColumnVariables = [column + '=EXCLUDED.' + column for column in nonPrimaryKeyColumns]
+			query = "INSERT INTO {} ({}) SELECT {} FROM {} ON CONFLICT({}) DO UPDATE SET {}".format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable, ','.join(primaryKeyColumns), ', '.join(nonPrimaryKeyColumnVariables))
 
-			duplicateColumnNames = [column + '=VALUES(' + column + ')' for column in nonPrimaryKeyColumns]
-
-			if self.type == 'mysql':
-				duplicateColumnNames = [column + '=VALUES(' + column + ')' for column in nonPrimaryKeyColumns]
-				query = "INSERT INTO {} ({}) SELECT {} FROM {} ON DUPLICATE KEY UPDATE {}".format(targetTable, ', '.join(columns), ', '.join(columns), stageTable, ', '.join(duplicateColumnNames))
-			elif self.type == 'postgresql':
-				query = "PLACEHOLDER"
-
-		# execute query & commit
-		self.cursor.execute(query)
-		self.connection.commit()
-
-		query = "SELECT {} FROM {}".format(targetTable, ' ,'.join(columns))
-		self.cursor.execute(query)
+			self.alter(query=query)
 
 
 	def swap(self, targetTable, stageTable):

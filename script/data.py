@@ -73,8 +73,8 @@ def worker(readyQueue, completedQueue, activeJobs):
 			# insert data into staging table
 			# close database connection
 			databaseInterface = di.DATABASE(connectionSettings=targetDatabaseConnectionSettings)
-			databaseInterface.truncate(table=targetTableStage)
-			databaseInterface.insert(table=targetTableStage, data=data, chunkSize=chunkSize)
+			databaseInterface.truncate(table=targetTableStage) if targetTableStage else None
+			databaseInterface.insert(table=targetTableStage, data=data, chunkSize=chunkSize) if targetTableStage else None
 			databaseInterface.close()
 
 			# iterate through pre adhoc queries to be run
@@ -92,6 +92,7 @@ def worker(readyQueue, completedQueue, activeJobs):
 			# close database connection
 			if insertStrategy == 'swap':
 				databaseInterface = di.DATABASE(connectionSettings=targetDatabaseConnectionSettings)
+				print(targetTableStage)
 				databaseInterface.swap(targetTable=targetaTableFinal, stageTable=targetTableStage)
 				databaseInterface.close()
 
@@ -99,9 +100,9 @@ def worker(readyQueue, completedQueue, activeJobs):
 			# create database interface
 			# append data from stagin table to target table
 			# close database connection
-			if insertStrategy == 'append':
+			if insertStrategy == 'upsert':
 				databaseInterface = di.DATABASE(connectionSettings=targetDatabaseConnectionSettings)
-				databaseInterface.append(table=targetaTableFinal, data=data, chunkSize=chunkSize)
+				databaseInterface.upsert(table=targetaTableFinal, data=data, chunkSize=chunkSize) if not targetTableStage else databaseInterface.upsertFromStage(targetTable=targetaTableFinal, stageTable=targetTableStage)
 				databaseInterface.close()
 
 			# iterate through post adhoc queries to be run
