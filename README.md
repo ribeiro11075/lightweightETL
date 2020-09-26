@@ -42,8 +42,8 @@ A lightweight python library to to perform ETL (Extract, Transform, Load)
         - `sourceDatabase` (**Required**): Source database alias where data is extracted from (string)
         - `targetDatabase` (**Required**): Target database alias where data is loaded to (string)
         - `insertStrategy` (**Required**): Strategy for inserting data with options of [swap, upsert] (string)
-            - `swap': Inserts data into a staging table and renames staging table to final table
-            - `upsert': Inserts data from memory or inserts data from staging table when `targetTableStage` is populated into target table
+            - `swap`: Inserts data into a staging table and renames staging table to final table
+            - `upsert`: Inserts data from memory or inserts data from staging table when `targetTableStage` is populated into target table
         - `chunkSize` (**Required**): Number of rows that will be included in each chunk when inserting for performance (number)
         - `targetTableStage` (**Optional**): Staging table in target database (string)
             - Required when `insertStrategy=swap`
