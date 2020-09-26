@@ -1,0 +1,21 @@
+workers: 4
+jobs:
+  <jobName>:
+    active: true
+    predecessors:
+    -
+    database: test
+    table: links4
+    defaultColumnValues:
+    identifierColumns:
+    -
+    scrambleColumns:
+    -
+    randomColumns:
+    -
+    randomSalt:
+    allDataRandom: false
+    preTargetAdhocQueries:
+    -
+    postTargetAdhocQueries:
+    -
