@@ -1,0 +1,59 @@
+workers: 10
+jobs:
+  moveFromOnboardToPayroll:
+    active: true
+    refresh: 120
+    predecessors:
+    -
+    sourceDatabase: onboardApplication
+    targetDatabase: payrollApplication
+    insertStrategy: upsert
+    chunkSize: 1000
+    targetTableStage:
+    targetaTableFinal: payrollFinal
+    columnTransforms:
+      currency:
+      - salary
+    preTargetAdhocQueries:
+    - update payrollFinal set payrollColumn1 = 3 where payrollColumn1 = 2
+    postTargetAdhocQueries:
+    - update payrollFinal set payrollColumn1 = 2 where payrollColumn1 = 3
+    sourceQuery: select onboardFinalColumn1, onboardColumn2, onboardColumn3 from onboard
+  moveFromPayrollToDataWarehouse:
+    active: true
+    refresh: 240
+    predecessors:
+    - moveFromOnboardToPayroll
+    sourceDatabase: payrollApplication
+    targetDatabase: dataWarehouse
+    insertStrategy: upsert
+    chunkSize: 500
+    targetTableStage: dataWarehousePayrollStage
+    targetaTableFinal: dataWarehousePayrollTarget
+    columnTransforms:
+      currency:
+      -
+    preTargetAdhocQueries:
+    -
+    postTargetAdhocQueries:
+    -
+    sourceQuery: select payrollColumn1, payrollColumn2, payrollColumn3 from payrollFinal
+  moveFromPayrollToDataWarehouse:
+    active: true
+    refresh: 300
+    predecessors:
+    -
+    sourceDatabase: payrollApplication
+    targetDatabase: dataWarehouse
+    insertStrategy: swap
+    chunkSize: 5000
+    targetTableStage: dataWarehousePayrollDetailStage
+    targetaTableFinal: dataWarehousePayrollDetailTarget
+    columnTransforms:
+      currency:
+      -
+    preTargetAdhocQueries:
+    -
+    postTargetAdhocQueries:
+    -
+    sourceQuery: select payrollDetailColumn1, payrollDetailColumn2, payrollDetailColumn3 from payrollDetail

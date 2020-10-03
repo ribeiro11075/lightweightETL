@@ -1,16 +1,16 @@
-workers: 10
+workers: <workers>
 jobs:
-  <placeholder>:
-    active: true
-    refresh: 0
+  <jobAliasName1>:
+    active: <active>
+    refresh: <refresh>
     predecessors:
     -
-    sourceDatabase: test
-    targetDatabase: test
-    insertStrategy: swap
-    chunkSize: 100
-    targetTableStage: links2
-    targetaTableFinal: links3
+    sourceDatabase: <sourceDatabase>
+    targetDatabase: <targetDatabase>
+    insertStrategy: <insertStrategy>
+    chunkSize: <chunkSize>
+    targetTableStage: <targetTableStage>
+    targetaTableFinal: <targetaTableFinal>
     columnTransforms:
       currency:
       -
@@ -18,4 +18,43 @@ jobs:
     -
     postTargetAdhocQueries:
     -
-    sourceQuery: select * from links
+    sourceQuery: <sourceQuery>
+  <jobAliasName2>:
+    active: <active>
+    refresh: <refresh>
+    predecessors:
+    -
+    sourceDatabase: <sourceDatabase>
+    targetDatabase: <targetDatabase>
+    insertStrategy: <insertStrategy>
+    chunkSize: <chunkSize>
+    targetTableStage: <targetTableStage>
+    targetaTableFinal: <targetaTableFinal>
+    columnTransforms:
+      currency:
+      -
+    preTargetAdhocQueries:
+    -
+    postTargetAdhocQueries:
+    -
+    sourceQuery: <sourceQuery>
+  <jobAliasName3>:
+    active: <active>
+    refresh: <refresh>
+    predecessors:
+    -
+    sourceDatabase: <sourceDatabase>
+    targetDatabase: <targetDatabase>
+    insertStrategy: <insertStrategy>
+    chunkSize: <chunkSize>
+    targetTableStage: <targetTableStage>
+    targetaTableFinal: <targetaTableFinal>
+    columnTransforms:
+      currency:
+      -
+    preTargetAdhocQueries:
+    -
+    postTargetAdhocQueries:
+    -
+    sourceQuery: <sourceQuery>
+

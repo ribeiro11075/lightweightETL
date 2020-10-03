@@ -1,11 +1,11 @@
-workers: 4
+workers: <workers>
 jobs:
-  <placeholder>:
-    active: true
+  <jobAliasName1>:
+    active: <active>
     predecessors:
     -
-    database: test
-    table: links4
+    database: <database>
+    table: <table>
     defaultColumnValues:
     identifierColumns:
     -
@@ -13,8 +13,46 @@ jobs:
     -
     randomColumns:
     -
-    randomSalt:
-    allDataRandom: false
+    randomSalt: <randomSalt>
+    allDataRandom: <allDataRandom>
+    preTargetAdhocQueries:
+    -
+    postTargetAdhocQueries:
+    -
+  <jobAliasName2>:
+    active: <active>
+    predecessors:
+    -
+    database: <database>
+    table: <table>
+    defaultColumnValues:
+    identifierColumns:
+    -
+    scrambleColumns:
+    -
+    randomColumns:
+    -
+    randomSalt: <randomSalt>
+    allDataRandom: <allDataRandom>
+    preTargetAdhocQueries:
+    -
+    postTargetAdhocQueries:
+    -
+  <jobAliasName3>:
+    active: <active>
+    predecessors:
+    -
+    database: <database>
+    table: <table>
+    defaultColumnValues:
+    identifierColumns:
+    -
+    scrambleColumns:
+    -
+    randomColumns:
+    -
+    randomSalt: <randomSalt>
+    allDataRandom: <allDataRandom>
     preTargetAdhocQueries:
     -
     postTargetAdhocQueries:

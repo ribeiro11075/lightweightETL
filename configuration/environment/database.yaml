@@ -1,10 +1,30 @@
-test:
-  type: postgresql
-  user: user
-  password: password
-  database: test
-  host: localhost
-  port: 5432
-  threaded:
-  serviceName:
-  sid:
+<databaseAliasName1>:
+  type: <type>
+  user: <user>
+  password: <password>
+  database: <database>
+  host: <host>
+  port: <port>
+  threaded: 
+  serviceName: 
+  sid: 
+<databaseAliasName2>:
+  type: <type>
+  user: <user>
+  password: <password>
+  database: <database>
+  host: <host>
+  port: <port>
+  threaded: 
+  serviceName: 
+  sid: 
+<databaseAliasName3>:
+  type: <type>
+  user: <user>
+  password: <password>
+  database: <database>
+  host: <host>
+  port: <port>
+  threaded: 
+  serviceName: 
+  sid: 

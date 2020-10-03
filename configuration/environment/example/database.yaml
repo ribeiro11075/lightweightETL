@@ -1,0 +1,30 @@
+<payrollApplication>:
+  type: postgresql
+  user: payrollUser
+  password: payrollPassword
+  database: payroll
+  host: 127.0.0.1
+  port: 5442
+  threaded: 
+  serviceName: 
+  sid: 
+<onboardApplication>:
+  type: mysql
+  user: onboardUser
+  password: onboardPassword
+  database: onboard
+  host: 127.0.0.1
+  port: 6000
+  threaded: 
+  serviceName: 
+  sid:
+<dataWarehouse>:
+  type: oracle
+  user: dataWarehouseUser
+  password: dataWarehousePassword
+  database: dataWarehouse
+  host: 127.0.0.1
+  port: 8000
+  threaded: 
+  serviceName: 
+  sid: 

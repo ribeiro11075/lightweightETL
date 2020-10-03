@@ -1,0 +1,61 @@
+workers: 4
+jobs:
+  onboardScramble:
+    active: true
+    predecessors:
+    -
+    database: onboardApplication
+    table: onboard
+    defaultColumnValues:
+      onboardColumn5: 1
+    identifierColumns:
+    - onboardColumn1
+    - onboardColumn2
+    scrambleColumns:
+    - onboardColumn3
+    randomColumns:
+    - onboardColumn4
+    randomSalt: randomSalt1
+    allDataRandom: false
+    preTargetAdhocQueries:
+    - update onboard set onboardColumn5 = 1
+    postTargetAdhocQueries:
+    - update onboard set onboardColumn3 = 6 where onboardColumn3 = 8
+  payrollFinalScramble:
+    active: true
+    predecessors:
+    -
+    database: payrollApplication
+    table: payrollFinal
+    defaultColumnValues:
+    identifierColumns:
+    -
+    scrambleColumns:
+    -
+    randomColumns:
+    -
+    randomSalt: randomSalt2
+    allDataRandom: true
+    preTargetAdhocQueries:
+    -
+    postTargetAdhocQueries:
+    -
+  payrollDetailScramble:
+    active: true
+    predecessors:
+    - payrollFinalScramble
+    database: payrollApplication
+    table: payrollFinal
+    defaultColumnValues:
+    identifierColumns:
+    - payrollDetailColumn1
+    scrambleColumns:
+    -
+    randomColumns:
+    -
+    randomSalt: randomSalt3
+    allDataRandom: false
+    preTargetAdhocQueries:
+    -
+    postTargetAdhocQueries:
+    -
