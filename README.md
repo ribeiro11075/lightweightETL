@@ -47,13 +47,13 @@ The installation steps include optional items that are dependent on requirements
         - `targetDatabase` (**Required**): Target database alias where data is loaded to (string)
         - `insertStrategy` (**Required**): Strategy for inserting data with options of [swap, upsert] (string)
             - `swap`: Inserts data into a staging table and renames staging table to final table
-            - `upsert`: Inserts data from memory or staging table (when `targetTableStage` is populated) to target table
+            - `upsert`: Upserts data from memory or staging table to target table
         - `chunkSize` (**Required**): Number of rows in each insert chunk for performance (number)
         - `targetTableStage` (**Optional**): Staging table in target database (string)
             - Required when `insertStrategy=swap`
             - Used by default when `insertStrategy=upsert`
         - `targetTableFinal` (**Required**): Target table in target database (string)
         - `columnTransforms` (**Optional**): Transformations on data currently limited to currency (list -> string)
-        - `preTargetAdhocQueries` (**Optional**): Queries run on target database before loading data (list -> string)
-        - `postTargetAdhocQueries` (**Optional**): Queries run on target database after loading data (list -> string)
+        - `preTargetAdhocQueries` (**Optional**): Queries run on target database before data load (list -> string)
+        - `postTargetAdhocQueries` (**Optional**): Queries run on target database after data load(list -> string)
         - `sourceQuery` (**Required**): Query to extract data from source database (string)
