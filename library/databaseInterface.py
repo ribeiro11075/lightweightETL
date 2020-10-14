@@ -1,5 +1,5 @@
-#import mysql.connector
-#import cx_Oracle
+import mysql.connector
+import cx_Oracle
 import psycopg2
 
 

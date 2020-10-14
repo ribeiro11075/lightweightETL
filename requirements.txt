@@ -1,3 +1,4 @@
 pyyaml==5.3.1
 cx-Oracle=8.0.1
 psycopg2=2.8.6
+mysql-connector-python=8.0.21
