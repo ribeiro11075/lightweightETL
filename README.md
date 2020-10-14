@@ -54,6 +54,6 @@ The installation steps include optional items that are dependent on requirements
             - Used by default when `insertStrategy=upsert`
         - `targetTableFinal` (**Required**): Target table in target database (string)
         - `columnTransforms` (**Optional**): Transformations on data currently limited to currency (list -> string)
-        - `preTargetAdhocQueries` (**Optional**): Queries run on target database before data load (list -> string)
-        - `postTargetAdhocQueries` (**Optional**): Queries run on target database after data load(list -> string)
+        - `preTargetAdhocQueries` (**Optional**): Queries run on target database pre data load (list -> string)
+        - `postTargetAdhocQueries` (**Optional**): Queries run on target database post data load(list -> string)
         - `sourceQuery` (**Required**): Query to extract data from source database (string)
