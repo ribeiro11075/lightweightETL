@@ -14,7 +14,7 @@ def resolveTransformer(reference: str) -> Transformer:
     """Import a Transformer from a "module.path:function_name" reference.
 
     Lets a job configuration name a function defined anywhere importable --
-    example/transforms.py, or any module of the user's own -- without the caller
+    example/example_transforms.py, or any module of the user's own -- without the caller
     having to pre-register it in a lookup table.
     """
 

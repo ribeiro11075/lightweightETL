@@ -15,16 +15,56 @@ from .scrambleInterface import Scramble
 from .transformInterface import Transformer, resolveTransformer, Transform
 
 
-def _dataJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJobs: Dict[str, DataJobConfig],
-                    databaseConfiguration: Dict[str, DatabaseConnectionConfig], logDirectory: Path, memoryDirectory: Path) -> None:
-    """Runs data jobs pulled off readyQueue until the process is torn down.
+def _executeDataJob(jobConfig: DataJobConfig, databaseConfiguration: Dict[str, DatabaseConnectionConfig]) -> None:
+    """Runs one data job to completion, raising on failure.
 
     Each columnTransforms entry is a "module.path:function_name" reference, resolved
     via resolveTransformer rather than a fixed lookup table. One source and one target
-    Database connection are opened per job and reused for every step, rather than a
-    fresh connection per query. The swap branch asserts targetTableStage is set
+    Database connection are opened for the job and reused for every step, rather than
+    a fresh connection per query. The swap branch asserts targetTableStage is set
     because DataJobConfig's validator guarantees that whenever insertStrategy is swap.
     """
+
+    columnTransforms: Dict[str, List[Transformer]] = {
+        column: [resolveTransformer(reference) for reference in references] for column, references in jobConfig.columnTransforms.items()
+        }
+
+    sourceDatabaseConnectionSettings = databaseConfiguration[jobConfig.sourceDatabase]
+    targetDatabaseConnectionSettings = databaseConfiguration[jobConfig.targetDatabase]
+
+    with Database(connectionSettings=sourceDatabaseConnectionSettings) as sourceDatabase, \
+         Database(connectionSettings=targetDatabaseConnectionSettings) as targetDatabase:
+
+        data = sourceDatabase.query(query=jobConfig.sourceQuery)
+
+        columns = targetDatabase.getAllColumnNames(table=jobConfig.targetTableFinal)
+        transform = Transform(data=data, columns=columns, columnTransforms=columnTransforms)
+        data = transform.transform()
+
+        if jobConfig.targetTableStage:
+            targetDatabase.truncate(table=jobConfig.targetTableStage)
+            targetDatabase.insert(table=jobConfig.targetTableStage, data=data, chunkSize=jobConfig.chunkSize)
+
+        for preTargetAdhocQuery in jobConfig.preTargetAdhocQueries:
+            targetDatabase.alter(preTargetAdhocQuery)
+
+        if jobConfig.insertStrategy == InsertStrategy.SWAP:
+            assert jobConfig.targetTableStage is not None
+            targetDatabase.swap(targetTable=jobConfig.targetTableFinal, stageTable=jobConfig.targetTableStage)
+
+        if jobConfig.insertStrategy == InsertStrategy.UPSERT:
+            if jobConfig.targetTableStage:
+                targetDatabase.upsertFromStage(targetTable=jobConfig.targetTableFinal, stageTable=jobConfig.targetTableStage)
+            else:
+                targetDatabase.upsert(table=jobConfig.targetTableFinal, data=data, chunkSize=jobConfig.chunkSize)
+
+        for postTargetAdhocQuery in jobConfig.postTargetAdhocQueries:
+            targetDatabase.alter(postTargetAdhocQuery)
+
+
+def _dataJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJobs: Dict[str, DataJobConfig],
+                    databaseConfiguration: Dict[str, DatabaseConnectionConfig], logDirectory: Path, memoryDirectory: Path) -> None:
+    """Runs data jobs pulled off readyQueue, via _executeDataJob, until the process is torn down."""
 
     log = Log(logDirectory=logDirectory)
     memory = Memory(memoryDirectory=memoryDirectory)
@@ -35,44 +75,7 @@ def _dataJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJobs: D
         log.logging.info('Starting {}'.format(job))
 
         try:
-            jobConfig = activeJobs[job]
-
-            columnTransforms: Dict[str, List[Transformer]] = {
-                column: [resolveTransformer(reference) for reference in references] for column, references in jobConfig.columnTransforms.items()
-                }
-
-            sourceDatabaseConnectionSettings = databaseConfiguration[jobConfig.sourceDatabase]
-            targetDatabaseConnectionSettings = databaseConfiguration[jobConfig.targetDatabase]
-
-            with Database(connectionSettings=sourceDatabaseConnectionSettings) as sourceDatabase, \
-                 Database(connectionSettings=targetDatabaseConnectionSettings) as targetDatabase:
-
-                data = sourceDatabase.query(query=jobConfig.sourceQuery)
-
-                columns = targetDatabase.getAllColumnNames(table=jobConfig.targetTableFinal)
-                transform = Transform(data=data, columns=columns, columnTransforms=columnTransforms)
-                data = transform.transform()
-
-                if jobConfig.targetTableStage:
-                    targetDatabase.truncate(table=jobConfig.targetTableStage)
-                    targetDatabase.insert(table=jobConfig.targetTableStage, data=data, chunkSize=jobConfig.chunkSize)
-
-                for preTargetAdhocQuery in jobConfig.preTargetAdhocQueries:
-                    targetDatabase.alter(preTargetAdhocQuery)
-
-                if jobConfig.insertStrategy == InsertStrategy.SWAP:
-                    assert jobConfig.targetTableStage is not None
-                    targetDatabase.swap(targetTable=jobConfig.targetTableFinal, stageTable=jobConfig.targetTableStage)
-
-                if jobConfig.insertStrategy == InsertStrategy.UPSERT:
-                    if jobConfig.targetTableStage:
-                        targetDatabase.upsertFromStage(targetTable=jobConfig.targetTableFinal, stageTable=jobConfig.targetTableStage)
-                    else:
-                        targetDatabase.upsert(table=jobConfig.targetTableFinal, data=data, chunkSize=jobConfig.chunkSize)
-
-                for postTargetAdhocQuery in jobConfig.postTargetAdhocQueries:
-                    targetDatabase.alter(postTargetAdhocQuery)
-
+            _executeDataJob(activeJobs[job], databaseConfiguration)
             status = JobStatus.COMPLETED
             log.logging.info('Completed {}'.format(job))
 
@@ -128,13 +131,43 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
     log.logging.info('Finished data job runner')
 
 
+def _executeScrambleJob(job: str, jobConfig: ScrambleJobConfig, databaseConfiguration: Dict[str, DatabaseConnectionConfig]) -> None:
+    """Runs one scramble job to completion, raising on failure.
+
+    One Database connection is opened for the job and reused for every step. If
+    the table has no rows, nothing is scrambled or written -- only the pre-adhoc
+    queries (if any) run.
+    """
+
+    connectionSettings = databaseConfiguration[jobConfig.database]
+
+    with Database(connectionSettings=connectionSettings) as database:
+
+        for preTargetAdhocQuery in jobConfig.preTargetAdhocQueries:
+            database.alter(preTargetAdhocQuery)
+
+        dataQuery = 'select * from {}'.format(jobConfig.table)
+        data = database.query(query=dataQuery)
+        columns = database.getAllColumnNames(table=jobConfig.table)
+        dataTypes = database.getAllColumnTypes(table=jobConfig.table)
+
+        if data:
+
+            scramble = Scramble(job=job, data=data, columns=columns, dataTypes=dataTypes, defaultColumnValues=jobConfig.defaultColumnValues,
+                                 identifierColumns=jobConfig.identifierColumns, scrambleColumns=jobConfig.scrambleColumns, randomColumns=jobConfig.randomColumns,
+                                 allDataRandom=jobConfig.allDataRandom, randomSalt=jobConfig.randomSalt)
+            scramble.scramble()
+
+            database.truncate(jobConfig.table)
+            database.insert(table=jobConfig.table, data=scramble.dataScrambled, chunkSize=5000)
+
+            for postTargetAdhocQuery in jobConfig.postTargetAdhocQueries:
+                database.alter(postTargetAdhocQuery)
+
+
 def _scrambleJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJobs: Dict[str, ScrambleJobConfig],
                         databaseConfiguration: Dict[str, DatabaseConnectionConfig], logDirectory: Path) -> None:
-    """Runs scramble jobs pulled off readyQueue until the process is torn down.
-
-    One Database connection is opened per job and reused for every step, rather
-    than a fresh connection per query.
-    """
+    """Runs scramble jobs pulled off readyQueue, via _executeScrambleJob, until the process is torn down."""
 
     log = Log(logDirectory=logDirectory)
 
@@ -144,32 +177,7 @@ def _scrambleJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJob
         log.logging.info('Starting {}'.format(job))
 
         try:
-            jobConfig = activeJobs[job]
-            connectionSettings = databaseConfiguration[jobConfig.database]
-
-            with Database(connectionSettings=connectionSettings) as database:
-
-                for preTargetAdhocQuery in jobConfig.preTargetAdhocQueries:
-                    database.alter(preTargetAdhocQuery)
-
-                dataQuery = 'select * from {}'.format(jobConfig.table)
-                data = database.query(query=dataQuery)
-                columns = database.getAllColumnNames(table=jobConfig.table)
-                dataTypes = database.getAllColumnTypes(table=jobConfig.table)
-
-                if data:
-
-                    scramble = Scramble(job=job, data=data, columns=columns, dataTypes=dataTypes, defaultColumnValues=jobConfig.defaultColumnValues,
-                                         identifierColumns=jobConfig.identifierColumns, scrambleColumns=jobConfig.scrambleColumns, randomColumns=jobConfig.randomColumns,
-                                         allDataRandom=jobConfig.allDataRandom, randomSalt=jobConfig.randomSalt)
-                    scramble.scramble()
-
-                    database.truncate(jobConfig.table)
-                    database.insert(table=jobConfig.table, data=scramble.dataScrambled, chunkSize=5000)
-
-                    for postTargetAdhocQuery in jobConfig.postTargetAdhocQueries:
-                        database.alter(postTargetAdhocQuery)
-
+            _executeScrambleJob(job, activeJobs[job], databaseConfiguration)
             status = JobStatus.COMPLETED
             log.logging.info('Completed {}'.format(job))
 

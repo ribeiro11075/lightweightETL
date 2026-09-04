@@ -11,16 +11,16 @@ license = { file = "LICENSE" }
 requires-python = ">=3.9"
 authors = [{ name = "David Ribeiro" }]
 dependencies = [
-    "pyyaml==5.3.1",
+    "pyyaml==6.0.3",
     "pydantic==2.13.5",
     ]
 
 [project.optional-dependencies]
-mysql = ["mysql-connector-python==8.0.21"]
-postgresql = ["psycopg2==2.8.6"]
-oracle = ["cx-Oracle==8.0.1"]
+mysql = ["mysql-connector-python==26.7.0"]
+postgresql = ["psycopg2==2.9.12"]
+oracle = ["cx-Oracle==8.3.0"]
 all = ["lightweight-etl[mysql,postgresql,oracle]"]
-dev = ["pytest==8.4.2", "mypy==1.13.0", "types-PyYAML==6.0.12.20240917"]
+dev = ["pytest==9.1.1", "mypy==2.3.1", "types-PyYAML==6.0.12.20260815"]
 
 [tool.setuptools]
 packages = ["library"]
@@ -29,7 +29,10 @@ packages = ["library"]
 testpaths = ["tests"]
 
 [tool.mypy]
-python_version = "3.9"
+# mypy 2.x's minimum checkable target is 3.10; the package itself still
+# supports and declares requires-python >=3.9 above -- nothing in the code
+# actually uses 3.10+-only syntax, this is purely mypy's own tooling floor
+python_version = "3.10"
 files = ["library"]
 ignore_missing_imports = true
 warn_unused_ignores = true

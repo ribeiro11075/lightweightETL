@@ -105,6 +105,29 @@ def test_get_all_column_names_and_types_use_a_bounded_query():
         assert 'WHERE 1=0' in callArgs[0][0]
 
 
+def test_chunk_insert_splits_data_into_multiple_batches():
+    """5 records with chunkSize=2 should batch as [0:2], [2:4], [4:6] (3 executemany
+    calls, the last a partial batch) -- covers the chunking loop itself, not just
+    that a single executemany call happens.
+    """
+    database = _mockedDatabase(DatabaseType.MYSQL)
+    data = [(1,), (2,), (3,), (4,), (5,)]
+
+    database.insert(table='people', data=data, chunkSize=2)
+
+    batches = [callArgs[0][1] for callArgs in database.cursor.executemany.call_args_list]
+    assert batches == [[(1,), (2,)], [(3,), (4,)], [(5,)]]
+    assert database.connection.commit.call_count == 3
+
+
+def test_chunk_insert_does_nothing_for_empty_data():
+    database = _mockedDatabase(DatabaseType.MYSQL)
+
+    database.insert(table='people', data=[], chunkSize=100)
+
+    database.cursor.executemany.assert_not_called()
+
+
 def test_context_manager_closes_on_normal_exit():
     database = _mockedDatabase(DatabaseType.MYSQL)
 

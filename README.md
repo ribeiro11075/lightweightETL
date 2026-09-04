@@ -61,7 +61,7 @@ Worker processes, the process pool, and the dependency graph between jobs are al
             - `chunkSize` (**Required**): rows per insert batch (number)
             - `targetTableStage` (**Optional**): required when `insertStrategy: swap`
             - `targetTableFinal` (**Required**): target table in the target database
-            - `columnTransforms` (**Optional**): map of column name -> list of transformer references, each in the form `"module.path:function_name"` (e.g. `example.transforms:currency`). The function can live anywhere importable -- `example/transforms.py` is just a reference implementation -- and is resolved at job-run time via `library.resolveTransformer`
+            - `columnTransforms` (**Optional**): map of column name -> list of transformer references, each in the form `"module.path:function_name"` (e.g. `example.example_transforms:currency`). The function can live anywhere importable -- `example/example_transforms.py` is just a reference implementation -- and is resolved at job-run time via `library.resolveTransformer`
             - `preTargetAdhocQueries` / `postTargetAdhocQueries` (**Optional**): queries run on the target database before/after load
             - `sourceQuery` (**Required**): query to extract data from the source database
 

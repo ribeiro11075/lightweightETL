@@ -15,7 +15,7 @@ jobs:
     targetTableFinal: table1
     columnTransforms:
       amount:
-      - example.transforms:currency
+      - example.example_transforms:currency
     preTargetAdhocQueries:
     postTargetAdhocQueries:
     sourceQuery: select id, name, amount from sourceTable1
