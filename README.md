@@ -111,6 +111,16 @@ pytest
 ```
 The suite stubs out `cx_Oracle`/`psycopg2` (see `tests/conftest.py`) so it runs without native database client libraries installed, and every database-touching test uses a mocked cursor/connection rather than a live server -- it verifies the SQL and control flow this library builds, not connectivity to a real MySQL/PostgreSQL/Oracle instance.
 
+### Integration tests
+`tests/test_integration_mysql.py` runs the same operations against a real MySQL server instead of a mocked cursor -- schema introspection, insert/chunking, upsert (both the direct and from-stage paths), swap, truncate, and the context manager, all round-tripped through an actual database. It's marked `integration` and excluded from the default `pytest` run (see `addopts` in `pyproject.toml`), so it never blocks anyone without Docker:
+```
+docker compose up -d mysql          # starts a disposable mysql:8.4 on localhost:3307
+pip install -e ".[mysql,dev]"
+pytest -m integration
+docker compose down                 # when you're done
+```
+Each test creates its own uniquely-named table and drops it afterward, so the suite is safe to re-run against the same running container.
+
 
 ## Type checking
 ```

@@ -27,6 +27,10 @@ packages = ["library"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: needs a real database (e.g. `docker compose up -d mysql`); run explicitly with `pytest -m integration`",
+    ]
 
 [tool.mypy]
 # mypy 2.x's minimum checkable target is 3.10; the package itself still
