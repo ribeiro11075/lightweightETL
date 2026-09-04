@@ -40,3 +40,22 @@ def test_empty_memory_file_loads_as_empty_dict(tmp_path):
     memory = Memory(memoryDirectory=memoryPath)
 
     assert memory.memory == {}
+
+
+def test_record_run_does_not_clobber_a_concurrent_workers_update(tmp_path):
+    """Regression test for a lost-update race: each worker process holds its own
+    Memory instance. Here, both are constructed against the same (still-empty)
+    file before either has written -- simulating two worker processes starting up
+    around the same time. Without re-reading the file inside recordRun, the second
+    writer's stale empty snapshot would silently overwrite the first writer's entry.
+    """
+    memoryPath = tmp_path / 'memory.yaml'
+
+    workerA = Memory(memoryDirectory=memoryPath)
+    workerB = Memory(memoryDirectory=memoryPath)
+
+    workerB.recordRun(job='jobB')
+    workerA.recordRun(job='jobA')
+
+    finalState = Memory(memoryDirectory=memoryPath)
+    assert {'jobA', 'jobB'} <= finalState.memory.keys()
