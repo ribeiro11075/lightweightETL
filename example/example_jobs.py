@@ -12,13 +12,13 @@ import yaml
 exampleDirectory = Path(__file__).resolve().parent
 sys.path.append(str(exampleDirectory.parent))
 
-from library import Configuration, DataJobsFile, runDataJobs
+from library import Configuration, DataJobsFile, FileMemory, runDataJobs
 
 fileName = Path(__file__).stem
 databaseConfigurationPath = exampleDirectory / 'configuration' / 'database.yaml'
 jobConfigurationPath = exampleDirectory / 'configuration' / 'jobs.yaml'
 logDirectory = exampleDirectory / 'log' / (fileName + '.log')
-memoryDirectory = exampleDirectory / 'memory' / (fileName + '.yaml')
+memory = FileMemory(memoryDirectory=exampleDirectory / 'memory' / (fileName + '.yaml'))
 
 
 def loadYaml(path: Path) -> Any:
@@ -32,4 +32,4 @@ jobsFile = Configuration.validateJobConfiguration(loadYaml(jobConfigurationPath)
 Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databaseConfiguration.keys()))
 
 if __name__ == '__main__':
-    runDataJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration, logDirectory=logDirectory, memoryDirectory=memoryDirectory, runForever=True)
+    runDataJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration, logDirectory=logDirectory, memory=memory, runForever=True)

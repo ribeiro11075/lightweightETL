@@ -5,6 +5,7 @@ import pytest
 
 from library.configurationInterface import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobConfig, DataJobsFile, InsertStrategy, \
     ScrambleJobConfig, ScrambleJobsFile
+from library.memoryInterface import FileMemory
 from library.runner import _dataJobWorker, _executeDataJob, _executeScrambleJob, _scrambleJobWorker, runDataJobs, runScrambleJobs
 
 
@@ -34,7 +35,7 @@ def test_run_data_jobs_completes_with_zero_active_jobs_when_not_forever(tmp_path
     jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
 
     runDataJobs(jobsFile=jobsFile, databaseConfiguration={}, logDirectory=tmp_path / 'runner.log',
-                memoryDirectory=tmp_path / 'runner.yaml', runForever=False)
+                memory=FileMemory(memoryDirectory=tmp_path / 'runner.yaml'), runForever=False)
 
 
 class _FakeDatabase:

@@ -14,7 +14,7 @@ from .databaseDialects import DatabaseDialect, MySQLDialect, OracleDialect, Post
 from .databaseInterface import Database
 from .dependencyGraphInterface import DependencyGraph, JobStatus
 from .logInterface import Log
-from .memoryInterface import Memory
+from .memoryInterface import FileMemory, MemoryBackend
 from .runner import runDataJobs, runScrambleJobs
 from .scrambleInterface import ColumnCategory, Scramble
 from .transformInterface import Transform, Transformer, TransformResolutionError, resolveTransformer
@@ -31,10 +31,11 @@ __all__ = [
     'DataJobConfig',
     'DataJobsFile',
     'DependencyGraph',
+    'FileMemory',
     'InsertStrategy',
     'JobStatus',
     'Log',
-    'Memory',
+    'MemoryBackend',
     'MySQLDialect',
     'OracleDialect',
     'PostgreSQLDialect',

@@ -10,7 +10,7 @@ from .configurationInterface import DatabaseConnectionConfig, DataJobConfig, Dat
 from .databaseInterface import Database
 from .dependencyGraphInterface import DependencyGraph, JobStatus
 from .logInterface import Log
-from .memoryInterface import Memory
+from .memoryInterface import MemoryBackend
 from .scrambleInterface import Scramble
 from .transformInterface import Transformer, resolveTransformer, Transform
 
@@ -63,11 +63,10 @@ def _executeDataJob(jobConfig: DataJobConfig, databaseConfiguration: Dict[str, D
 
 
 def _dataJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJobs: Dict[str, DataJobConfig],
-                    databaseConfiguration: Dict[str, DatabaseConnectionConfig], logDirectory: Path, memoryDirectory: Path) -> None:
+                    databaseConfiguration: Dict[str, DatabaseConnectionConfig], logDirectory: Path, memory: MemoryBackend) -> None:
     """Runs data jobs pulled off readyQueue, via _executeDataJob, until the process is torn down."""
 
     log = Log(logDirectory=logDirectory)
-    memory = Memory(memoryDirectory=memoryDirectory)
 
     while True:
 
@@ -87,17 +86,20 @@ def _dataJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJobs: D
         memory.recordRun(job=job)
 
 
-def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, DatabaseConnectionConfig], logDirectory: Path, memoryDirectory: Path,
+def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, DatabaseConnectionConfig], logDirectory: Path, memory: MemoryBackend,
                  runForever: bool = True) -> None:
     """Runs data jobs, honoring each job's `refresh` window and `predecessors`.
 
     The caller's only responsibility is configuration: the validated jobs/database
-    config, where logs and run-history (memory) should live, and whether this is a
-    one-time pass (runForever=False) or should keep running (runForever=True, the
-    default -- `refresh` only means anything in a long-running process). Worker
-    processes and their pool are managed entirely here: each cycle's pool is
-    terminated and joined before the next one starts, rather than left running, so
-    workers don't pile up as OS processes across cycles.
+    config, where logs should live, a MemoryBackend for run-history (FileMemory by
+    default -- see memoryInterface.py; write your own to persist it elsewhere, e.g.
+    a database), and whether this is a one-time pass (runForever=False) or should
+    keep running (runForever=True, the default -- `refresh` only means anything in
+    a long-running process). Worker processes and their pool are managed entirely
+    here: each cycle's pool is terminated and joined before the next one starts,
+    rather than left running, so workers don't pile up as OS processes across
+    cycles. The same `memory` instance is handed to every worker process (pickled
+    and reconstructed per process, per MemoryBackend's contract).
     """
 
     log = Log(logDirectory=logDirectory)
@@ -107,8 +109,7 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
 
     while True:
 
-        memory = Memory(memoryDirectory=memoryDirectory)
-        dependencyGraph = DependencyGraph(jobs=jobsFile.jobs, memory=memory.memory)
+        dependencyGraph = DependencyGraph(jobs=jobsFile.jobs, memory=memory.read())
 
         if pool is not None:
             pool.terminate()
@@ -116,7 +117,7 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
 
         pool = mp.Pool(jobsFile.workers, _dataJobWorker,
                         (dependencyGraph.readyQueue, dependencyGraph.completedQueue, dependencyGraph.activeJobs,
-                         databaseConfiguration, logDirectory, memoryDirectory))
+                         databaseConfiguration, logDirectory, memory))
         dependencyGraph.run()
 
         pool.close()

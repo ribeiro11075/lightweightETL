@@ -15,8 +15,10 @@ import pytest
 
 pytest.importorskip('mysql.connector', reason='mysql-connector-python is not installed (pip install -e ".[mysql]")')
 
-from library.configurationInterface import DatabaseConnectionConfig, DatabaseType
+from library.configurationInterface import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
 from library.databaseInterface import Database
+from library.memoryInterface import FileMemory
+from library.runner import runDataJobs
 
 pytestmark = pytest.mark.integration
 
@@ -121,9 +123,43 @@ def test_truncate_removes_all_rows_but_keeps_the_table(liveDatabase, peopleTable
 
 
 def test_context_manager_against_a_real_connection(peopleTable):
+    """Confirms the connection is actually closed once the with-block exits, not
+    just that __exit__ was called.
+    """
     with Database(connectionSettings=CONNECTION_SETTINGS) as database:
         database.insert(table=peopleTable, data=[(1, 'alice', 100)])
         assert database.query('SELECT COUNT(*) FROM {}'.format(peopleTable)) == [(1,)]
 
     with pytest.raises(Exception):
-        database.query('SELECT 1')  # connection is closed once the with-block exits
+        database.query('SELECT 1')
+
+
+def test_run_data_jobs_end_to_end_against_a_real_server(liveDatabase, peopleTable, tmp_path):
+    """The rest of this file exercises Database directly; this is the one test that
+    goes through the full runDataJobs path -- real Configuration validation, a real
+    DependencyGraph, a real multiprocessing.Pool, _executeDataJob running in a
+    worker *process* (not this one), and FileMemory being pickled, reconstructed in
+    that child process, and writing back a real run timestamp. Nothing here is
+    mocked; this is the closest thing in the suite to what actually happens when
+    example_jobs.py runs.
+    """
+    liveDatabase.insert(table=peopleTable, data=[(1, 'old', 1)])
+
+    raw = {
+        'workers': 1,
+        'jobs': {
+            'job1': {
+                'active': True, 'sourceDatabase': 'db', 'targetDatabase': 'db', 'insertStrategy': 'upsert',
+                'chunkSize': 100, 'targetTableFinal': peopleTable, 'sourceQuery': 'select 2, "new", 2',
+                },
+            },
+        }
+    jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
+    memoryPath = tmp_path / 'memory.yaml'
+
+    runDataJobs(jobsFile=jobsFile, databaseConfiguration={'db': CONNECTION_SETTINGS}, logDirectory=tmp_path / 'runner.log',
+                memory=FileMemory(memoryDirectory=memoryPath), runForever=False)
+
+    rows = liveDatabase.query('SELECT id, name, amount FROM {} ORDER BY id'.format(peopleTable))
+    assert rows == [(1, 'old', 1), (2, 'new', 2)]
+    assert 'job1' in FileMemory(memoryDirectory=memoryPath).read()

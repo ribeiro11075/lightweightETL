@@ -1,61 +1,61 @@
-from library.memoryInterface import Memory
+from library.memoryInterface import FileMemory
 
 
-def test_missing_memory_file_starts_empty(tmp_path):
-    """Regression test: a fresh checkout ships no memory file at all -- Memory used
+def test_missing_memory_file_reads_as_empty(tmp_path):
+    """Regression test: a fresh checkout ships no memory file at all -- this used
     to require the file to already exist and crash with FileNotFoundError.
     """
-    memory = Memory(memoryDirectory=tmp_path / 'does_not_exist.yaml')
+    memory = FileMemory(memoryDirectory=tmp_path / 'does_not_exist.yaml')
 
-    assert memory.memory == {}
+    assert memory.read() == {}
 
 
 def test_record_run_persists_and_reloads(tmp_path):
     memoryPath = tmp_path / 'memory.yaml'
 
-    first = Memory(memoryDirectory=memoryPath)
+    first = FileMemory(memoryDirectory=memoryPath)
     first.recordRun(job='job1')
 
-    second = Memory(memoryDirectory=memoryPath)
+    second = FileMemory(memoryDirectory=memoryPath)
 
-    assert 'job1' in second.memory
-    assert second.memory['job1'] == first.memory['job1']
+    assert 'job1' in second.read()
 
 
 def test_record_run_only_touches_its_own_job(tmp_path):
-    memory = Memory(memoryDirectory=tmp_path / 'memory.yaml')
+    memory = FileMemory(memoryDirectory=tmp_path / 'memory.yaml')
     memory.recordRun(job='job1')
-    firstTimestamp = memory.memory['job1']
+    firstTimestamp = memory.read()['job1']
 
     memory.recordRun(job='job2')
 
-    assert memory.memory['job1'] == firstTimestamp
-    assert 'job2' in memory.memory
+    updated = memory.read()
+    assert updated['job1'] == firstTimestamp
+    assert 'job2' in updated
 
 
-def test_empty_memory_file_loads_as_empty_dict(tmp_path):
+def test_empty_memory_file_reads_as_empty_dict(tmp_path):
     memoryPath = tmp_path / 'memory.yaml'
     memoryPath.write_text('')
 
-    memory = Memory(memoryDirectory=memoryPath)
+    memory = FileMemory(memoryDirectory=memoryPath)
 
-    assert memory.memory == {}
+    assert memory.read() == {}
 
 
 def test_record_run_does_not_clobber_a_concurrent_workers_update(tmp_path):
     """Regression test for a lost-update race: each worker process holds its own
-    Memory instance. Here, both are constructed against the same (still-empty)
+    FileMemory instance. Here, both are constructed against the same (still-empty)
     file before either has written -- simulating two worker processes starting up
     around the same time. Without re-reading the file inside recordRun, the second
     writer's stale empty snapshot would silently overwrite the first writer's entry.
     """
     memoryPath = tmp_path / 'memory.yaml'
 
-    workerA = Memory(memoryDirectory=memoryPath)
-    workerB = Memory(memoryDirectory=memoryPath)
+    workerA = FileMemory(memoryDirectory=memoryPath)
+    workerB = FileMemory(memoryDirectory=memoryPath)
 
     workerB.recordRun(job='jobB')
     workerA.recordRun(job='jobA')
 
-    finalState = Memory(memoryDirectory=memoryPath)
-    assert {'jobA', 'jobB'} <= finalState.memory.keys()
+    finalState = FileMemory(memoryDirectory=memoryPath)
+    assert {'jobA', 'jobB'} <= finalState.read().keys()

@@ -10,7 +10,7 @@ A lightweight python library to perform ETL (Extract, Transform, Load) and table
 - **jobs** -- a validated `DataJobsFile` or `ScrambleJobsFile` (see the config field reference under Installation, below)
 - **databases** -- a validated `Dict[str, DatabaseConnectionConfig]`
 - **log location** -- a `Path` to write to
-- **memory location** -- a `Path` to persist run history to (data jobs only, so `refresh` windows survive a restart)
+- **memory** -- a `MemoryBackend` to persist run history through (data jobs only, so `refresh` windows survive a restart). `FileMemory` (a YAML file, safe across concurrent worker processes) ships by default; write your own to persist it elsewhere, e.g. a database
 
 Worker processes, the process pool, and the dependency graph between jobs are all managed internally; you don't write a worker function or touch `multiprocessing` yourself.
 
@@ -19,7 +19,7 @@ Worker processes, the process pool, and the dependency graph between jobs are al
 ### Project layout
 | Path | What it is |
 | --- | --- |
-| `library/` | The package. `Configuration` (validation), `Database` + per-dialect SQL (`databaseDialects.py`), `DependencyGraph` (scheduling), `Transform`/`Scramble` (row-level work), `Memory`/`Log`, and `runner.py` (the two public entry points, `runDataJobs`/`runScrambleJobs`) |
+| `library/` | The package. `Configuration` (validation), `Database` + per-dialect SQL (`databaseDialects.py`), `DependencyGraph` (scheduling), `Transform`/`Scramble` (row-level work), `MemoryBackend`/`FileMemory`/`Log`, and `runner.py` (the two public entry points, `runDataJobs`/`runScrambleJobs`) |
 | `example/` | A working reference deployment: two scripts, their YAML config, and gitignored runtime output |
 | `tests/` | pytest suite -- see "Running the tests" below |
 
@@ -84,7 +84,7 @@ Invalid configuration (missing fields, an unknown `insertStrategy`, a `sourceDat
 Once you have validated configuration, running jobs is one call -- see `example/example_jobs.py` and `example/example_scramble.py` for the full picture (loading YAML, validating it, then calling one of these):
 
 ```python
-from library import Configuration, DataJobsFile, runDataJobs
+from library import Configuration, DataJobsFile, FileMemory, runDataJobs
 
 databaseConfiguration = Configuration.validateDatabaseConfiguration(rawDatabaseConfig)
 jobsFile = Configuration.validateJobConfiguration(rawJobConfig, DataJobsFile)
@@ -94,14 +94,16 @@ runDataJobs(
     jobsFile=jobsFile,
     databaseConfiguration=databaseConfiguration,
     logDirectory=logPath,
-    memoryDirectory=memoryPath,
+    memory=FileMemory(memoryDirectory=memoryPath),
     runForever=True,
     )
 ```
 
 `runForever=True` (the default) keeps running, honoring each job's `refresh` window; pass `False` for a single pass over every active job, then return.
 
-`runScrambleJobs(jobsFile, databaseConfiguration, logDirectory, runForever=False)` is the scramble-job equivalent -- no `memoryDirectory`, since scramble jobs don't have a `refresh` window to track, and it defaults to a single pass (`runForever=False`) since masking a table is normally one-shot rather than a recurring job. Both accept `runForever` either way -- it's your call, not something the library assumes based on job type.
+`runScrambleJobs(jobsFile, databaseConfiguration, logDirectory, runForever=False)` is the scramble-job equivalent -- no `memory` argument, since scramble jobs don't have a `refresh` window to track, and it defaults to a single pass (`runForever=False`) since masking a table is normally one-shot rather than a recurring job. Both accept `runForever` either way -- it's your call, not something the library assumes based on job type.
+
+`memory` accepts any `MemoryBackend`, not just `FileMemory` -- write your own (e.g. backed by a database table) if you want run history to live somewhere other than a file. The one constraint: since `runDataJobs` hands the same instance to every worker process, it needs to survive being pickled and reconstructed per process -- hold settings (a `Path`, connection settings, ...) rather than a live file handle or database connection, and open whatever resource you need inside `read()`/`recordRun()` itself. See `library/memoryInterface.py` for the interface and `FileMemory` for a worked example.
 
 
 ## Running the tests
