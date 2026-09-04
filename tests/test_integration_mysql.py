@@ -15,6 +15,7 @@ import pytest
 
 pytest.importorskip('mysql.connector', reason='mysql-connector-python is not installed (pip install -e ".[mysql]")')
 
+from example.example_database_memory import DatabaseMemory
 from library.configurationInterface import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
 from library.databaseInterface import Database
 from library.memoryInterface import FileMemory
@@ -44,6 +45,17 @@ def peopleTable(liveDatabase):
     tableName = 'people_{}'.format(uuid.uuid4().hex[:8])
 
     liveDatabase.alter('CREATE TABLE {} (id INT PRIMARY KEY, name VARCHAR(50), amount INT)'.format(tableName))
+
+    yield tableName
+
+    liveDatabase.alter('DROP TABLE IF EXISTS {}'.format(tableName))
+
+
+@pytest.fixture
+def memoryTable(liveDatabase):
+    tableName = 'memory_{}'.format(uuid.uuid4().hex[:8])
+
+    liveDatabase.alter('CREATE TABLE {} (job VARCHAR(255) PRIMARY KEY, last_run DOUBLE NOT NULL)'.format(tableName))
 
     yield tableName
 
@@ -163,3 +175,55 @@ def test_run_data_jobs_end_to_end_against_a_real_server(liveDatabase, peopleTabl
     rows = liveDatabase.query('SELECT id, name, amount FROM {} ORDER BY id'.format(peopleTable))
     assert rows == [(1, 'old', 1), (2, 'new', 2)]
     assert 'job1' in FileMemory(memoryDirectory=memoryPath).read()
+
+
+def test_database_memory_records_and_reads_back_a_run(memoryTable):
+    memory = DatabaseMemory(connectionSettings=CONNECTION_SETTINGS, table=memoryTable)
+
+    memory.recordRun(job='job1')
+
+    assert 'job1' in memory.read()
+
+
+def test_database_memory_upserts_rather_than_duplicating(liveDatabase, memoryTable):
+    """read() returning one entry per job wouldn't actually prove there's no
+    duplicate row (a dict comprehension would just keep the last one) -- check the
+    row count directly instead.
+    """
+    memory = DatabaseMemory(connectionSettings=CONNECTION_SETTINGS, table=memoryTable)
+
+    memory.recordRun(job='job1')
+    firstRun = memory.read()['job1']
+    memory.recordRun(job='job1')
+    secondRun = memory.read()['job1']
+
+    assert liveDatabase.query('SELECT COUNT(*) FROM {}'.format(memoryTable)) == [(1,)]
+    assert secondRun >= firstRun
+
+
+def test_run_data_jobs_with_database_backed_memory(liveDatabase, peopleTable, memoryTable, tmp_path):
+    """Same shape as test_run_data_jobs_end_to_end_against_a_real_server, but with
+    the reference DatabaseMemory instead of FileMemory -- proves a MemoryBackend
+    backed by the database itself (no locking of its own, just Database.upsert's
+    atomicity) survives the same real Pool + worker-process round trip.
+    """
+    liveDatabase.insert(table=peopleTable, data=[(1, 'old', 1)])
+
+    raw = {
+        'workers': 1,
+        'jobs': {
+            'job1': {
+                'active': True, 'sourceDatabase': 'db', 'targetDatabase': 'db', 'insertStrategy': 'upsert',
+                'chunkSize': 100, 'targetTableFinal': peopleTable, 'sourceQuery': 'select 2, "new", 2',
+                },
+            },
+        }
+    jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
+    memory = DatabaseMemory(connectionSettings=CONNECTION_SETTINGS, table=memoryTable)
+
+    runDataJobs(jobsFile=jobsFile, databaseConfiguration={'db': CONNECTION_SETTINGS}, logDirectory=tmp_path / 'runner.log',
+                memory=memory, runForever=False)
+
+    rows = liveDatabase.query('SELECT id, name, amount FROM {} ORDER BY id'.format(peopleTable))
+    assert rows == [(1, 'old', 1), (2, 'new', 2)]
+    assert 'job1' in memory.read()
