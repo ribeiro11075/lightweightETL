@@ -3,7 +3,7 @@ and loading into a *different* one within a single job. Every other integration
 test uses the same database for both source and target, for simplicity -- this is
 the one test that genuinely exercises sourceDatabase and targetDatabase pointing
 at different servers of different types in the same _executeDataJob call, with a
-real columnTransforms entry applied in between.
+real sourceQueryColumnTransforms entry applied in between.
 
 Requires both a MySQL and a PostgreSQL server reachable at the settings below
 (see docker-compose.yml: `docker compose up -d mysql postgresql`) and both
@@ -88,7 +88,7 @@ def test_data_moves_from_mysql_to_postgresql_with_a_transform_applied(postgresql
             'job1': {
                 'active': True, 'sourceDatabase': 'mysql', 'targetDatabase': 'postgresql', 'insertStrategy': 'upsert',
                 'chunkSize': 100, 'targetTableFinal': targetTable,
-                'columnTransforms': {'amount': ['example.example_transforms:currency']},
+                'sourceQueryColumnTransforms': {'amount': ['example.example_transforms:currency']},
                 'sourceQuery': 'select id, name, amount from {} order by id'.format(sourceTable),
                 },
             },

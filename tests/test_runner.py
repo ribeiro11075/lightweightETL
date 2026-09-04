@@ -5,8 +5,19 @@ import pytest
 
 from library.configurationInterface import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobConfig, DataJobsFile, InsertStrategy, \
     ScrambleJobConfig, ScrambleJobsFile
+from library.databaseDialects import ColumnCategory
 from library.memoryInterface import FileMemory
 from library.runner import _dataJobWorker, _executeDataJob, _executeScrambleJob, _scrambleJobWorker, runDataJobs, runScrambleJobs
+from library.transformInterface import TransformError
+
+
+class _FakeDialect:
+    """columnCategory only -- _executeScrambleJob is the one caller that needs a
+    dialect off of _FakeDatabase; nothing else here touches connect()/queries.
+    """
+
+    def columnCategory(self, dataType: Any) -> Any:
+        return {'INT': ColumnCategory.NUMBER, 'VARCHAR': ColumnCategory.TEXT}.get(dataType)
 
 
 def test_worker_functions_are_picklable():
@@ -46,6 +57,7 @@ class _FakeDatabase:
     queryResult: List[Tuple[Any, ...]] = [(1, 'a'), (2, 'b')]
     columnNames: List[str] = ['id', 'name']
     columnTypes: List[str] = ['INT', 'VARCHAR']
+    dialect = _FakeDialect()
 
     def __init__(self, connectionSettings: DatabaseConnectionConfig) -> None:
         self.connectionSettings = connectionSettings
@@ -61,6 +73,10 @@ class _FakeDatabase:
         self.calls.append(('query', query))
         return self.queryResult
 
+    def getLastQueryColumnNames(self) -> List[str]:
+        self.calls.append(('getLastQueryColumnNames',))
+        return self.columnNames
+
     def getAllColumnNames(self, table: str) -> List[str]:
         self.calls.append(('getAllColumnNames', table))
         return self.columnNames
@@ -72,8 +88,8 @@ class _FakeDatabase:
     def truncate(self, table: str) -> None:
         self.calls.append(('truncate', table))
 
-    def insert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100) -> None:
-        self.calls.append(('insert', table, data, chunkSize))
+    def insert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100, columns: Any = None) -> None:
+        self.calls.append(('insert', table, data, chunkSize, columns))
 
     def alter(self, query: str) -> None:
         self.calls.append(('alter', query))
@@ -81,11 +97,11 @@ class _FakeDatabase:
     def swap(self, targetTable: str, stageTable: str) -> None:
         self.calls.append(('swap', targetTable, stageTable))
 
-    def upsert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100) -> None:
-        self.calls.append(('upsert', table, data, chunkSize))
+    def upsert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100, columns: Any = None) -> None:
+        self.calls.append(('upsert', table, data, chunkSize, columns))
 
-    def upsertFromStage(self, targetTable: str, stageTable: str) -> None:
-        self.calls.append(('upsertFromStage', targetTable, stageTable))
+    def upsertFromStage(self, targetTable: str, stageTable: str, columns: Any = None) -> None:
+        self.calls.append(('upsertFromStage', targetTable, stageTable, columns))
 
 
 @pytest.fixture
@@ -142,6 +158,52 @@ def test_execute_data_job_upserts_directly_when_there_is_no_stage_table(fakeData
     assert 'swap' not in calledMethods
 
 
+def test_execute_data_job_infers_columns_from_target_table_when_target_columns_is_unset(fakeDatabases):
+    jobConfig = _dataJobConfig()
+    databaseConfiguration = {'src': _dbConfig(), 'tgt': _dbConfig()}
+    assert jobConfig.targetColumns == []
+
+    _executeDataJob(jobConfig, databaseConfiguration)
+
+    _, targetDatabase = fakeDatabases
+    calledMethods = [call[0] for call in targetDatabase.calls]
+    assert 'getAllColumnNames' in calledMethods
+    upsertCall = next(call for call in targetDatabase.calls if call[0] == 'upsert')
+    assert upsertCall[4] == targetDatabase.columnNames  # the introspected column list, in the table's own order
+
+
+def test_execute_data_job_uses_target_columns_when_configured_instead_of_introspecting(fakeDatabases):
+    """The actual point of targetColumns: sourceQuery's SELECT list doesn't have to
+    match the target table's own column order (or even select every column) as
+    long as it matches targetColumns positionally -- this proves that explicit
+    list, not an introspected one, is what actually drives the transform and every
+    insert/upsert call.
+    """
+    jobConfig = _dataJobConfig(targetColumns=['name', 'id'])
+    databaseConfiguration = {'src': _dbConfig(), 'tgt': _dbConfig()}
+
+    _executeDataJob(jobConfig, databaseConfiguration)
+
+    _, targetDatabase = fakeDatabases
+    calledMethods = [call[0] for call in targetDatabase.calls]
+    assert 'getAllColumnNames' not in calledMethods
+    upsertCall = next(call for call in targetDatabase.calls if call[0] == 'upsert')
+    assert upsertCall[4] == ['name', 'id']
+
+
+def test_execute_data_job_passes_target_columns_to_stage_insert_and_upsert_from_stage(fakeDatabases):
+    jobConfig = _dataJobConfig(targetTableStage='people_stage', targetColumns=['name', 'id'])
+    databaseConfiguration = {'src': _dbConfig(), 'tgt': _dbConfig()}
+
+    _executeDataJob(jobConfig, databaseConfiguration)
+
+    _, targetDatabase = fakeDatabases
+    insertCall = next(call for call in targetDatabase.calls if call[0] == 'insert')
+    upsertFromStageCall = next(call for call in targetDatabase.calls if call[0] == 'upsertFromStage')
+    assert insertCall[4] == ['name', 'id']
+    assert upsertFromStageCall[3] == ['name', 'id']
+
+
 def test_execute_data_job_upserts_from_stage_when_a_stage_table_is_set(fakeDatabases):
     jobConfig = _dataJobConfig(targetTableStage='people_stage')
     databaseConfiguration = {'src': _dbConfig(), 'tgt': _dbConfig()}
@@ -169,14 +231,61 @@ def test_execute_data_job_swap_loads_stage_then_swaps_not_upserts(fakeDatabases)
 
 
 def test_execute_data_job_applies_column_transforms_before_loading(fakeDatabases):
-    jobConfig = _dataJobConfig(columnTransforms={'name': ['json:dumps']})
+    jobConfig = _dataJobConfig(sourceQueryColumnTransforms={'name': ['json:dumps']})
     databaseConfiguration = {'src': _dbConfig(), 'tgt': _dbConfig()}
 
     _executeDataJob(jobConfig, databaseConfiguration)
 
     _, targetDatabase = fakeDatabases
-    _, _, transformedData, _ = next(call for call in targetDatabase.calls if call[0] == 'upsert')
-    assert transformedData == [(1, '"a"'), (2, '"b"')]
+    upsertCall = next(call for call in targetDatabase.calls if call[0] == 'upsert')
+    assert upsertCall[2] == [(1, '"a"'), (2, '"b"')]
+
+
+def test_execute_data_job_raises_and_writes_nothing_when_a_transform_names_an_unknown_column(fakeDatabases):
+    """The fake source's sourceQuery is understood to return columns ['id', 'name']
+    (getLastQueryColumnNames); sourceQueryColumnTransforms names a column not in
+    that list -- should fail loudly before any insert/upsert, rather than
+    silently never applying.
+    """
+    jobConfig = _dataJobConfig(sourceQueryColumnTransforms={'doesNotExist': ['json:dumps']})
+    databaseConfiguration = {'src': _dbConfig(), 'tgt': _dbConfig()}
+
+    with pytest.raises(TransformError, match='doesNotExist'):
+        _executeDataJob(jobConfig, databaseConfiguration)
+
+    _, targetDatabase = fakeDatabases
+    calledMethods = [call[0] for call in targetDatabase.calls]
+    assert 'insert' not in calledMethods
+    assert 'upsert' not in calledMethods
+
+
+def test_execute_data_job_validates_transforms_against_the_source_querys_columns_not_the_targets(fakeDatabases, monkeypatch):
+    """A transform is applied to a value as extracted from the source, before it's
+    ever mapped onto a target column name -- so it should succeed here even though
+    the *target*'s own columns (introspected, since targetColumns is unset) don't
+    include 'name' at all.
+    """
+    monkeypatch.setattr(_FakeDatabase, 'getAllColumnNames', lambda self, table: ['totallyDifferentTargetColumn'])
+    jobConfig = _dataJobConfig(sourceQueryColumnTransforms={'name': ['json:dumps']})
+    databaseConfiguration = {'src': _dbConfig(), 'tgt': _dbConfig()}
+
+    _executeDataJob(jobConfig, databaseConfiguration)
+
+    _, targetDatabase = fakeDatabases
+    upsertCall = next(call for call in targetDatabase.calls if call[0] == 'upsert')
+    assert upsertCall[2] == [(1, '"a"'), (2, '"b"')]
+
+
+def test_execute_data_job_raises_with_column_and_value_context_when_a_transform_fails(fakeDatabases):
+    """The fake source's 'id' column holds ints (1, 2); a transform that only
+    accepts strings should fail per-value with enough context to debug it, not a
+    bare traceback from inside the row loop.
+    """
+    jobConfig = _dataJobConfig(sourceQueryColumnTransforms={'id': ['os.path:basename']})
+    databaseConfiguration = {'src': _dbConfig(), 'tgt': _dbConfig()}
+
+    with pytest.raises(TransformError, match='column "id"'):
+        _executeDataJob(jobConfig, databaseConfiguration)
 
 
 def test_execute_data_job_runs_adhoc_queries_before_and_after_load(fakeDatabases):

@@ -1,6 +1,6 @@
 import pytest
 
-from library.transformInterface import Transform, TransformResolutionError, resolveTransformer
+from library.transformInterface import Transform, TransformError, TransformResolutionError, resolveTransformer
 
 
 def test_transform_applies_an_arbitrary_callable():
@@ -31,6 +31,40 @@ def test_transform_leaves_untransformed_columns_alone():
     transform = Transform(data=rows, columns=['id', 'name'], columnTransforms={})
 
     assert transform.transform() == [(1, 'a')]
+
+
+def test_transform_raises_when_a_transform_names_a_column_not_in_columns():
+    """A column not in `columns` -- e.g. left out of targetColumns, or never
+    actually selected -- should fail loudly and up front, rather than the
+    transform silently never running.
+    """
+    transform = Transform(data=[(1,)], columns=['id'], columnTransforms={'doesNotExist': [lambda v: v]})
+
+    with pytest.raises(TransformError, match='doesNotExist'):
+        transform.transform()
+
+
+def test_transform_raises_when_a_transform_names_a_column_not_in_columns_even_with_no_rows():
+    """The unknown-column check runs before the (data-empty) early return, so a
+    misconfigured job fails the same way regardless of how much data it moves.
+    """
+    transform = Transform(data=[], columns=['id'], columnTransforms={'doesNotExist': [lambda v: v]})
+
+    with pytest.raises(TransformError, match='doesNotExist'):
+        transform.transform()
+
+
+def test_transform_wraps_a_failing_transformer_with_column_and_value_context():
+    def onlyAcceptsStrings(value):
+        return value.upper()
+
+    transform = Transform(data=[(1,)], columns=['id'], columnTransforms={'id': [onlyAcceptsStrings]})
+
+    with pytest.raises(TransformError, match='column "id"') as excinfo:
+        transform.transform()
+
+    assert 'onlyAcceptsStrings' in str(excinfo.value)
+    assert '1' in str(excinfo.value)
 
 
 def test_resolve_transformer_finds_a_real_function():

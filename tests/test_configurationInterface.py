@@ -24,7 +24,24 @@ def test_database_configuration_round_trips():
 
 def test_database_configuration_rejects_unknown_type():
     with pytest.raises(ConfigurationError):
-        Configuration.validateDatabaseConfiguration({'db': {'type': 'sqlite', 'user': 'u', 'password': 'p', 'database': 'd', 'host': 'h'}})
+        Configuration.validateDatabaseConfiguration({'db': {'type': 'mongodb', 'user': 'u', 'password': 'p', 'database': 'd', 'host': 'h'}})
+
+
+def test_sqlite_connection_needs_only_a_database_path():
+    settings = DatabaseConnectionConfig(type='sqlite', database='/tmp/some.db')
+
+    assert settings.user is None
+    assert settings.password is None
+    assert settings.host is None
+
+
+@pytest.mark.parametrize('missingField', ['user', 'password', 'host'])
+def test_non_sqlite_connections_require_network_credentials(missingField):
+    kwargs = dict(type='mysql', user='u', password='p', database='d', host='h')
+    kwargs[missingField] = None
+
+    with pytest.raises(ValidationError):
+        DatabaseConnectionConfig(**kwargs)
 
 
 @pytest.mark.parametrize('serviceName,sid,shouldRaise', [
@@ -118,6 +135,16 @@ def test_yaml_null_list_idiom_is_treated_as_empty(field, rawValue):
     jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
 
     assert getattr(jobsFile.jobs['job1'], field) == []
+
+
+def test_cycle_sleep_seconds_defaults_and_is_configurable():
+    raw = {'workers': 1, 'jobs': {}}
+    jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
+    assert jobsFile.cycleSleepSeconds == 0.5
+
+    raw = {'workers': 1, 'cycleSleepSeconds': 5, 'jobs': {}}
+    jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
+    assert jobsFile.cycleSleepSeconds == 5
 
 
 def test_default_column_values_scalar_survives_cleanup():

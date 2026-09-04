@@ -10,14 +10,14 @@ from .configurationInterface import (
     ScrambleJobConfig,
     ScrambleJobsFile,
     )
-from .databaseDialects import DatabaseDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect
+from .databaseDialects import ColumnCategory, DatabaseDialect, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, SQLiteDialect
 from .databaseInterface import Database
+from .databaseScrambleInterface import Scramble
 from .dependencyGraphInterface import DependencyGraph, JobStatus
 from .logInterface import Log
 from .memoryInterface import FileMemory, MemoryBackend
 from .runner import runDataJobs, runScrambleJobs
-from .scrambleInterface import ColumnCategory, Scramble
-from .transformInterface import Transform, Transformer, TransformResolutionError, resolveTransformer
+from .transformInterface import Transform, Transformer, TransformError, TransformResolutionError, resolveTransformer
 
 __all__ = [
     'BaseJobConfig',
@@ -35,6 +35,7 @@ __all__ = [
     'InsertStrategy',
     'JobStatus',
     'Log',
+    'MariaDBDialect',
     'MemoryBackend',
     'MSSQLDialect',
     'MySQLDialect',
@@ -43,8 +44,10 @@ __all__ = [
     'Scramble',
     'ScrambleJobConfig',
     'ScrambleJobsFile',
+    'SQLiteDialect',
     'Transform',
     'Transformer',
+    'TransformError',
     'TransformResolutionError',
     'resolveTransformer',
     'runDataJobs',

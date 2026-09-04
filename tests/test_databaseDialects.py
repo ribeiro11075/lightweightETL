@@ -1,4 +1,4 @@
-from library.databaseDialects import MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect
+from library.databaseDialects import ColumnCategory, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, SQLiteDialect
 
 ALL_COLUMNS = ['id', 'name', 'amount']
 PRIMARY_KEY_COLUMNS = ['id']
@@ -132,3 +132,104 @@ def test_mssql_swap_is_one_statement_of_chained_sp_rename_calls():
     """
     queries = MSSQLDialect().swapQueries('people', 'people_stage', 'people_tmp')
     assert queries == ["EXEC sp_rename 'people_stage', 'people_tmp'; EXEC sp_rename 'people', 'people_stage'; EXEC sp_rename 'people_tmp', 'people';"]
+
+
+def test_mariadb_reuses_mysql_dialect_wholesale():
+    """MariaDBDialect adds nothing of its own -- proves it inherits every query/
+    placeholder method from MySQLDialect unchanged.
+    """
+    assert MariaDBDialect().placeholders(2) == MySQLDialect().placeholders(2)
+    assert MariaDBDialect().primaryKeyQuery('people') == MySQLDialect().primaryKeyQuery('people')
+    assert MariaDBDialect().upsertQuery('people', ALL_COLUMNS, PRIMARY_KEY_COLUMNS, NON_PRIMARY_KEY_COLUMNS) == \
+        MySQLDialect().upsertQuery('people', ALL_COLUMNS, PRIMARY_KEY_COLUMNS, NON_PRIMARY_KEY_COLUMNS)
+    assert MariaDBDialect().swapQueries('people', 'people_stage', 'people_tmp') == MySQLDialect().swapQueries('people', 'people_stage', 'people_tmp')
+
+
+def test_sqlite_placeholders():
+    assert SQLiteDialect().placeholders(3) == ['?', '?', '?']
+
+
+def test_sqlite_truncate_query_is_a_delete_since_sqlite_has_no_truncate():
+    assert SQLiteDialect().truncateQuery('people') == 'DELETE FROM people'
+
+
+def test_other_dialects_default_truncate_query_is_ansi_truncate():
+    assert MySQLDialect().truncateQuery('people') == 'TRUNCATE TABLE people'
+    assert PostgreSQLDialect().truncateQuery('people') == 'TRUNCATE TABLE people'
+    assert OracleDialect().truncateQuery('people') == 'TRUNCATE TABLE people'
+    assert MSSQLDialect().truncateQuery('people') == 'TRUNCATE TABLE people'
+
+
+def test_sqlite_primary_key_query_uses_the_pragma_table_valued_function():
+    query = SQLiteDialect().primaryKeyQuery('people')
+    assert query == "SELECT name FROM pragma_table_info('people') WHERE pk > 0 ORDER BY pk"
+
+
+def test_sqlite_upsert_query():
+    query = SQLiteDialect().upsertQuery('people', ALL_COLUMNS, PRIMARY_KEY_COLUMNS, NON_PRIMARY_KEY_COLUMNS)
+    assert query == ('INSERT INTO people (id, name, amount) VALUES (?, ?, ?) '
+                      'ON CONFLICT(id) DO UPDATE SET name=excluded.name, amount=excluded.amount')
+
+
+def test_sqlite_upsert_from_stage_query():
+    """The "WHERE true" is required -- SQLite rejects INSERT ... SELECT ... ON
+    CONFLICT outright as a grammar ambiguity without some clause disambiguating
+    the SELECT first; test_integration_sqlite.py's test_upsert_from_stage is what
+    actually caught this against a real SQLite engine.
+    """
+    query = SQLiteDialect().upsertFromStageQuery('people', 'people_stage', ALL_COLUMNS, PRIMARY_KEY_COLUMNS, NON_PRIMARY_KEY_COLUMNS)
+    assert query == ('INSERT INTO people (id, name, amount) SELECT id, name, amount FROM people_stage WHERE true '
+                      'ON CONFLICT(id) DO UPDATE SET name=excluded.name, amount=excluded.amount')
+
+
+def test_mysql_column_category_maps_known_type_names():
+    assert MySQLDialect().columnCategory('INT') == ColumnCategory.NUMBER
+    assert MySQLDialect().columnCategory('varchar') == ColumnCategory.TEXT  # case-insensitive
+    assert MySQLDialect().columnCategory('DATETIME') == ColumnCategory.DATE
+    assert MySQLDialect().columnCategory('BLOB') is None
+    assert MySQLDialect().columnCategory(1234) is None  # non-string dataType is simply unrecognized, not an error
+
+
+def test_mariadb_column_category_is_inherited_from_mysql():
+    assert MariaDBDialect().columnCategory('INT') == ColumnCategory.NUMBER
+
+
+def test_postgresql_column_category_maps_known_oids():
+    assert PostgreSQLDialect().columnCategory(23) == ColumnCategory.NUMBER  # int4
+    assert PostgreSQLDialect().columnCategory(25) == ColumnCategory.TEXT  # text
+    assert PostgreSQLDialect().columnCategory(1114) == ColumnCategory.DATE  # timestamp
+    assert PostgreSQLDialect().columnCategory(9999) is None
+
+
+def test_oracle_column_category_matches_on_db_type_name():
+    class _FakeDbType:
+        def __init__(self, name):
+            self.name = name
+
+    assert OracleDialect().columnCategory(_FakeDbType('DB_TYPE_NUMBER')) == ColumnCategory.NUMBER
+    assert OracleDialect().columnCategory(_FakeDbType('DB_TYPE_VARCHAR')) == ColumnCategory.TEXT
+    assert OracleDialect().columnCategory(_FakeDbType('DB_TYPE_TIMESTAMP')) == ColumnCategory.DATE
+    assert OracleDialect().columnCategory(_FakeDbType('DB_TYPE_BLOB')) is None
+    assert OracleDialect().columnCategory('not a db type object') is None
+
+
+def test_mssql_and_sqlite_column_category_is_unimplemented():
+    """Neither dialect overrides columnCategory -- MSSQL because pymssql's type
+    codes aren't reliably introspectable without importing the driver, SQLite
+    because sqlite3 never reports a real type at all. Both fall back to the base
+    class's None, same as any dialect handed a type it doesn't recognize.
+    """
+    assert MSSQLDialect().columnCategory('anything') is None
+    assert SQLiteDialect().columnCategory(None) is None
+
+
+def test_sqlite_swap_is_three_separate_statements():
+    """Same reasoning as the equivalent Oracle test: sqlite3's cursor.execute() can
+    only run one statement at a time.
+    """
+    queries = SQLiteDialect().swapQueries('people', 'people_stage', 'people_tmp')
+    assert queries == [
+        'ALTER TABLE people_stage RENAME TO people_tmp',
+        'ALTER TABLE people RENAME TO people_stage',
+        'ALTER TABLE people_tmp RENAME TO people',
+        ]

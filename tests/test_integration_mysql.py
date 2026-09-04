@@ -177,6 +177,33 @@ def test_run_data_jobs_end_to_end_against_a_real_server(liveDatabase, peopleTabl
     assert 'job1' in FileMemory(memoryDirectory=memoryPath).read()
 
 
+def test_run_data_jobs_with_target_columns_reordered_from_the_tables_own_order(liveDatabase, peopleTable, tmp_path):
+    """peopleTable's real column order is (id, name, amount); sourceQuery
+    deliberately selects a different order. Without targetColumns, this would
+    silently insert id's value into the name column and vice versa -- no error,
+    since both are real columns (see the README's targetColumns note). Setting
+    targetColumns to match the query's actual order is what keeps this correct.
+    """
+    raw = {
+        'workers': 1,
+        'jobs': {
+            'job1': {
+                'active': True, 'sourceDatabase': 'db', 'targetDatabase': 'db', 'insertStrategy': 'upsert',
+                'chunkSize': 100, 'targetTableFinal': peopleTable,
+                'targetColumns': ['name', 'amount', 'id'],
+                'sourceQuery': "select 'alice', 100, 1",
+                },
+            },
+        }
+    jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
+
+    runDataJobs(jobsFile=jobsFile, databaseConfiguration={'db': CONNECTION_SETTINGS}, logDirectory=tmp_path / 'runner.log',
+                memory=FileMemory(memoryDirectory=tmp_path / 'memory.yaml'), runForever=False)
+
+    rows = liveDatabase.query('SELECT id, name, amount FROM {}'.format(peopleTable))
+    assert rows == [(1, 'alice', 100)]
+
+
 def test_database_memory_records_and_reads_back_a_run(memoryTable):
     memory = DatabaseMemory(connectionSettings=CONNECTION_SETTINGS, table=memoryTable)
 

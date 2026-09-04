@@ -2,35 +2,38 @@
 # Replace with your own job definitions; database aliases must match
 # configuration/environment/database.yaml.
 workers: 2
+cycleSleepSeconds: 0.5
 jobs:
   loadTable1:
     active: true
     refresh: 60
     predecessors:
     sourceDatabase: sourceDb
-    targetDatabase: targetDb
-    insertStrategy: upsert
-    chunkSize: 500
-    targetTableStage:
-    targetTableFinal: table1
-    columnTransforms:
+    sourceQuery: select id, name, amount from sourceTable1
+    targetColumns:
+    sourceQueryColumnTransforms:
       amount:
       - example.example_transforms:currency
+    targetDatabase: targetDb
+    targetTableStage:
+    targetTableFinal: table1
+    insertStrategy: upsert
+    chunkSize: 500
     preTargetAdhocQueries:
     postTargetAdhocQueries:
-    sourceQuery: select id, name, amount from sourceTable1
   loadTable2:
     active: true
     refresh: 60
     predecessors:
     - loadTable1
     sourceDatabase: sourceDb
+    sourceQuery: select id, table1Id, value from sourceTable2
+    targetColumns:
+    sourceQueryColumnTransforms:
     targetDatabase: targetDb
-    insertStrategy: swap
-    chunkSize: 500
     targetTableStage: table2Stage
     targetTableFinal: table2
-    columnTransforms:
+    insertStrategy: swap
+    chunkSize: 500
     preTargetAdhocQueries:
     postTargetAdhocQueries:
-    sourceQuery: select id, table1Id, value from sourceTable2

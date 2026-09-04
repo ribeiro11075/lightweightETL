@@ -46,6 +46,8 @@ class DatabaseType(str, Enum):
     MYSQL = 'mysql'
     POSTGRESQL = 'postgresql'
     MSSQL = 'mssql'
+    SQLITE = 'sqlite'
+    MARIADB = 'mariadb'
 
 
 class InsertStrategy(str, Enum):
@@ -59,10 +61,10 @@ class ConfigurationError(Exception):
 
 class DatabaseConnectionConfig(BaseModel):
     type: DatabaseType
-    user: str
-    password: str
     database: str
-    host: str
+    user: Optional[str] = None
+    password: Optional[str] = None
+    host: Optional[str] = None
     port: Optional[int] = None
     serviceName: Optional[str] = None
     sid: Optional[str] = None
@@ -79,23 +81,37 @@ class DatabaseConnectionConfig(BaseModel):
         return self
 
 
+    @model_validator(mode='after')
+    def _requireNetworkCredentialsExceptSqlite(self) -> 'DatabaseConnectionConfig':
+        """Every dialect but sqlite connects over the network and authenticates --
+        sqlite is a local file (`database` holds its path, or ":memory:") with no
+        server, user, or password to speak of.
+        """
+
+        if self.type != DatabaseType.SQLITE and (self.user is None or self.password is None or self.host is None):
+            raise ValueError('user, password, and host are required for every database type except sqlite')
+
+        return self
+
+
 class BaseJobConfig(BaseModel):
     active: bool
-    predecessors: CleanedStringList = Field(default_factory=list)
     refresh: Optional[int] = None
+    predecessors: CleanedStringList = Field(default_factory=list)
 
 
 class DataJobConfig(BaseJobConfig):
     sourceDatabase: str
+    sourceQuery: str
+    targetColumns: CleanedStringList = Field(default_factory=list)
+    sourceQueryColumnTransforms: CleanedListMapping = Field(default_factory=dict)
     targetDatabase: str
-    insertStrategy: InsertStrategy
-    chunkSize: int
     targetTableStage: Optional[str] = None
     targetTableFinal: str
-    columnTransforms: CleanedListMapping = Field(default_factory=dict)
+    insertStrategy: InsertStrategy
+    chunkSize: int
     preTargetAdhocQueries: CleanedStringList = Field(default_factory=list)
     postTargetAdhocQueries: CleanedStringList = Field(default_factory=list)
-    sourceQuery: str
 
     @model_validator(mode='after')
     def _requireStageTableForSwap(self) -> 'DataJobConfig':
@@ -121,11 +137,13 @@ class ScrambleJobConfig(BaseJobConfig):
 
 class DataJobsFile(BaseModel):
     workers: int
+    cycleSleepSeconds: float = 0.5
     jobs: Dict[str, DataJobConfig]
 
 
 class ScrambleJobsFile(BaseModel):
     workers: int
+    cycleSleepSeconds: float = 0.5
     jobs: Dict[str, ScrambleJobConfig]
 
 

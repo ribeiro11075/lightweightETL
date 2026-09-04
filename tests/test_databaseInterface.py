@@ -26,7 +26,7 @@ def _mockedDatabase(dbType: DatabaseType) -> Database:
     return database
 
 
-@pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.ORACLE, DatabaseType.MSSQL])
+@pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.ORACLE, DatabaseType.MSSQL, DatabaseType.SQLITE, DatabaseType.MARIADB])
 def test_upsert_executes_for_every_dialect(dbType):
     """Regression check for the bug that made mysql upserts a silent no-op, and
     the UnboundLocalError that made oracle crash outright.
@@ -39,7 +39,7 @@ def test_upsert_executes_for_every_dialect(dbType):
     assert database.connection.commit.call_count > 0
 
 
-@pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.ORACLE, DatabaseType.MSSQL])
+@pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.ORACLE, DatabaseType.MSSQL, DatabaseType.SQLITE, DatabaseType.MARIADB])
 def test_upsert_from_stage_executes_for_every_dialect(dbType):
     database = _mockedDatabase(dbType)
 
@@ -54,6 +54,8 @@ def test_upsert_from_stage_executes_for_every_dialect(dbType):
     (DatabaseType.POSTGRESQL, 1),
     (DatabaseType.ORACLE, 3),
     (DatabaseType.MSSQL, 1),
+    (DatabaseType.SQLITE, 3),
+    (DatabaseType.MARIADB, 1),
     ])
 def test_swap_executes_the_right_number_of_statements(dbType, expectedStatementCount):
     database = _mockedDatabase(dbType)
@@ -64,7 +66,7 @@ def test_swap_executes_the_right_number_of_statements(dbType, expectedStatementC
     assert database.connection.commit.call_count == 1
 
 
-@pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.ORACLE, DatabaseType.MSSQL])
+@pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.ORACLE, DatabaseType.MSSQL, DatabaseType.SQLITE, DatabaseType.MARIADB])
 def test_get_primary_column_names_executes_a_query(dbType):
     database = _mockedDatabase(dbType)
     database.getPrimaryColumnNames = Database.getPrimaryColumnNames.__get__(database)
@@ -81,6 +83,8 @@ def test_get_primary_column_names_executes_a_query(dbType):
     (DatabaseType.POSTGRESQL, '%s'),
     (DatabaseType.ORACLE, ':1'),
     (DatabaseType.MSSQL, '%s'),
+    (DatabaseType.SQLITE, '?'),
+    (DatabaseType.MARIADB, '%s'),
     ])
 def test_insert_uses_the_dialects_placeholder_style(dbType, expectedPlaceholder):
     database = _mockedDatabase(dbType)
@@ -107,6 +111,18 @@ def test_get_all_column_names_and_types_use_a_bounded_query():
         assert 'WHERE 1=0' in callArgs[0][0]
 
 
+def test_get_last_query_column_names_reads_the_cursors_own_description():
+    """Reflects whatever the last query actually returned -- an explicit column
+    list, a `select *`, computed/aliased expressions -- not any table's schema,
+    which is the whole point of using it to validate sourceQueryColumnTransforms
+    against sourceQuery's real result rather than the target table.
+    """
+    database = _mockedDatabase(DatabaseType.MYSQL)
+    database.cursor.description = [('id', 'INT'), ('customName', 'VARCHAR')]
+
+    assert database.getLastQueryColumnNames() == ['id', 'customName']
+
+
 def test_chunk_insert_splits_data_into_multiple_batches():
     """5 records with chunkSize=2 should batch as [0:2], [2:4], [4:6] (3 executemany
     calls, the last a partial batch) -- covers the chunking loop itself, not just
@@ -128,6 +144,23 @@ def test_chunk_insert_does_nothing_for_empty_data():
     database.insert(table='people', data=[], chunkSize=100)
 
     database.cursor.executemany.assert_not_called()
+
+
+@pytest.mark.parametrize('dbType,expectedQuery', [
+    (DatabaseType.MYSQL, 'TRUNCATE TABLE people'),
+    (DatabaseType.POSTGRESQL, 'TRUNCATE TABLE people'),
+    (DatabaseType.ORACLE, 'TRUNCATE TABLE people'),
+    (DatabaseType.MSSQL, 'TRUNCATE TABLE people'),
+    (DatabaseType.MARIADB, 'TRUNCATE TABLE people'),
+    (DatabaseType.SQLITE, 'DELETE FROM people'),  # SQLite has no TRUNCATE statement
+    ])
+def test_truncate_uses_the_dialects_truncate_query(dbType, expectedQuery):
+    database = _mockedDatabase(dbType)
+
+    database.truncate(table='people')
+
+    assert database.cursor.execute.call_args[0][0] == expectedQuery
+    assert database.connection.commit.call_count == 1
 
 
 def test_context_manager_closes_on_normal_exit():

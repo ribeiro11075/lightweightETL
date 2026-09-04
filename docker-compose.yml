@@ -39,6 +39,19 @@ services:
       timeout: 5s
       retries: 60
 
+  mariadb:
+    image: mariadb:11
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: lightweight_etl_test
+    ports:
+      - "3308:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
   mssql:
     image: mcr.microsoft.com/mssql/server:2022-latest
     # amd64-only image (Microsoft ships no arm64 Linux build); runs fine under

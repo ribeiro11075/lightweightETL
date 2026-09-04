@@ -4,13 +4,15 @@ from types import TracebackType
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 from .configurationInterface import DatabaseConnectionConfig, DatabaseType
-from .databaseDialects import DatabaseDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect
+from .databaseDialects import DatabaseDialect, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, SQLiteDialect
 
 DIALECTS: Dict[DatabaseType, DatabaseDialect] = {
     DatabaseType.MYSQL: MySQLDialect(),
     DatabaseType.ORACLE: OracleDialect(),
     DatabaseType.POSTGRESQL: PostgreSQLDialect(),
     DatabaseType.MSSQL: MSSQLDialect(),
+    DatabaseType.SQLITE: SQLiteDialect(),
+    DatabaseType.MARIADB: MariaDBDialect(),
     }
 
 
@@ -51,6 +53,17 @@ class Database:
         return self.cursor.fetchall()
 
 
+    def getLastQueryColumnNames(self) -> List[str]:
+        """Column names from cursor.description for whatever query last ran on this
+        connection -- reflects exactly what that query actually returned (an
+        explicit column list, a `select *`, computed/aliased expressions, ...),
+        not any table's schema. Only meaningful right after query(); there's
+        nothing sensible to return before any query has run.
+        """
+
+        return [row[0] for row in self.cursor.description]
+
+
     def alter(self, query: str) -> None:
 
         self.cursor.execute(query)
@@ -59,7 +72,7 @@ class Database:
 
     def truncate(self, table: str) -> None:
 
-        query = 'TRUNCATE TABLE {}'.format(table)
+        query = self.dialect.truncateQuery(table=table)
         self.cursor.execute(query)
         self.connection.commit()
 
@@ -100,9 +113,14 @@ class Database:
         return [column for column in allColumns if column not in primaryColumns]
 
 
-    def _getColumnBuckets(self, table: str) -> Tuple[List[str], List[str], List[str]]:
+    def _getColumnBuckets(self, table: str, columns: Optional[List[str]] = None) -> Tuple[List[str], List[str], List[str]]:
+        """allColumns defaults to introspecting the table, but an explicit columns
+        list (e.g. DataJobConfig.targetColumns) overrides it -- primaryColumns
+        always comes from the table itself, since a primary key is a property of
+        the destination, not something a job config redefines.
+        """
 
-        allColumns = self.getAllColumnNames(table=table)
+        allColumns = columns if columns is not None else self.getAllColumnNames(table=table)
         primaryColumns = self.getPrimaryColumnNames(table=table)
         nonPrimaryColumns = [column for column in allColumns if column not in primaryColumns]
 
@@ -124,24 +142,28 @@ class Database:
             index += chunkSize
 
 
-    def insert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100) -> None:
+    def insert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100, columns: Optional[List[str]] = None) -> None:
+        """columns defaults to introspecting the table (its full column list, in
+        the table's own order); pass an explicit list to insert into a specific
+        subset/order instead -- data's tuples must be in that same order.
+        """
 
-        columns = self.getAllColumnNames(table=table)
-        columnVariables = self.dialect.placeholders(len(columns))
-        query = 'INSERT INTO {} ({}) VALUES ({})'.format(table, ', '.join(columns), ', '.join(columnVariables))
+        resolvedColumns = columns if columns is not None else self.getAllColumnNames(table=table)
+        columnVariables = self.dialect.placeholders(len(resolvedColumns))
+        query = 'INSERT INTO {} ({}) VALUES ({})'.format(table, ', '.join(resolvedColumns), ', '.join(columnVariables))
         self._chunkInsert(table=table, data=data, chunkSize=chunkSize, query=query)
 
 
-    def upsert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100) -> None:
+    def upsert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100, columns: Optional[List[str]] = None) -> None:
 
-        allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=table)
+        allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=table, columns=columns)
         query = self.dialect.upsertQuery(table=table, allColumns=allColumns, primaryKeyColumns=primaryKeyColumns, nonPrimaryKeyColumns=nonPrimaryKeyColumns)
         self._chunkInsert(table=table, data=data, chunkSize=chunkSize, query=query)
 
 
-    def upsertFromStage(self, targetTable: str, stageTable: str) -> None:
+    def upsertFromStage(self, targetTable: str, stageTable: str, columns: Optional[List[str]] = None) -> None:
 
-        allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=targetTable)
+        allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=targetTable, columns=columns)
         query = self.dialect.upsertFromStageQuery(targetTable=targetTable, stageTable=stageTable, allColumns=allColumns,
                                                     primaryKeyColumns=primaryKeyColumns, nonPrimaryKeyColumns=nonPrimaryKeyColumns)
         self.alter(query=query)

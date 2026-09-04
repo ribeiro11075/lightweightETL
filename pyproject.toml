@@ -20,7 +20,13 @@ mysql = ["mysql-connector-python==26.7.0"]
 postgresql = ["psycopg2==2.9.12"]
 oracle = ["oracledb==4.0.2"]
 mssql = ["pymssql==2.4.0"]
-all = ["lightweight-etl[mysql,postgresql,oracle,mssql]"]
+# MariaDB speaks MySQL's wire protocol, and MariaDBDialect reuses MySQLDialect's
+# connect() wholesale -- same driver package, no separate extra needed
+mariadb = ["mysql-connector-python==26.7.0"]
+# sqlite3 is Python's standard library -- no extra to install at all, this exists
+# only so `lightweight-etl[all]` and the pattern below stay uniform
+sqlite = []
+all = ["lightweight-etl[mysql,postgresql,oracle,mssql,mariadb,sqlite]"]
 dev = ["pytest==9.1.1", "mypy==2.3.1", "types-PyYAML==6.0.12.20260815"]
 
 [tool.setuptools]

@@ -19,7 +19,7 @@ Worker processes, the process pool, and the dependency graph between jobs are al
 ### Project layout
 | Path | What it is |
 | --- | --- |
-| `library/` | The package. `Configuration` (validation), `Database` + per-dialect SQL (`databaseDialects.py`), `DependencyGraph` (scheduling), `Transform`/`Scramble` (row-level work), `MemoryBackend`/`FileMemory`/`Log`, and `runner.py` (the two public entry points, `runDataJobs`/`runScrambleJobs`) |
+| `library/` | The package. `Configuration` (validation), `Database` + per-dialect SQL (`databaseDialects.py`), `DependencyGraph` (scheduling), `Transform`/`Scramble` (row-level work, in `transformInterface.py`/`databaseScrambleInterface.py`), `MemoryBackend`/`FileMemory`/`Log`, and `runner.py` (the two public entry points, `runDataJobs`/`runScrambleJobs`) |
 | `example/` | A working reference deployment: two scripts, their YAML config, and gitignored runtime output |
 | `tests/` | pytest suite -- see "Running the tests" below |
 
@@ -37,37 +37,44 @@ Worker processes, the process pool, and the dependency graph between jobs are al
         - `pip install -e ".[postgresql]"` -- postgresql only
         - `pip install -e ".[oracle]"` -- oracle only, via [`oracledb`](https://python-oracledb.readthedocs.io/) in its default "thin" mode -- pure Python, no separate Oracle Client install needed
         - `pip install -e ".[mssql]"` -- SQL Server only, via [`pymssql`](https://github.com/pymssql/pymssql) -- bundles FreeTDS, no separate ODBC driver install needed
+        - `pip install -e ".[mariadb]"` -- MariaDB, via the same `mysql-connector-python` driver as `mysql` (MariaDB is wire-compatible with MySQL for everything this library does)
+        - `pip install -e ".[sqlite]"` -- SQLite; a no-op install, `sqlite3` ships in Python's standard library -- this extra exists only so `[all]` and the pattern above stay uniform
         - `pip install -e ".[all]"` -- every driver
         - append `,dev` to any of the above to also install `pytest`/`mypy`, e.g. `pip install -e ".[all,dev]"`
 
 1. Point the example scripts at your own databases and jobs
     - The repo ships a small sample under `example/configuration/` (fake hosts, fake credentials, generic table/column names -- nothing here is a real deployment) so `example/example_jobs.py` and `example/example_scramble.py` run out of the box up through configuration validation. Replace the values with your own to run against real infrastructure.
     - [ ] **Required**: Edit `example/configuration/database.yaml` -- one entry per database alias:
-        - `type` (**Required**): `oracle`, `mysql`, `postgresql`, or `mssql`
-        - `user` / `password` / `database` / `host` (**Required**): connection credentials
+        - `type` (**Required**): `oracle`, `mysql`, `postgresql`, `mssql`, `mariadb`, or `sqlite`
+        - `database` (**Required**): the database name -- for `sqlite`, this is instead a filesystem path (or `:memory:`)
+        - `user` / `password` / `host` (**Required for every type except `sqlite`**): connection credentials -- `sqlite` is a local file with no server or authentication, so these are omitted entirely for it
         - `port` (**Optional**): defaults to the driver's standard port when omitted
         - `serviceName` / `sid` (oracle only): exactly one of these is **required** for `type: oracle`
     - [ ] **Required**: Edit `example/configuration/jobs.yaml` (loaded by `example/example_jobs.py`)
         - `workers` (**Required**): number of processes to run jobs concurrently (number)
+        - `cycleSleepSeconds` (**Optional**, default `0.5`): seconds to sleep between cycles when `runForever=True` -- once every active job in a cycle has completed or failed and the next cycle is about to start. Unrelated to `DependencyGraph`'s own fixed 1-second poll, which waits for jobs *within* a cycle to finish, not the gap between cycles
         - `jobs` (**Required**): a map of job name -> job definition. Each job supports:
             - `active` (**Required**): whether the job runs at all (boolean)
-            - `predecessors` (**Optional**): jobs that must complete first (list of job names)
             - `refresh` (**Optional**): minimum minutes between runs (number)
-            - `sourceDatabase` / `targetDatabase` (**Required**): database aliases from `database.yaml`
+            - `predecessors` (**Optional**): jobs that must complete first (list of job names)
+            - `sourceDatabase` (**Required**): database alias from `database.yaml`
+            - `sourceQuery` (**Required**): query to extract data from the source database
+            - `targetColumns` (**Optional**): the target column names `sourceQuery`'s SELECT list corresponds to, positionally, in that order. Left blank, `sourceQuery` is assumed to select every column of `targetTableFinal`, in that table's own column order -- set this explicitly whenever your query's column order (or subset) doesn't match the target table's own. This is a purely positional contract: valid-but-wrong-order column names insert data into the wrong columns *without an error* (both sides are real columns, so there's nothing to reject); a wrong name or count fails loudly instead, at the database
+            - `sourceQueryColumnTransforms` (**Optional**): map of column name -> list of transformer references, each in the form `"module.path:function_name"` (e.g. `example.example_transforms:currency`). The function can live anywhere importable -- `example/example_transforms.py` is just a reference implementation -- and is resolved at job-run time via `library.resolveTransformer`. Transforms run against `sourceQuery`'s own result columns -- whatever it actually selects, an explicit list or `select *` alike -- *not* `targetColumns`/`targetTableFinal`; a transform is applied to a value as extracted from the source, before it's ever mapped onto a target column name, so what the target calls that column doesn't matter. Naming a column here that `sourceQuery` doesn't actually return raises `library.TransformError` before anything is written, rather than silently never running. A transformer that raises on a particular row's value (e.g. it expects a string and gets an int) also raises `TransformError`, wrapping the original error with the column name and offending value attached
+            - `targetDatabase` (**Required**): database alias from `database.yaml`
+            - `targetTableStage` (**Optional**): required when `insertStrategy: swap`
+            - `targetTableFinal` (**Required**): target table in the target database
             - `insertStrategy` (**Required**): `swap` or `upsert`
                 - `swap`: loads into `targetTableStage`, then swaps it with `targetTableFinal`
                 - `upsert`: upserts from `targetTableStage` if set, otherwise straight from the extracted data
             - `chunkSize` (**Required**): rows per insert batch (number)
-            - `targetTableStage` (**Optional**): required when `insertStrategy: swap`
-            - `targetTableFinal` (**Required**): target table in the target database
-            - `columnTransforms` (**Optional**): map of column name -> list of transformer references, each in the form `"module.path:function_name"` (e.g. `example.example_transforms:currency`). The function can live anywhere importable -- `example/example_transforms.py` is just a reference implementation -- and is resolved at job-run time via `library.resolveTransformer`
             - `preTargetAdhocQueries` / `postTargetAdhocQueries` (**Optional**): queries run on the target database before/after load
-            - `sourceQuery` (**Required**): query to extract data from the source database
 
 1. Or edit `example/configuration/scramble.yaml` for scramble/masking jobs (loaded by `example/example_scramble.py`)
     - `workers` (**Required**): number of processes to run jobs concurrently (number)
+    - `cycleSleepSeconds` (**Optional**, default `0.5`): see above
     - `jobs` (**Required**): a map of job name -> job definition. Each job supports:
-        - `active` / `predecessors` (see above)
+        - `active` / `refresh` / `predecessors` (see above)
         - `database` / `table` (**Required**): where to scramble data in place
         - `defaultColumnValues` (**Optional**): map of column name -> a fixed value to write into every row
         - `identifierColumns` (**Optional**): columns left untouched
@@ -113,11 +120,11 @@ pytest
 The suite stubs out `oracledb`/`psycopg2` (see `tests/conftest.py`) so it runs without native database client libraries installed, and every database-touching test uses a mocked cursor/connection rather than a live server -- it verifies the SQL and control flow this library builds, not connectivity to a real MySQL/PostgreSQL/Oracle instance.
 
 ### Integration tests
-`tests/test_integration_mysql.py`, `tests/test_integration_postgresql.py`, `tests/test_integration_oracle.py`, and `tests/test_integration_mssql.py` run the same operations against a real server instead of a mocked cursor -- schema introspection, insert/chunking, upsert (both the direct and from-stage paths), swap, truncate, the context manager, the full `runDataJobs` path (a real `multiprocessing.Pool`, a worker running in its own process, `FileMemory` surviving being pickled into it), and the reference `DatabaseMemory` from `example/example_database_memory.py`. `tests/test_integration_cross_database.py` covers the case those four don't: `sourceDatabase` and `targetDatabase` pointing at two *different* database systems in the same job, with a real `columnTransforms` entry applied in between (extract from MySQL, format with `example.example_transforms:currency`, load into PostgreSQL). All five files are marked `integration` and excluded from the default `pytest` run (see `addopts` in `pyproject.toml`), so they never block anyone without Docker:
+`tests/test_integration_mysql.py`, `tests/test_integration_postgresql.py`, `tests/test_integration_oracle.py`, `tests/test_integration_mssql.py`, and `tests/test_integration_mariadb.py` run the same operations against a real server instead of a mocked cursor -- schema introspection, insert/chunking, upsert (both the direct and from-stage paths), swap, truncate, the context manager, the full `runDataJobs` path (a real `multiprocessing.Pool`, a worker running in its own process, `FileMemory` surviving being pickled into it), and the reference `DatabaseMemory` from `example/example_database_memory.py`. `tests/test_integration_cross_database.py` covers the case those don't: `sourceDatabase` and `targetDatabase` pointing at two *different* database systems in the same job, with a real `sourceQueryColumnTransforms` entry applied in between (extract from MySQL, format with `example.example_transforms:currency`, load into PostgreSQL). All six files are marked `integration` and excluded from the default `pytest` run (see `addopts` in `pyproject.toml`), so they never block anyone without Docker:
 ```
-docker compose up -d mysql postgresql oracle mssql   # starts disposable servers on
-                                                      # localhost:3307 / :5433 / :1522 / :1434
-pip install -e ".[mysql,oracle,mssql,dev]"
+docker compose up -d mysql postgresql oracle mssql mariadb   # starts disposable servers on
+                                                               # localhost:3307 / :5433 / :1522 / :1434 / :3308
+pip install -e ".[mysql,oracle,mssql,mariadb,dev]"
 pip install psycopg2-binary                          # only if you don't have PostgreSQL's build toolchain (pg_config) --
                                                        # pyproject.toml's `postgresql` extra pins source-build psycopg2,
                                                        # the upstream-recommended choice for production
@@ -125,6 +132,8 @@ pytest -m integration
 docker compose down                                   # when you're done
 ```
 Each test creates its own uniquely-named table and drops it afterward, so the suite is safe to re-run against the same running containers. Missing a driver or a server just skips the affected tests with a clear reason, rather than failing. The Oracle container is [`gvenzl/oracle-free`](https://github.com/gvenzl/oci-oracle-free) (free, Apache-2.0 licensed, no Oracle Container Registry login required, unlike Oracle's own images); the SQL Server container is Microsoft's own official image, amd64-only (no native arm64 Linux build) but runs fine under emulation on Apple Silicon.
+
+`tests/test_integration_sqlite.py` runs the same kind of real-server checks for SQLite, but needs no docker service and isn't marked `integration` -- `sqlite3` is Python's standard library, and each test gets its own throwaway file, so it's part of the plain `pytest` default run above.
 
 
 ## Type checking
