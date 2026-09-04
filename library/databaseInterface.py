@@ -1,216 +1,156 @@
-import mysql.connector
-import cx_Oracle
-import psycopg2
+from __future__ import annotations
 
+from types import TracebackType
+from typing import Any, Dict, List, Optional, Tuple, Type
 
-class DATABASE():
+from .configurationInterface import DatabaseConnectionConfig, DatabaseType
+from .databaseDialects import DatabaseDialect, MySQLDialect, OracleDialect, PostgreSQLDialect
 
-	def __init__(self, connectionSettings):
-		self.connectionSettings = connectionSettings
+DIALECTS: Dict[DatabaseType, DatabaseDialect] = {
+    DatabaseType.MYSQL: MySQLDialect(),
+    DatabaseType.ORACLE: OracleDialect(),
+    DatabaseType.POSTGRESQL: PostgreSQLDialect(),
+    }
 
-		# connect to database
-		self.connect()
 
+class Database:
 
-	def connect(self):
+    def __init__(self, connectionSettings: DatabaseConnectionConfig) -> None:
+        self.connectionSettings = connectionSettings
+        self.type = connectionSettings.type
+        self.dialect = DIALECTS[self.type]
+        self.connect()
 
-		# define variables
-		self.type = self.connectionSettings['type']
-		user = self.connectionSettings['user']
-		password = self.connectionSettings['password']
-		database = self.connectionSettings['database']
-		host = self.connectionSettings['host']
-		port = self.connectionSettings['port'] if self.connectionSettings['port'] else None
-		threaded = self.connectionSettings['threaded'] if self.connectionSettings['threaded'] else None
-		serviceName = self.connectionSettings['serviceName'] if self.connectionSettings['serviceName'] else None
-		sid = self.connectionSettings['sid'] if self.connectionSettings['sid'] else None
 
+    def connect(self) -> None:
 
-		# check database type and connection protocols
-		# connect to database
-		if self.type == 'mysql':
-			self.connection = mysql.connector.connect(user=user, password=password, host=host, database=database, port=port)
-			self.cursor = self.connection.cursor(buffered=True)
-		elif self.type == 'oracle' and serviceName:
-			self.connection = cx_Oracle.connect(user=user, password=password, threaded=threaded, dsn=cx_Oracle.makedsn(host=host, port=port, serviceName=serviceName))
-			self.cursor = self.connection.cursor()
-		elif self.type == 'oracle' and sid:
-			self.connection = cx_Oracle.connect(user=user, password=password, threaded=threaded, dsn=cx_Oracle.makedsn(host=host, port=port, sid=sid))
-			self.cursor = self.connection.cursor()
-		elif self.type == 'postgresql':
-			self.connection = psycopg2.connect(user=user, password=password, host=host, database=database, port=port)
-			self.cursor = self.connection.cursor()
+        self.connection, self.cursor = self.dialect.connect(self.connectionSettings)
 
 
-	def close(self):
+    def close(self) -> None:
 
-		# close cursor & connection
-		self.cursor.close()
-		self.connection.close()
+        self.cursor.close()
+        self.connection.close()
 
 
-	def query(self, query):
+    def __enter__(self) -> 'Database':
 
-		# execute query & fetch results from execution
-		self.cursor.execute(query)
-		data = self.cursor.fetchall()
+        return self
 
-		return data
 
+    def __exit__(self, excType: Optional[Type[BaseException]], excValue: Optional[BaseException], traceback: Optional[TracebackType]) -> None:
 
-	def alter(self, query):
+        self.close()
 
-		# execute query & commit
-		self.cursor.execute(query)
-		self.connection.commit()
 
+    def query(self, query: str) -> List[Tuple[Any, ...]]:
 
-	def truncate(self, table):
+        self.cursor.execute(query)
 
-		# dynamically create SQL
-		# execute query & commit
-		query = "TRUNCATE TABLE {}".format(table)
-		self.cursor.execute(query)
-		self.connection.commit()
+        return self.cursor.fetchall()
 
 
-	# Needs to be fixed to accomodate PostgreSQL
-	def getAllColumnTypes(self, table):
+    def alter(self, query: str) -> None:
 
-		query = "SELECT * FROM {}".format(table)
+        self.cursor.execute(query)
+        self.connection.commit()
 
-		# execute query & fetch results from execution
-		self.cursor.execute(query)
-		columnTypes = [row[1] for row in self.cursor.description]
 
+    def truncate(self, table: str) -> None:
 
-		return columnTypes
+        query = 'TRUNCATE TABLE {}'.format(table)
+        self.cursor.execute(query)
+        self.connection.commit()
 
 
-	def getAllColumnNames(self, table):
+    def getAllColumnTypes(self, table: str) -> List[Any]:
+        """WHERE 1=0 is valid ANSI SQL across mysql/postgresql/oracle -- reads schema
+        metadata via cursor.description without scanning or fetching any rows.
+        """
 
-		query = "SELECT * FROM {}".format(table)
+        query = 'SELECT * FROM {} WHERE 1=0'.format(table)
+        self.cursor.execute(query)
 
-		# execute query & fetch results from execution
-		self.cursor.execute(query)
-		columns = [row[0] for row in self.cursor.description]
+        return [row[1] for row in self.cursor.description]
 
-		return columns
 
+    def getAllColumnNames(self, table: str) -> List[str]:
+        """See getAllColumnTypes for why the query is bounded with WHERE 1=0."""
 
-	# Needs to be fixed to accomodate PostgreSQL
-	def getPrimaryColumnNames(self, table):
+        query = 'SELECT * FROM {} WHERE 1=0'.format(table)
+        self.cursor.execute(query)
 
-		# execute query & fetch results from execution
-		if self.type == 'mysql':
-			query = "SELECT k.COLUMN_NAME FROM information_schema.table_constraints t LEFT JOIN information_schema.key_column_usage k USING(constraint_name, table_schema, table_name) WHERE t.constraint_type='PRIMARY KEY' AND t.table_name='owalog'"
-		elif self.type == 'postgresql':
-			query = "SELECT c.column_name FROM information_schema.key_column_usage AS c LEFT JOIN information_schema.table_constraints AS t ON t.constraint_name=c.constraint_name WHERE t.table_name='{}' AND t.constraint_type in ('PRIMARY KEY', 'UNIQUE')".format(table)
+        return [row[0] for row in self.cursor.description]
 
-		self.cursor.execute(query)
-		columns = [row[0] for row in self.cursor.fetchall()]
 
-		return columns
+    def getPrimaryColumnNames(self, table: str) -> List[str]:
 
+        query = self.dialect.primaryKeyQuery(table=table)
+        self.cursor.execute(query)
 
-	def getNonPrimaryColumnNames(self, table):
+        return [row[0] for row in self.cursor.fetchall()]
 
-		allColumns = self.getAllColumnNames(table=table)
-		primaryColumns = self.getPrimaryColumnNames(table=table)
-		nonPrimaryColumns = [i for i in allColumns if i not in primaryColumns]
 
-		return nonPrimaryColumns
+    def getNonPrimaryColumnNames(self, table: str) -> List[str]:
 
+        allColumns = self.getAllColumnNames(table=table)
+        primaryColumns = self.getPrimaryColumnNames(table=table)
 
-	# Needs to be fixed to accomodate PostgreSQL
-	def _getColumnBuckets(self, table):
+        return [column for column in allColumns if column not in primaryColumns]
 
-		allColumns = self.getAllColumnNames(table=table)
-		primaryColumns = self.getPrimaryColumnNames(table=table)
-		nonPrimaryColumns = [i for i in allColumns if i not in primaryColumns]
 
-		return allColumns, primaryColumns, nonPrimaryColumns
+    def _getColumnBuckets(self, table: str) -> Tuple[List[str], List[str], List[str]]:
 
+        allColumns = self.getAllColumnNames(table=table)
+        primaryColumns = self.getPrimaryColumnNames(table=table)
+        nonPrimaryColumns = [column for column in allColumns if column not in primaryColumns]
 
-	def _chunkInsert(self, table, data, chunkSize, query):
+        return allColumns, primaryColumns, nonPrimaryColumns
 
-		# define index to track which rows to insert with chunking
-		# get number of records
-		index = 0
-		numberRecords = len(data)
 
-		while True:
+    def _chunkInsert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int, query: str) -> None:
 
-			# check if there are no more records to insert
-			if index > numberRecords or numberRecords == 0:
-				break
+        index = 0
+        numberRecords = len(data)
 
-			# execute query & commit
-			# increment index to track rows to insert with chunking
-			self.cursor.executemany(query, data[index:index + chunkSize])
-			self.connection.commit()
-			index += chunkSize
+        while True:
 
+            if index > numberRecords or numberRecords == 0:
+                break
 
+            self.cursor.executemany(query, data[index:index + chunkSize])
+            self.connection.commit()
+            index += chunkSize
 
-	def insert(self, table, data, chunkSize=100):
 
-		# get column names of table
-		# dynamically create list of variable placeholders for dynamic SQL
-		# dynamically create SQL
-		columns = self.getAllColumnNames(table=table)
-		columnVariables = len(columns) * ['%s']
-		query = "INSERT INTO {} ({}) VALUES ({})".format(table, ', '.join(columns), ', '.join(columnVariables))
-		self._chunkInsert(table=table, data=data, chunkSize=chunkSize, query=query)
+    def insert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100) -> None:
 
+        columns = self.getAllColumnNames(table=table)
+        columnVariables = self.dialect.placeholders(len(columns))
+        query = 'INSERT INTO {} ({}) VALUES ({})'.format(table, ', '.join(columns), ', '.join(columnVariables))
+        self._chunkInsert(table=table, data=data, chunkSize=chunkSize, query=query)
 
-	def upsert(self, table, data, chunkSize=100):
 
-		# get primary and non-primary columns of target table
-		# dynamically create column placeholder variables syntax
-		allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=table)
-		allColumnVariables = len(allColumns) * ['%s']
+    def upsert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100) -> None:
 
-		# check if mysql or postgresql database
-		# dynamically create column selection syntax for values to be updated
-		if self.type == 'mysql':
-			nonPrimaryKeyColumnVariables = [column + '=VALUES(' + column + ')' for column in nonPrimaryKeyColumns]
-			query = "INSERT INTO {} ({}) VALUES ({}) ON DUPLICATE KEY UPDATE {}".format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ', '.join(nonPrimaryKeyColumnVariables))
-		elif self.type == 'postgresql':
-			nonPrimaryKeyColumnVariables = [column + '=EXCLUDED.' + column for column in nonPrimaryKeyColumns]
-			query = query="INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO UPDATE SET {}".format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ','.join(primaryKeyColumns), ', '.join(nonPrimaryKeyColumnVariables))
+        allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=table)
+        query = self.dialect.upsertQuery(table=table, allColumns=allColumns, primaryKeyColumns=primaryKeyColumns, nonPrimaryKeyColumns=nonPrimaryKeyColumns)
+        self._chunkInsert(table=table, data=data, chunkSize=chunkSize, query=query)
 
-			self._chunkInsert(table=table, data=data, chunkSize=chunkSize, query=query)
 
+    def upsertFromStage(self, targetTable: str, stageTable: str) -> None:
 
-	def upsertFromStage(self, targetTable, stageTable):
+        allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=targetTable)
+        query = self.dialect.upsertFromStageQuery(targetTable=targetTable, stageTable=stageTable, allColumns=allColumns,
+                                                    primaryKeyColumns=primaryKeyColumns, nonPrimaryKeyColumns=nonPrimaryKeyColumns)
+        self.alter(query=query)
 
-		# get primary and non-primary columns of target table
-		allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=targetTable)
 
-		# check if mysql or postgresql database
-		# dynamically create column selection syntax for values to be updated
-		if self.type == 'mysql':
-			nonPrimaryKeyColumnVariables = [column + '=VALUES(' + column + ')' for column in nonPrimaryKeyColumns]
-			query = "INSERT INTO {} ({}) SELECT {} FROM {} ON DUPLICATE KEY UPDATE {}".format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable, ', '.join(nonPrimaryKeyColumnVariables))
-		elif self.type == 'postgresql':
-			nonPrimaryKeyColumnVariables = [column + '=EXCLUDED.' + column for column in nonPrimaryKeyColumns]
-			query = "INSERT INTO {} ({}) SELECT {} FROM {} ON CONFLICT({}) DO UPDATE SET {}".format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable, ','.join(primaryKeyColumns), ', '.join(nonPrimaryKeyColumnVariables))
+    def swap(self, targetTable: str, stageTable: str) -> None:
 
-			self.alter(query=query)
+        tempTable = targetTable + '_tmp'
 
+        for query in self.dialect.swapQueries(targetTable=targetTable, stageTable=stageTable, tempTable=tempTable):
+            self.cursor.execute(query)
 
-	def swap(self, targetTable, stageTable):
-
-		# create temporary table to allow staging table to be renamed
-		# create dynamic SQL
-		tempTable = targetTable + '_tmp'
-
-		if self.type == 'mysql':
-			query = "RENAME TABLE {} TO {}, {} TO {}, {} TO {}".format(stageTable, tempTable, targetTable, stageTable, tempTable, targetTable)
-		elif self.type == 'postgresql':
-			query = "ALTER TABLE {} RENAME TO {}; ALTER TABLE {} RENAME TO {}; ALTER TABLE {} RENAME TO {}".format(stageTable, tempTable, targetTable, stageTable, tempTable, targetTable)
-
-		# execute query & commit
-		self.cursor.execute(query)
-		self.connection.commit()
+        self.connection.commit()

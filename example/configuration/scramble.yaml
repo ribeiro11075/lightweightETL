@@ -1,0 +1,22 @@
+# Sample configuration -- placeholder table/column names, not a real deployment.
+# Replace with your own job definitions; the database alias must match
+# configuration/environment/database.yaml.
+workers: 2
+jobs:
+  scrambleTable1:
+    active: true
+    predecessors:
+    database: targetDb
+    table: table1
+    defaultColumnValues:
+      status: active
+    identifierColumns:
+    - id
+    scrambleColumns:
+    - name
+    randomColumns:
+    - amount
+    randomSalt: exampleSalt
+    allDataRandom: false
+    preTargetAdhocQueries:
+    postTargetAdhocQueries:

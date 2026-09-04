@@ -1,34 +1,60 @@
-class TRANSFORM():
+from __future__ import annotations
 
-	def __init__(self, data, columns, columnTransforms):
-		self.data = data
-		self.columns = columns
-		self.columnTransforms = columnTransforms
+import importlib
+from typing import Any, Callable, Dict, List, Tuple
 
-
-	def _currency(self, index):
-
-		self.data = [list(row) for row in self.data]
-
-		# iterate through rows
-		# transform row item to currency value
-		for i, row in enumerate(self.data):
-			self.data[i][index] = '${:,.2f}'.format(row[index] if row[index] else 0)
-
-		return [tuple(row) for row in self.data]
+Transformer = Callable[[Any], Any]
 
 
-	def transform(self):
+class TransformResolutionError(Exception):
+    """Raised when a "module.path:function_name" transformer reference can't be resolved."""
 
-		# check if data is empty
-		if not len(self.data):
-			return self.data
 
-		# iterate through columns that need to be transformed
-		for index, column in enumerate(self.columns):
+def resolveTransformer(reference: str) -> Transformer:
+    """Import a Transformer from a "module.path:function_name" reference.
 
-			# check if columns need to be transformed to currency
-			if 'currency' in self.columnTransforms and column in self.columnTransforms['currency']:
-				self.data = self._currency(index=index)
+    Lets a job configuration name a function defined anywhere importable --
+    example/transforms.py, or any module of the user's own -- without the caller
+    having to pre-register it in a lookup table.
+    """
 
-		return self.data
+    modulePath, separator, attributeName = reference.partition(':')
+
+    if not separator:
+        raise TransformResolutionError(f'transformer reference "{reference}" must be in the form "module.path:function_name"')
+
+    try:
+        module = importlib.import_module(modulePath)
+    except ImportError as error:
+        raise TransformResolutionError(f'transformer reference "{reference}": no module named "{modulePath}"') from error
+
+    transformer = getattr(module, attributeName, None)
+
+    if transformer is None:
+        raise TransformResolutionError(f'transformer reference "{reference}": "{modulePath}" has no attribute "{attributeName}"')
+    if not callable(transformer):
+        raise TransformResolutionError(f'transformer reference "{reference}": "{attributeName}" is not callable')
+
+    return transformer
+
+
+class Transform:
+
+    def __init__(self, data: List[Tuple[Any, ...]], columns: List[str], columnTransforms: Dict[str, List[Transformer]]) -> None:
+        self.data = data
+        self.columns = columns
+        self.columnTransforms = columnTransforms
+
+
+    def transform(self) -> List[Tuple[Any, ...]]:
+        if not len(self.data):
+            return self.data
+
+        rows = [list(row) for row in self.data]
+
+        for index, column in enumerate(self.columns):
+            for transformer in self.columnTransforms.get(column, []):
+                for row in rows:
+                    row[index] = transformer(row[index])
+
+        return [tuple(row) for row in rows]

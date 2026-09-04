@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lightweight-etl"
+version = "0.1.0"
+description = "A lightweight python library to perform ETL (Extract, Transform, Load)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "David Ribeiro" }]
+dependencies = [
+    "pyyaml==5.3.1",
+    "pydantic==2.13.5",
+    ]
+
+[project.optional-dependencies]
+mysql = ["mysql-connector-python==8.0.21"]
+postgresql = ["psycopg2==2.8.6"]
+oracle = ["cx-Oracle==8.0.1"]
+all = ["lightweight-etl[mysql,postgresql,oracle]"]
+dev = ["pytest==8.4.2", "mypy==1.13.0", "types-PyYAML==6.0.12.20240917"]
+
+[tool.setuptools]
+packages = ["library"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.9"
+files = ["library"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true

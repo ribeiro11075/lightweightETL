@@ -1,59 +1,123 @@
 # lightweight-etl
-A lightweight python library to to perform ETL (Extract, Transform, Load)
+A lightweight python library to perform ETL (Extract, Transform, Load) and table-level data masking, built around a dependency graph of jobs.
 
 ![ETL](https://www.blastanalytics.com/wp-content/uploads/extract-transform-load-icons-800x279.png)
 
 
-## Getting Started
-The repository includes example folders in different directories to provide an example of configuration that can be used as a reference
+## What this is
+`library/` is a standalone, typed package you import directly -- it never reads a file, never knows a file path, and never requires every database driver to be installed. Your side of the contract is just configuration:
 
-1. Follow the installation guide outlined below
-1. Follow the code outlined in the `script` folder for additional guidance
+- **jobs** -- a validated `DataJobsFile` or `ScrambleJobsFile` (see the config field reference under Installation, below)
+- **databases** -- a validated `Dict[str, DatabaseConnectionConfig]`
+- **log location** -- a `Path` to write to
+- **memory location** -- a `Path` to persist run history to (data jobs only, so `refresh` windows survive a restart)
+
+Worker processes, the process pool, and the dependency graph between jobs are all managed internally; you don't write a worker function or touch `multiprocessing` yourself.
+
+`example/` shows one way to wire this up end to end -- it's a fully self-contained reference implementation, with its own `example/configuration/` (YAML job/database definitions), `example/log/`, and `example/memory/` (gitignored, written at runtime). Nothing outside `example/` is deployment-specific.
+
+### Project layout
+| Path | What it is |
+| --- | --- |
+| `library/` | The package. `Configuration` (validation), `Database` + per-dialect SQL (`databaseDialects.py`), `DependencyGraph` (scheduling), `Transform`/`Scramble` (row-level work), `Memory`/`Log`, and `runner.py` (the two public entry points, `runDataJobs`/`runScrambleJobs`) |
+| `example/` | A working reference deployment: two scripts, their YAML config, and gitignored runtime output |
+| `tests/` | pytest suite -- see "Running the tests" below |
 
 
 ## Installation
-The installation steps include optional items that are dependent on requirements, setup, and user preferences
 
 1. Setup prerequisites
-    - [ ] **Required**: Install python3 by following the instructions [here](https://realpython.com/installing-python)
-    - [ ] **Required**: Install pip by following the instructions [here](https://howchoo.com/g/mze4ntbknjk/install-pip-python)
-    - [ ] **Optional**: Install Oracle Client by following the instructions [here](https://cx-oracle.readthedocs.io/en/latest/user_guide/installation.html)
+    - [ ] **Required**: Install Python 3.9+, e.g. following [this guide](https://realpython.com/installing-python)
+    - [ ] **Required**: Install pip, e.g. following [this guide](https://howchoo.com/g/mze4ntbknjk/install-pip-python)
+    - [ ] **Optional**: Install the [Oracle Client](https://cx-oracle.readthedocs.io/en/latest/user_guide/installation.html) -- only needed if you're installing the `oracle` extra below
 
-1. Create a virtual environment and install dependencies
-    - [ ] **Optional**: Install the virtualenv python package `pip install virtualenv`
-    - [ ] **Optional**: Create a folder to manage virtual environments `mkdir <environment_directory>`
-    - [ ] **Optional**: Create a virtual environment `virtualenv <environment_directory>/<environment_name>`
-    - [ ] **Optional**: Activate the virtual environment
-        - Windows: `.\<environment_directory>/<environment_name>\Scripts\activate`
-        - MacOS: `source <environment_directory>/<environment_name>\bin\activate`
-    - [ ] **Required**: Navigate to the root directory of the repository `cd <repository_directory>`
-    - [ ] **Required**: Install python dependencies in virtual environment `pip install -r requirements.txt`
-    - [ ] **Optional**: Deactivate the virtual environment when finished `deactivate`
+1. Create a virtual environment and install the package
+    - [ ] **Optional**: Create and activate a virtual environment, e.g. `python3 -m venv .venv && source .venv/bin/activate` (Windows: `.venv\Scripts\activate`)
+    - [ ] **Required**: From the repository root, install with the database driver(s) you actually need -- `library`'s only hard dependencies are `pyyaml` and `pydantic`; each database driver is an optional extra, imported lazily so installing one doesn't require the others:
+        - `pip install -e ".[mysql]"` -- mysql only
+        - `pip install -e ".[postgresql]"` -- postgresql only
+        - `pip install -e ".[oracle]"` -- oracle only (also needs the Oracle Client above)
+        - `pip install -e ".[all]"` -- every driver
+        - append `,dev` to any of the above to also install `pytest`/`mypy`, e.g. `pip install -e ".[all,dev]"`
 
-1. Define configuration
-    - [ ] **Required**: Open `configuration/environment/database.yaml`
-        - `database_alias` (**Required**): Used to get configuration throughout scripts (string)
-        - `database_type` (**Required**): Database installation options [oracle, mysql, postgresql] (string)
-        - `database_user` (**Required**): Database user credential (string)
-        - `database_password` (**Required**): Database password credential (string)
-    - [ ] **Required**: Create `configuration/environment/runtime.yaml` (COMING SOON)
-    - [ ] **Required**: Create `configuration/job/<fileName>.yaml`
-        - `workers` (**Required**): Number of cores to concurrently run with multiprocessing (number)
-        - `jobName` (**Required**): Job alias that will be used for logging (string)
-        - `active` (**Required**): Job run status with options of [true, false] (boolean)
-        - `refresh` (**Required**): Number of seconds before rerunning the job (number)
-        - `predecessors` (**Optional**): Jobs that should run before (list -> string)
-        - `sourceDatabase` (**Required**): Source database alias where data is extracted from (string)
-        - `targetDatabase` (**Required**): Target database alias where data is loaded to (string)
-        - `insertStrategy` (**Required**): Strategy for inserting data with options of [swap, upsert] (string)
-            - `swap`: Inserts data into a staging table and renames staging table to final table
-            - `upsert`: Upserts data from memory or staging table to target table
-        - `chunkSize` (**Required**): Number of rows in each insert chunk for performance (number)
-        - `targetTableStage` (**Optional**): Staging table in target database (string)
-            - Required when `insertStrategy=swap`
-            - Used by default when `insertStrategy=upsert`
-        - `targetTableFinal` (**Required**): Target table in target database (string)
-        - `columnTransforms` (**Optional**): Transformations on data currently limited to currency (list -> string)
-        - `preTargetAdhocQueries` (**Optional**): Queries run on target database pre data load (list -> string)
-        - `postTargetAdhocQueries` (**Optional**): Queries run on target database post data load(list -> string)
-        - `sourceQuery` (**Required**): Query to extract data from source database (string)
+1. Point the example scripts at your own databases and jobs
+    - The repo ships a small sample under `example/configuration/` (fake hosts, fake credentials, generic table/column names -- nothing here is a real deployment) so `example/example_jobs.py` and `example/example_scramble.py` run out of the box up through configuration validation. Replace the values with your own to run against real infrastructure.
+    - [ ] **Required**: Edit `example/configuration/database.yaml` -- one entry per database alias:
+        - `type` (**Required**): `oracle`, `mysql`, or `postgresql`
+        - `user` / `password` / `database` / `host` (**Required**): connection credentials
+        - `port` (**Optional**): defaults to the driver's standard port when omitted
+        - `threaded` (**Optional**, oracle only)
+        - `serviceName` / `sid` (oracle only): exactly one of these is **required** for `type: oracle`
+    - [ ] **Required**: Edit `example/configuration/jobs.yaml` (loaded by `example/example_jobs.py`)
+        - `workers` (**Required**): number of processes to run jobs concurrently (number)
+        - `jobs` (**Required**): a map of job name -> job definition. Each job supports:
+            - `active` (**Required**): whether the job runs at all (boolean)
+            - `predecessors` (**Optional**): jobs that must complete first (list of job names)
+            - `refresh` (**Optional**): minimum minutes between runs (number)
+            - `sourceDatabase` / `targetDatabase` (**Required**): database aliases from `database.yaml`
+            - `insertStrategy` (**Required**): `swap` or `upsert`
+                - `swap`: loads into `targetTableStage`, then swaps it with `targetTableFinal`
+                - `upsert`: upserts from `targetTableStage` if set, otherwise straight from the extracted data
+            - `chunkSize` (**Required**): rows per insert batch (number)
+            - `targetTableStage` (**Optional**): required when `insertStrategy: swap`
+            - `targetTableFinal` (**Required**): target table in the target database
+            - `columnTransforms` (**Optional**): map of column name -> list of transformer references, each in the form `"module.path:function_name"` (e.g. `example.transforms:currency`). The function can live anywhere importable -- `example/transforms.py` is just a reference implementation -- and is resolved at job-run time via `library.resolveTransformer`
+            - `preTargetAdhocQueries` / `postTargetAdhocQueries` (**Optional**): queries run on the target database before/after load
+            - `sourceQuery` (**Required**): query to extract data from the source database
+
+1. Or edit `example/configuration/scramble.yaml` for scramble/masking jobs (loaded by `example/example_scramble.py`)
+    - `workers` (**Required**): number of processes to run jobs concurrently (number)
+    - `jobs` (**Required**): a map of job name -> job definition. Each job supports:
+        - `active` / `predecessors` (see above)
+        - `database` / `table` (**Required**): where to scramble data in place
+        - `defaultColumnValues` (**Optional**): map of column name -> a fixed value to write into every row
+        - `identifierColumns` (**Optional**): columns left untouched
+        - `scrambleColumns` (**Optional**): columns whose existing values are shuffled across rows
+        - `randomColumns` (**Optional**): columns replaced with freshly generated random values (used with `allDataRandom: false`; set `allDataRandom: true` to randomize every column not otherwise handled above)
+        - `randomSalt` (**Required**): salt used to seed generated random text
+        - `preTargetAdhocQueries` / `postTargetAdhocQueries` (**Optional**): see above
+
+Invalid configuration (missing fields, an unknown `insertStrategy`, a `sourceDatabase` that isn't defined in `database.yaml`, a `predecessors` entry that isn't a real job, ...) raises `library.ConfigurationError` with a description of every problem found, rather than failing partway through a job run.
+
+
+## Running it
+Once you have validated configuration, running jobs is one call -- see `example/example_jobs.py` and `example/example_scramble.py` for the full picture (loading YAML, validating it, then calling one of these):
+
+```python
+from library import Configuration, DataJobsFile, runDataJobs
+
+databaseConfiguration = Configuration.validateDatabaseConfiguration(rawDatabaseConfig)
+jobsFile = Configuration.validateJobConfiguration(rawJobConfig, DataJobsFile)
+Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databaseConfiguration.keys()))
+
+runDataJobs(
+    jobsFile=jobsFile,
+    databaseConfiguration=databaseConfiguration,
+    logDirectory=logPath,
+    memoryDirectory=memoryPath,
+    runForever=True,
+    )
+```
+
+`runForever=True` (the default) keeps running, honoring each job's `refresh` window; pass `False` for a single pass over every active job, then return.
+
+`runScrambleJobs(jobsFile, databaseConfiguration, logDirectory, runForever=False)` is the scramble-job equivalent -- no `memoryDirectory`, since scramble jobs don't have a `refresh` window to track, and it defaults to a single pass (`runForever=False`) since masking a table is normally one-shot rather than a recurring job. Both accept `runForever` either way -- it's your call, not something the library assumes based on job type.
+
+
+## Running the tests
+```
+pip install -e ".[dev]"
+pytest
+```
+The suite stubs out `cx_Oracle`/`psycopg2` (see `tests/conftest.py`) so it runs without native database client libraries installed, and every database-touching test uses a mocked cursor/connection rather than a live server -- it verifies the SQL and control flow this library builds, not connectivity to a real MySQL/PostgreSQL/Oracle instance.
+
+
+## Type checking
+```
+pip install -e ".[dev]"
+mypy
+```
+
+
+## License
+[MIT](LICENSE)

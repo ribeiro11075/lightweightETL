@@ -1,0 +1,36 @@
+# Sample configuration -- placeholder table/column names, not a real deployment.
+# Replace with your own job definitions; database aliases must match
+# configuration/environment/database.yaml.
+workers: 2
+jobs:
+  loadTable1:
+    active: true
+    refresh: 60
+    predecessors:
+    sourceDatabase: sourceDb
+    targetDatabase: targetDb
+    insertStrategy: upsert
+    chunkSize: 500
+    targetTableStage:
+    targetTableFinal: table1
+    columnTransforms:
+      amount:
+      - example.transforms:currency
+    preTargetAdhocQueries:
+    postTargetAdhocQueries:
+    sourceQuery: select id, name, amount from sourceTable1
+  loadTable2:
+    active: true
+    refresh: 60
+    predecessors:
+    - loadTable1
+    sourceDatabase: sourceDb
+    targetDatabase: targetDb
+    insertStrategy: swap
+    chunkSize: 500
+    targetTableStage: table2Stage
+    targetTableFinal: table2
+    columnTransforms:
+    preTargetAdhocQueries:
+    postTargetAdhocQueries:
+    sourceQuery: select id, table1Id, value from sourceTable2

@@ -1,163 +1,160 @@
-import random
+from __future__ import annotations
+
+import base64
 import datetime
 import hashlib
-import base64
+import random
+from enum import Enum
+from typing import Any, Dict, List, Sequence, Tuple
 
 
-class SCRAMBLE():
-
-	def __init__(self, job, data, columns, dataTypes, defaultColumnValues={}, identifierColumns=[], scrambleColumns=[], randomColumns=[], allDataRandom=False, randomSalt='w3aK7ess'):
-		self.job = job
-		self.data = data
-		self.columns = columns
-		self.dataTypes = dataTypes
-		self.defaultColumnValues = defaultColumnValues
-		self.identifierColumns = identifierColumns
-		self.scrambleColumns = scrambleColumns
-		self.randomColumns = randomColumns
-		self.allDataRandom = allDataRandom
-		self.randomSalt = randomSalt
-		self.hasher = hashlib.sha1()
-
-		self.dataZip = zip(*self.data)
-		self.dataDict = {}
-		self.numberRecords = len(self.data)
-
-		# Needs to be fixed better for PostgreSQL
-		try:
-			self.numberColumns = list(i for i, j in zip(columns, dataTypes) if j.upper() in ['INT','BIGINT'])
-			self.dateColumns = list(i for i, j in zip(columns, dataTypes) if j.upper() in ['DATETIME', 'TIMESTAMP', 'DATE'])
-			self.textColumns = list(i for i, j in zip(columns, dataTypes) if j.upper() in ['TEXT', 'VARCHAR', 'CHAR'])
-		except:
-			self.numberColumns = list(i for i, j in zip(columns, dataTypes) if j in [20, 21, 23])
-			self.dateColumns = list(i for i, j in zip(columns, dataTypes) if j in [1114, 1018])
-			self.textColumns = list(i for i, j in zip(columns, dataTypes) if j in [1043, 18, 25])
+class ColumnCategory(str, Enum):
+    NUMBER = 'number'
+    DATE = 'date'
+    TEXT = 'text'
 
 
-	def hashString(self):
+_MYSQL_NUMBER_TYPES = {'INT', 'BIGINT'}
+_MYSQL_DATE_TYPES = {'DATETIME', 'TIMESTAMP', 'DATE'}
+_MYSQL_TEXT_TYPES = {'TEXT', 'VARCHAR', 'CHAR'}
 
-		# apply random salt to string
-		self.hasher.update(self.randomSalt)
-
-		return base64.urlsafe_b64encode(self.hasher.digest())
-
-
-	def _createRandomTextColumn(self, column, data):
-
-		# calculate lengths of values in column
-		textLengths = [len(x) for x in data if x is not None]
-
-		# check if data exists
-		# fine the lnogest length
-		# create random string with max length considerations
-		if textLengths:
-			maxLength = max(textLengths)
-			randomData = (self.hashString()[0:maxLength] for _ in range(self.numberRecords))
-			self.dataDict[column] = tuple(randomData)
-		else:
-			self.dataDict[column] = data
+_POSTGRESQL_NUMBER_OIDS = {20, 21, 23}
+_POSTGRESQL_DATE_OIDS = {1114, 1018}
+_POSTGRESQL_TEXT_OIDS = {1043, 18, 25}
 
 
-	def _createRandomDateColumn(self, column, data):
+class Scramble:
 
-		# check if date column has values
-		dataFilteredNone = [x for x in data if x is not None]
+    def __init__(self, job: str, data: List[Tuple[Any, ...]], columns: List[str], dataTypes: List[Any],
+                 defaultColumnValues: Dict[str, Any] = {}, identifierColumns: List[str] = [],
+                 scrambleColumns: List[str] = [], randomColumns: List[str] = [], allDataRandom: bool = False,
+                 randomSalt: str = 'w3aK7ess') -> None:
+        """dataTypes are mysql type name strings (e.g. "VARCHAR") for a mysql source,
+        or postgresql OIDs (ints) for a postgresql source -- categorizing by
+        dataType.upper() raises AttributeError for the OID case, which is how the
+        two are told apart below. Needs to be fixed better for PostgreSQL.
+        """
+        self.job = job
+        self.data = data
+        self.columns = columns
+        self.dataTypes = dataTypes
+        self.defaultColumnValues = defaultColumnValues
+        self.identifierColumns = identifierColumns
+        self.scrambleColumns = scrambleColumns
+        self.randomColumns = randomColumns
+        self.allDataRandom = allDataRandom
+        self.randomSalt = randomSalt
 
-		# check if data exists
-		# find earliest date
-		# find maximum date
-		# calculate difference between max and min dates
-		if dataFilteredNone:
-			minDate = min(dataFilteredNone)
-			maxDate = max(dataFilteredNone)
-			delta = (maxDate - minDate).total_seconds()
+        self.dataZip = zip(*self.data)
+        self.dataDict: Dict[str, Sequence[Any]] = {}
+        self.numberRecords = len(self.data)
 
-			# check if only 1 unique date exists
-			# create random date with min and max date considerations
-			if minDate == maxDate:
-				self.dataDict[column] = data
-			else:
-				randomData = (minDate + datetime.timedelta(seconds=random.randint(0, delta)) for _ in range(self.numberRecords))
-				self.dataDict[column] = tuple(randomData)
+        try:
+            self.columnCategories: Dict[str, ColumnCategory] = {
+                column: ColumnCategory.NUMBER for column, dataType in zip(columns, dataTypes) if dataType.upper() in _MYSQL_NUMBER_TYPES
+                }
+            self.columnCategories.update({column: ColumnCategory.DATE for column, dataType in zip(columns, dataTypes) if dataType.upper() in _MYSQL_DATE_TYPES})
+            self.columnCategories.update({column: ColumnCategory.TEXT for column, dataType in zip(columns, dataTypes) if dataType.upper() in _MYSQL_TEXT_TYPES})
+        except AttributeError:
+            self.columnCategories = {
+                column: ColumnCategory.NUMBER for column, dataType in zip(columns, dataTypes) if dataType in _POSTGRESQL_NUMBER_OIDS
+                }
+            self.columnCategories.update({column: ColumnCategory.DATE for column, dataType in zip(columns, dataTypes) if dataType in _POSTGRESQL_DATE_OIDS})
+            self.columnCategories.update({column: ColumnCategory.TEXT for column, dataType in zip(columns, dataTypes) if dataType in _POSTGRESQL_TEXT_OIDS})
 
-		else:
-			self.dataDict[column] = data
+    def hashString(self, nonce: int) -> bytes:
+        """A fresh hasher per call, keyed by nonce, so output varies deterministically
+        per record.
+        """
+        hasher = hashlib.sha1()
+        hasher.update('{}{}'.format(self.randomSalt, nonce).encode('utf-8'))
 
-
-	def _createRandomNumberColumn(self, column, data):
-
-		# check if integer has values
-		dataFilteredNone = [x for x in data if x is not None]
-
-		# check if data exists
-		# find maximum integer
-		# find minimum integer
-		if dataFilteredNone:
-			maxNumber = max(dataFilteredNone)
-			minNumber = min(dataFilteredNone)
-
-			# check if only 1 unique integer exists
-			# create random integer with min and max integer considerations
-			if maxNumber == minNumber:
-				self.dataDict[column] = data
-			else:
-				randomData = (random.randint(minNumber, maxNumber) for _ in range(self.numberRecords))
-				self.dataDict[column] = tuple(randomData)
-
-		else:
-			self.dataDict[column] = data
-
-
-	def _scrambleColumn(self, column, data):
-
-		# shuffle data in column
-		dataList= list(data)
-		random.shuffle(dataList)
-		self.dataDict[column] = dataList
+        return base64.urlsafe_b64encode(hasher.digest())
 
 
-	def _iterateColumns(self):
+    def _createRandomTextColumn(self, column: str, data: Sequence[Any]) -> None:
+        textLengths = [len(x) for x in data if x is not None]
 
-		# iterate through all columns
-		for column, data in zip(self.columns, self.dataZip):
-
-      		# check if column should have default value entered
-			if column in self.defaultColumnValues.keys():
-				self.dataDict[column] = (self.defaultColumnValues[column]) * self.numberRecords
-
-      		# check if column placeholder should be entered
-			elif column in self.identifierColumns:
-				self.dataDict[column] = data
-
-      		# check if column value will be randomly selected from data
-			elif column in self.scrambleColumns:
-				self._scrambleColumn(column=column, data=data)
-
-      		# check if column value will be randomly generated
-			elif column in self.randomColumns or self.allDataRandom:
-
-        		# check if column is a number
-				if column in self.numberColumns:
-					self._createRandomNumberColumn(column=column, data=data)
-
-				# check if column is a date
-				elif column in self.dateColumns:
-					self._createRandomDateColumn(column=column, data=data)
-
-				# check if column is a string
-				else:
-					self._createRandomTextColumn(column=column, data=data)
-
-			# select random value in existing dataset
-			else:
-				self._scrambleColumn(column=column, data=data)
+        if textLengths:
+            maxLength = max(textLengths)
+            randomData = tuple(self.hashString(nonce=index)[0:maxLength].decode('ascii') for index in range(self.numberRecords))
+            self.dataDict[column] = randomData
+        else:
+            self.dataDict[column] = data
 
 
-	def scramble(self):
+    def _createRandomDateColumn(self, column: str, data: Sequence[Any]) -> None:
+        dataFilteredNone = [x for x in data if x is not None]
 
-		# check if data exists
-		# iterate through all columns
-		if self.numberRecords:
-			self._iterateColumns()
+        if dataFilteredNone:
+            minDate = min(dataFilteredNone)
+            maxDate = max(dataFilteredNone)
+            delta = (maxDate - minDate).total_seconds()
 
-		self.dataScrambled = list(zip(*(self.dataDict[column] for column in self.columns)))
+            if minDate == maxDate:
+                self.dataDict[column] = data
+            else:
+                randomData = tuple(minDate + datetime.timedelta(seconds=random.randint(0, int(delta))) for _ in range(self.numberRecords))
+                self.dataDict[column] = randomData
+
+        else:
+            self.dataDict[column] = data
+
+
+    def _createRandomNumberColumn(self, column: str, data: Sequence[Any]) -> None:
+        dataFilteredNone = [x for x in data if x is not None]
+
+        if dataFilteredNone:
+            maxNumber = max(dataFilteredNone)
+            minNumber = min(dataFilteredNone)
+
+            if maxNumber == minNumber:
+                self.dataDict[column] = data
+            else:
+                randomData = tuple(random.randint(minNumber, maxNumber) for _ in range(self.numberRecords))
+                self.dataDict[column] = randomData
+
+        else:
+            self.dataDict[column] = data
+
+
+    def _scrambleColumn(self, column: str, data: Sequence[Any]) -> None:
+        dataList = list(data)
+        random.shuffle(dataList)
+        self.dataDict[column] = dataList
+
+
+    def _iterateColumns(self) -> None:
+        for column, data in zip(self.columns, self.dataZip):
+
+            if column in self.defaultColumnValues.keys():
+                self.dataDict[column] = (self.defaultColumnValues[column],) * self.numberRecords
+
+            elif column in self.identifierColumns:
+                self.dataDict[column] = data
+
+            elif column in self.scrambleColumns:
+                self._scrambleColumn(column=column, data=data)
+
+            elif column in self.randomColumns or self.allDataRandom:
+
+                columnCategory = self.columnCategories.get(column)
+
+                if columnCategory == ColumnCategory.NUMBER:
+                    self._createRandomNumberColumn(column=column, data=data)
+                elif columnCategory == ColumnCategory.DATE:
+                    self._createRandomDateColumn(column=column, data=data)
+                else:
+                    self._createRandomTextColumn(column=column, data=data)
+
+            else:
+                self._scrambleColumn(column=column, data=data)
+
+
+    def scramble(self) -> None:
+        if not self.numberRecords:
+            self.dataScrambled = []
+            return
+
+        self._iterateColumns()
+        self.dataScrambled = list(zip(*(self.dataDict[column] for column in self.columns)))

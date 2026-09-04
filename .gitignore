@@ -1,1 +1,31 @@
+# byte code / caches
 __pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+
+# packaging / build artifacts
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# coverage
+.coverage
+htmlcov/
+
+# virtual environments
+.venv/
+venv/
+env/
+
+# editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+
+# example runner output (see example/log/.gitkeep, example/memory/.gitkeep)
+example/log/*
+!example/log/.gitkeep
+example/memory/*
+!example/memory/.gitkeep

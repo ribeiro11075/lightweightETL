@@ -1,0 +1,23 @@
+# Sample configuration -- these are placeholder values, not real credentials.
+# Replace with your own database aliases before running example/example_jobs.py
+# or example/example_scramble.py against real infrastructure.
+sourceDb:
+  type: mysql
+  user: exampleUser
+  password: examplePassword
+  database: exampleSourceDatabase
+  host: source.example.com
+  port: 3306
+  threaded:
+  serviceName:
+  sid:
+targetDb:
+  type: postgresql
+  user: exampleUser
+  password: examplePassword
+  database: exampleTargetDatabase
+  host: target.example.com
+  port: 5432
+  threaded:
+  serviceName:
+  sid:
