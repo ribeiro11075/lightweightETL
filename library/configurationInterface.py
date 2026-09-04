@@ -63,7 +63,6 @@ class DatabaseConnectionConfig(BaseModel):
     database: str
     host: str
     port: Optional[int] = None
-    threaded: Optional[bool] = None
     serviceName: Optional[str] = None
     sid: Optional[str] = None
 

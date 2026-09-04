@@ -127,14 +127,10 @@ class OracleDialect(DatabaseDialect):
 
     def connect(self, settings: DatabaseConnectionConfig) -> Tuple[Any, Any]:
 
-        import cx_Oracle
+        import oracledb
 
-        if settings.serviceName:
-            dsn = cx_Oracle.makedsn(host=settings.host, port=settings.port, serviceName=settings.serviceName)
-        else:
-            dsn = cx_Oracle.makedsn(host=settings.host, port=settings.port, sid=settings.sid)
-
-        connection = cx_Oracle.connect(user=settings.user, password=settings.password, threaded=settings.threaded, dsn=dsn)
+        connection = oracledb.connect(user=settings.user, password=settings.password, host=settings.host, port=settings.port,
+                                       service_name=settings.serviceName, sid=settings.sid)
         cursor = connection.cursor()
 
         return connection, cursor
@@ -188,9 +184,10 @@ class OracleDialect(DatabaseDialect):
 
 
     def swapQueries(self, targetTable: str, stageTable: str, tempTable: str) -> List[str]:
-        """Three separate statements: cx_Oracle's cursor.execute() runs exactly one
-        statement, unlike mysql's single multi-target RENAME TABLE or postgres's
-        semicolon-chained simple-query execution.
+        """Three separate statements: Oracle's cursor.execute() runs exactly one
+        statement (an inherent limitation of Oracle's own SQL engine, not specific
+        to any particular Python driver), unlike mysql's single multi-target RENAME
+        TABLE or postgres's semicolon-chained simple-query execution.
         """
 
         return [

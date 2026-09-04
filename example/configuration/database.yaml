@@ -8,7 +8,6 @@ sourceDb:
   database: exampleSourceDatabase
   host: source.example.com
   port: 3306
-  threaded:
   serviceName:
   sid:
 targetDb:
@@ -18,6 +17,5 @@ targetDb:
   database: exampleTargetDatabase
   host: target.example.com
   port: 5432
-  threaded:
   serviceName:
   sid:

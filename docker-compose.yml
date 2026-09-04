@@ -25,3 +25,16 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
+
+  oracle:
+    image: gvenzl/oracle-free:23-slim-faststart
+    environment:
+      ORACLE_PASSWORD: oracle
+      ORACLE_DATABASE: lightweight_etl_test
+    ports:
+      - "1522:1521"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 5s
+      timeout: 5s
+      retries: 60

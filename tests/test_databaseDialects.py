@@ -82,7 +82,7 @@ def test_oracle_upsert_from_stage_query_sources_the_stage_table_not_dual():
 
 
 def test_oracle_swap_is_three_separate_statements():
-    """cx_Oracle's cursor.execute() can only run one statement at a time."""
+    """Oracle's cursor.execute() can only run one statement at a time."""
     queries = OracleDialect().swapQueries('people', 'people_stage', 'people_tmp')
     assert queries == [
         'ALTER TABLE people_stage RENAME TO people_tmp',

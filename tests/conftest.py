@@ -1,4 +1,4 @@
-"""Puts the repo root on sys.path, and stubs cx_Oracle/psycopg2 in sys.modules
+"""Puts the repo root on sys.path, and stubs oracledb/psycopg2 in sys.modules
 so any test that does exercise a dialect's connect() doesn't need those native
 client libraries installed (library itself only imports them lazily, inside
 connect(), so this isn't required just to import library -- see
@@ -22,6 +22,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-for moduleName in ('cx_Oracle', 'psycopg2'):
+for moduleName in ('oracledb', 'psycopg2'):
     if moduleName not in sys.modules and importlib.util.find_spec(moduleName) is None:
         sys.modules[moduleName] = types.ModuleType(moduleName)

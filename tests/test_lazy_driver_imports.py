@@ -7,7 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_library_is_importable_without_every_database_driver_installed():
     """Runs in a fresh interpreter, unaffected by whether this environment happens
-    to have psycopg2/cx_Oracle installed, to prove `import library` doesn't require
+    to have psycopg2/oracledb installed, to prove `import library` doesn't require
     every driver up front regardless.
     """
     result = subprocess.run([sys.executable, '-c', 'import library'], cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=30)

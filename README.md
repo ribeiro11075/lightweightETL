@@ -29,14 +29,13 @@ Worker processes, the process pool, and the dependency graph between jobs are al
 1. Setup prerequisites
     - [ ] **Required**: Install Python 3.9+, e.g. following [this guide](https://realpython.com/installing-python)
     - [ ] **Required**: Install pip, e.g. following [this guide](https://howchoo.com/g/mze4ntbknjk/install-pip-python)
-    - [ ] **Optional**: Install the [Oracle Client](https://cx-oracle.readthedocs.io/en/latest/user_guide/installation.html) -- only needed if you're installing the `oracle` extra below
 
 1. Create a virtual environment and install the package
     - [ ] **Optional**: Create and activate a virtual environment, e.g. `python3 -m venv .venv && source .venv/bin/activate` (Windows: `.venv\Scripts\activate`)
     - [ ] **Required**: From the repository root, install with the database driver(s) you actually need -- `library`'s only hard dependencies are `pyyaml` and `pydantic`; each database driver is an optional extra, imported lazily so installing one doesn't require the others:
         - `pip install -e ".[mysql]"` -- mysql only
         - `pip install -e ".[postgresql]"` -- postgresql only
-        - `pip install -e ".[oracle]"` -- oracle only (also needs the Oracle Client above)
+        - `pip install -e ".[oracle]"` -- oracle only, via [`oracledb`](https://python-oracledb.readthedocs.io/) in its default "thin" mode -- pure Python, no separate Oracle Client install needed
         - `pip install -e ".[all]"` -- every driver
         - append `,dev` to any of the above to also install `pytest`/`mypy`, e.g. `pip install -e ".[all,dev]"`
 
@@ -46,7 +45,6 @@ Worker processes, the process pool, and the dependency graph between jobs are al
         - `type` (**Required**): `oracle`, `mysql`, or `postgresql`
         - `user` / `password` / `database` / `host` (**Required**): connection credentials
         - `port` (**Optional**): defaults to the driver's standard port when omitted
-        - `threaded` (**Optional**, oracle only)
         - `serviceName` / `sid` (oracle only): exactly one of these is **required** for `type: oracle`
     - [ ] **Required**: Edit `example/configuration/jobs.yaml` (loaded by `example/example_jobs.py`)
         - `workers` (**Required**): number of processes to run jobs concurrently (number)
@@ -111,20 +109,21 @@ runDataJobs(
 pip install -e ".[dev]"
 pytest
 ```
-The suite stubs out `cx_Oracle`/`psycopg2` (see `tests/conftest.py`) so it runs without native database client libraries installed, and every database-touching test uses a mocked cursor/connection rather than a live server -- it verifies the SQL and control flow this library builds, not connectivity to a real MySQL/PostgreSQL/Oracle instance.
+The suite stubs out `oracledb`/`psycopg2` (see `tests/conftest.py`) so it runs without native database client libraries installed, and every database-touching test uses a mocked cursor/connection rather than a live server -- it verifies the SQL and control flow this library builds, not connectivity to a real MySQL/PostgreSQL/Oracle instance.
 
 ### Integration tests
-`tests/test_integration_mysql.py` and `tests/test_integration_postgresql.py` run the same operations against a real server instead of a mocked cursor -- schema introspection, insert/chunking, upsert (both the direct and from-stage paths), swap, truncate, the context manager, the full `runDataJobs` path (a real `multiprocessing.Pool`, a worker running in its own process, `FileMemory` surviving being pickled into it), and the reference `DatabaseMemory` from `example/example_database_memory.py`. `tests/test_integration_cross_database.py` covers the case those two don't: `sourceDatabase` and `targetDatabase` pointing at two *different* database systems in the same job, with a real `columnTransforms` entry applied in between (extract from MySQL, format with `example.example_transforms:currency`, load into PostgreSQL). All three files are marked `integration` and excluded from the default `pytest` run (see `addopts` in `pyproject.toml`), so they never block anyone without Docker:
+`tests/test_integration_mysql.py`, `tests/test_integration_postgresql.py`, and `tests/test_integration_oracle.py` run the same operations against a real server instead of a mocked cursor -- schema introspection, insert/chunking, upsert (both the direct and from-stage paths), swap, truncate, the context manager, the full `runDataJobs` path (a real `multiprocessing.Pool`, a worker running in its own process, `FileMemory` surviving being pickled into it), and the reference `DatabaseMemory` from `example/example_database_memory.py`. `tests/test_integration_cross_database.py` covers the case those three don't: `sourceDatabase` and `targetDatabase` pointing at two *different* database systems in the same job, with a real `columnTransforms` entry applied in between (extract from MySQL, format with `example.example_transforms:currency`, load into PostgreSQL). All four files are marked `integration` and excluded from the default `pytest` run (see `addopts` in `pyproject.toml`), so they never block anyone without Docker:
 ```
-docker compose up -d mysql postgresql   # starts disposable servers on localhost:3307 / :5433
-pip install -e ".[mysql,dev]"
-pip install psycopg2-binary             # only if you don't have PostgreSQL's build toolchain (pg_config) --
-                                         # pyproject.toml's `postgresql` extra pins source-build psycopg2,
-                                         # the upstream-recommended choice for production
+docker compose up -d mysql postgresql oracle   # starts disposable servers on
+                                                # localhost:3307 / :5433 / :1522
+pip install -e ".[mysql,oracle,dev]"
+pip install psycopg2-binary                    # only if you don't have PostgreSQL's build toolchain (pg_config) --
+                                                # pyproject.toml's `postgresql` extra pins source-build psycopg2,
+                                                # the upstream-recommended choice for production
 pytest -m integration
-docker compose down                     # when you're done
+docker compose down                            # when you're done
 ```
-Each test creates its own uniquely-named table and drops it afterward, so the suite is safe to re-run against the same running containers. Missing a driver or a server just skips the affected tests with a clear reason, rather than failing.
+Each test creates its own uniquely-named table and drops it afterward, so the suite is safe to re-run against the same running containers. Missing a driver or a server just skips the affected tests with a clear reason, rather than failing. The Oracle container is [`gvenzl/oracle-free`](https://github.com/gvenzl/oci-oracle-free) -- free, Apache-2.0 licensed, no Oracle Container Registry login required, unlike Oracle's own images.
 
 
 ## Type checking
