@@ -4,12 +4,13 @@ from types import TracebackType
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 from .configurationInterface import DatabaseConnectionConfig, DatabaseType
-from .databaseDialects import DatabaseDialect, MySQLDialect, OracleDialect, PostgreSQLDialect
+from .databaseDialects import DatabaseDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect
 
 DIALECTS: Dict[DatabaseType, DatabaseDialect] = {
     DatabaseType.MYSQL: MySQLDialect(),
     DatabaseType.ORACLE: OracleDialect(),
     DatabaseType.POSTGRESQL: PostgreSQLDialect(),
+    DatabaseType.MSSQL: MSSQLDialect(),
     }
 
 

@@ -10,7 +10,7 @@ from .configurationInterface import (
     ScrambleJobConfig,
     ScrambleJobsFile,
     )
-from .databaseDialects import DatabaseDialect, MySQLDialect, OracleDialect, PostgreSQLDialect
+from .databaseDialects import DatabaseDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect
 from .databaseInterface import Database
 from .dependencyGraphInterface import DependencyGraph, JobStatus
 from .logInterface import Log
@@ -36,6 +36,7 @@ __all__ = [
     'JobStatus',
     'Log',
     'MemoryBackend',
+    'MSSQLDialect',
     'MySQLDialect',
     'OracleDialect',
     'PostgreSQLDialect',

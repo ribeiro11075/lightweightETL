@@ -26,7 +26,7 @@ def _mockedDatabase(dbType: DatabaseType) -> Database:
     return database
 
 
-@pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.ORACLE])
+@pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.ORACLE, DatabaseType.MSSQL])
 def test_upsert_executes_for_every_dialect(dbType):
     """Regression check for the bug that made mysql upserts a silent no-op, and
     the UnboundLocalError that made oracle crash outright.
@@ -39,7 +39,7 @@ def test_upsert_executes_for_every_dialect(dbType):
     assert database.connection.commit.call_count > 0
 
 
-@pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.ORACLE])
+@pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.ORACLE, DatabaseType.MSSQL])
 def test_upsert_from_stage_executes_for_every_dialect(dbType):
     database = _mockedDatabase(dbType)
 
@@ -53,6 +53,7 @@ def test_upsert_from_stage_executes_for_every_dialect(dbType):
     (DatabaseType.MYSQL, 1),
     (DatabaseType.POSTGRESQL, 1),
     (DatabaseType.ORACLE, 3),
+    (DatabaseType.MSSQL, 1),
     ])
 def test_swap_executes_the_right_number_of_statements(dbType, expectedStatementCount):
     database = _mockedDatabase(dbType)
@@ -63,7 +64,7 @@ def test_swap_executes_the_right_number_of_statements(dbType, expectedStatementC
     assert database.connection.commit.call_count == 1
 
 
-@pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.ORACLE])
+@pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.ORACLE, DatabaseType.MSSQL])
 def test_get_primary_column_names_executes_a_query(dbType):
     database = _mockedDatabase(dbType)
     database.getPrimaryColumnNames = Database.getPrimaryColumnNames.__get__(database)
@@ -79,6 +80,7 @@ def test_get_primary_column_names_executes_a_query(dbType):
     (DatabaseType.MYSQL, '%s'),
     (DatabaseType.POSTGRESQL, '%s'),
     (DatabaseType.ORACLE, ':1'),
+    (DatabaseType.MSSQL, '%s'),
     ])
 def test_insert_uses_the_dialects_placeholder_style(dbType, expectedPlaceholder):
     database = _mockedDatabase(dbType)

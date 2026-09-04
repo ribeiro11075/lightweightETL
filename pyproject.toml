@@ -19,7 +19,8 @@ dependencies = [
 mysql = ["mysql-connector-python==26.7.0"]
 postgresql = ["psycopg2==2.9.12"]
 oracle = ["oracledb==4.0.2"]
-all = ["lightweight-etl[mysql,postgresql,oracle]"]
+mssql = ["pymssql==2.4.0"]
+all = ["lightweight-etl[mysql,postgresql,oracle,mssql]"]
 dev = ["pytest==9.1.1", "mypy==2.3.1", "types-PyYAML==6.0.12.20260815"]
 
 [tool.setuptools]

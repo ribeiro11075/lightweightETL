@@ -38,3 +38,18 @@ services:
       interval: 5s
       timeout: 5s
       retries: 60
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    # amd64-only image (Microsoft ships no arm64 Linux build); runs fine under
+    # Docker Desktop's emulation on Apple Silicon, just slower to build/pull
+    environment:
+      ACCEPT_EULA: Y
+      MSSQL_SA_PASSWORD: "YourStr0ng!Passw0rd"
+    ports:
+      - "1434:1433"
+    healthcheck:
+      test: ["CMD", "/opt/mssql-tools18/bin/sqlcmd", "-C", "-S", "localhost", "-U", "sa", "-P", "YourStr0ng!Passw0rd", "-Q", "SELECT 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 60

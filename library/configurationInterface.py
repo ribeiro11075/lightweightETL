@@ -45,6 +45,7 @@ class DatabaseType(str, Enum):
     ORACLE = 'oracle'
     MYSQL = 'mysql'
     POSTGRESQL = 'postgresql'
+    MSSQL = 'mssql'
 
 
 class InsertStrategy(str, Enum):

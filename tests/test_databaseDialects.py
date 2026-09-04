@@ -1,4 +1,4 @@
-from library.databaseDialects import MySQLDialect, OracleDialect, PostgreSQLDialect
+from library.databaseDialects import MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect
 
 ALL_COLUMNS = ['id', 'name', 'amount']
 PRIMARY_KEY_COLUMNS = ['id']
@@ -89,3 +89,46 @@ def test_oracle_swap_is_three_separate_statements():
         'ALTER TABLE people RENAME TO people_stage',
         'ALTER TABLE people_tmp RENAME TO people',
         ]
+
+
+def test_mssql_placeholders():
+    assert MSSQLDialect().placeholders(3) == ['%s', '%s', '%s']
+
+
+def test_mssql_primary_key_query_names_the_table():
+    query = MSSQLDialect().primaryKeyQuery('people')
+    assert "t.table_name = 'people'" in query
+    assert "t.constraint_type = 'PRIMARY KEY'" in query
+
+
+def test_mssql_upsert_query_is_a_merge_with_matched_and_not_matched():
+    query = MSSQLDialect().upsertQuery('people', ALL_COLUMNS, PRIMARY_KEY_COLUMNS, NON_PRIMARY_KEY_COLUMNS)
+    assert query.startswith('MERGE INTO people AS target USING (VALUES (%s, %s, %s)) AS source (id, name, amount)')
+    assert 'ON (target.id = source.id)' in query
+    assert 'WHEN MATCHED THEN UPDATE SET target.name = source.name, target.amount = source.amount' in query
+    assert 'WHEN NOT MATCHED THEN INSERT (id, name, amount) VALUES (source.id, source.name, source.amount)' in query
+    assert query.endswith(';')  # MERGE requires a terminating semicolon in T-SQL
+
+
+def test_mssql_upsert_query_omits_when_matched_with_no_non_primary_columns():
+    """Same reasoning as the equivalent Oracle test: an empty UPDATE SET is invalid
+    T-SQL syntax too, so WHEN MATCHED must be dropped entirely.
+    """
+    query = MSSQLDialect().upsertQuery('ids_only', ['id'], ['id'], [])
+    assert 'WHEN MATCHED' not in query
+    assert 'WHEN NOT MATCHED THEN INSERT (id) VALUES (source.id)' in query
+
+
+def test_mssql_upsert_from_stage_query_sources_the_stage_table_not_values():
+    query = MSSQLDialect().upsertFromStageQuery('people', 'people_stage', ALL_COLUMNS, PRIMARY_KEY_COLUMNS, NON_PRIMARY_KEY_COLUMNS)
+    assert query.startswith('MERGE INTO people AS target USING people_stage AS source')
+    assert 'VALUES' not in query.split('ON')[0]
+
+
+def test_mssql_swap_is_one_statement_of_chained_sp_rename_calls():
+    """sp_rename is a stored procedure, not DDL -- chaining three EXEC calls in one
+    execute() works, unlike Oracle's ALTER TABLE RENAME which needs three separate
+    execute() calls.
+    """
+    queries = MSSQLDialect().swapQueries('people', 'people_stage', 'people_tmp')
+    assert queries == ["EXEC sp_rename 'people_stage', 'people_tmp'; EXEC sp_rename 'people', 'people_stage'; EXEC sp_rename 'people_tmp', 'people';"]

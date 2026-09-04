@@ -36,13 +36,14 @@ Worker processes, the process pool, and the dependency graph between jobs are al
         - `pip install -e ".[mysql]"` -- mysql only
         - `pip install -e ".[postgresql]"` -- postgresql only
         - `pip install -e ".[oracle]"` -- oracle only, via [`oracledb`](https://python-oracledb.readthedocs.io/) in its default "thin" mode -- pure Python, no separate Oracle Client install needed
+        - `pip install -e ".[mssql]"` -- SQL Server only, via [`pymssql`](https://github.com/pymssql/pymssql) -- bundles FreeTDS, no separate ODBC driver install needed
         - `pip install -e ".[all]"` -- every driver
         - append `,dev` to any of the above to also install `pytest`/`mypy`, e.g. `pip install -e ".[all,dev]"`
 
 1. Point the example scripts at your own databases and jobs
     - The repo ships a small sample under `example/configuration/` (fake hosts, fake credentials, generic table/column names -- nothing here is a real deployment) so `example/example_jobs.py` and `example/example_scramble.py` run out of the box up through configuration validation. Replace the values with your own to run against real infrastructure.
     - [ ] **Required**: Edit `example/configuration/database.yaml` -- one entry per database alias:
-        - `type` (**Required**): `oracle`, `mysql`, or `postgresql`
+        - `type` (**Required**): `oracle`, `mysql`, `postgresql`, or `mssql`
         - `user` / `password` / `database` / `host` (**Required**): connection credentials
         - `port` (**Optional**): defaults to the driver's standard port when omitted
         - `serviceName` / `sid` (oracle only): exactly one of these is **required** for `type: oracle`
@@ -112,18 +113,18 @@ pytest
 The suite stubs out `oracledb`/`psycopg2` (see `tests/conftest.py`) so it runs without native database client libraries installed, and every database-touching test uses a mocked cursor/connection rather than a live server -- it verifies the SQL and control flow this library builds, not connectivity to a real MySQL/PostgreSQL/Oracle instance.
 
 ### Integration tests
-`tests/test_integration_mysql.py`, `tests/test_integration_postgresql.py`, and `tests/test_integration_oracle.py` run the same operations against a real server instead of a mocked cursor -- schema introspection, insert/chunking, upsert (both the direct and from-stage paths), swap, truncate, the context manager, the full `runDataJobs` path (a real `multiprocessing.Pool`, a worker running in its own process, `FileMemory` surviving being pickled into it), and the reference `DatabaseMemory` from `example/example_database_memory.py`. `tests/test_integration_cross_database.py` covers the case those three don't: `sourceDatabase` and `targetDatabase` pointing at two *different* database systems in the same job, with a real `columnTransforms` entry applied in between (extract from MySQL, format with `example.example_transforms:currency`, load into PostgreSQL). All four files are marked `integration` and excluded from the default `pytest` run (see `addopts` in `pyproject.toml`), so they never block anyone without Docker:
+`tests/test_integration_mysql.py`, `tests/test_integration_postgresql.py`, `tests/test_integration_oracle.py`, and `tests/test_integration_mssql.py` run the same operations against a real server instead of a mocked cursor -- schema introspection, insert/chunking, upsert (both the direct and from-stage paths), swap, truncate, the context manager, the full `runDataJobs` path (a real `multiprocessing.Pool`, a worker running in its own process, `FileMemory` surviving being pickled into it), and the reference `DatabaseMemory` from `example/example_database_memory.py`. `tests/test_integration_cross_database.py` covers the case those four don't: `sourceDatabase` and `targetDatabase` pointing at two *different* database systems in the same job, with a real `columnTransforms` entry applied in between (extract from MySQL, format with `example.example_transforms:currency`, load into PostgreSQL). All five files are marked `integration` and excluded from the default `pytest` run (see `addopts` in `pyproject.toml`), so they never block anyone without Docker:
 ```
-docker compose up -d mysql postgresql oracle   # starts disposable servers on
-                                                # localhost:3307 / :5433 / :1522
-pip install -e ".[mysql,oracle,dev]"
-pip install psycopg2-binary                    # only if you don't have PostgreSQL's build toolchain (pg_config) --
-                                                # pyproject.toml's `postgresql` extra pins source-build psycopg2,
-                                                # the upstream-recommended choice for production
+docker compose up -d mysql postgresql oracle mssql   # starts disposable servers on
+                                                      # localhost:3307 / :5433 / :1522 / :1434
+pip install -e ".[mysql,oracle,mssql,dev]"
+pip install psycopg2-binary                          # only if you don't have PostgreSQL's build toolchain (pg_config) --
+                                                       # pyproject.toml's `postgresql` extra pins source-build psycopg2,
+                                                       # the upstream-recommended choice for production
 pytest -m integration
-docker compose down                            # when you're done
+docker compose down                                   # when you're done
 ```
-Each test creates its own uniquely-named table and drops it afterward, so the suite is safe to re-run against the same running containers. Missing a driver or a server just skips the affected tests with a clear reason, rather than failing. The Oracle container is [`gvenzl/oracle-free`](https://github.com/gvenzl/oci-oracle-free) -- free, Apache-2.0 licensed, no Oracle Container Registry login required, unlike Oracle's own images.
+Each test creates its own uniquely-named table and drops it afterward, so the suite is safe to re-run against the same running containers. Missing a driver or a server just skips the affected tests with a clear reason, rather than failing. The Oracle container is [`gvenzl/oracle-free`](https://github.com/gvenzl/oci-oracle-free) (free, Apache-2.0 licensed, no Oracle Container Registry login required, unlike Oracle's own images); the SQL Server container is Microsoft's own official image, amd64-only (no native arm64 Linux build) but runs fine under emulation on Apple Silicon.
 
 
 ## Type checking
