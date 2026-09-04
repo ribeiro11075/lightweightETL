@@ -114,14 +114,17 @@ pytest
 The suite stubs out `cx_Oracle`/`psycopg2` (see `tests/conftest.py`) so it runs without native database client libraries installed, and every database-touching test uses a mocked cursor/connection rather than a live server -- it verifies the SQL and control flow this library builds, not connectivity to a real MySQL/PostgreSQL/Oracle instance.
 
 ### Integration tests
-`tests/test_integration_mysql.py` runs the same operations against a real MySQL server instead of a mocked cursor -- schema introspection, insert/chunking, upsert (both the direct and from-stage paths), swap, truncate, and the context manager, all round-tripped through an actual database. It's marked `integration` and excluded from the default `pytest` run (see `addopts` in `pyproject.toml`), so it never blocks anyone without Docker:
+`tests/test_integration_mysql.py` and `tests/test_integration_postgresql.py` run the same operations against a real server instead of a mocked cursor -- schema introspection, insert/chunking, upsert (both the direct and from-stage paths), swap, truncate, the context manager, the full `runDataJobs` path (a real `multiprocessing.Pool`, a worker running in its own process, `FileMemory` surviving being pickled into it), and the reference `DatabaseMemory` from `example/example_database_memory.py`. Both files are marked `integration` and excluded from the default `pytest` run (see `addopts` in `pyproject.toml`), so they never block anyone without Docker:
 ```
-docker compose up -d mysql          # starts a disposable mysql:8.4 on localhost:3307
+docker compose up -d mysql postgresql   # starts disposable servers on localhost:3307 / :5433
 pip install -e ".[mysql,dev]"
+pip install psycopg2-binary             # only if you don't have PostgreSQL's build toolchain (pg_config) --
+                                         # pyproject.toml's `postgresql` extra pins source-build psycopg2,
+                                         # the upstream-recommended choice for production
 pytest -m integration
-docker compose down                 # when you're done
+docker compose down                     # when you're done
 ```
-Each test creates its own uniquely-named table and drops it afterward, so the suite is safe to re-run against the same running container.
+Each test creates its own uniquely-named table and drops it afterward, so the suite is safe to re-run against the same running containers. Missing a driver or a server just skips the affected tests with a clear reason, rather than failing.
 
 
 ## Type checking
