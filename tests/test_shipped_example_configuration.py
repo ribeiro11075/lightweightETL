@@ -11,15 +11,26 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lightweight_etl.configuration import Configuration, DataJobsFile, ScrambleJobsFile
+from lightweight_etl.configuration import Configuration, ConfigurationError, DataJobsFile, ScrambleJobsFile, expandEnvironmentVariables
 from lightweight_etl.transform import resolveTransformer
 
 CONFIGURATION_DIRECTORY = Path(__file__).resolve().parents[1] / 'example' / 'configuration'
 
+# The sample reads credentials from the environment, so validating it means
+# supplying them the way a deployment would. This list doubles as a check that
+# the documented variable names don't drift away from the file.
+SAMPLE_SECRETS = {'SOURCE_DB_PASSWORD': 'sourceSecret', 'TARGET_DB_PASSWORD': 'targetSecret'}
+
+
+@pytest.fixture(autouse=True)
+def sampleSecrets(monkeypatch):
+    for name, value in SAMPLE_SECRETS.items():
+        monkeypatch.setenv(name, value)
+
 
 def _load(name: str):
     with open(CONFIGURATION_DIRECTORY / name) as file:
-        return yaml.load(file, Loader=yaml.FullLoader)
+        return expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader))
 
 
 @pytest.fixture
@@ -56,3 +67,30 @@ def test_every_transformer_the_sample_references_actually_resolves():
 
     for reference in references:
         assert callable(resolveTransformer(reference)), reference
+
+
+def test_the_sample_reads_every_password_from_the_environment():
+    """People copy examples far more reliably than they read field references, so
+    a literal password here quietly undoes the feature. This fails if anyone
+    "simplifies" the sample back to plaintext.
+    """
+    raw = yaml.load(open(CONFIGURATION_DIRECTORY / 'database.yaml'), Loader=yaml.FullLoader)
+
+    passwords = [alias['password'] for alias in raw.values() if alias.get('password') is not None]
+
+    assert passwords
+    for password in passwords:
+        assert password.startswith('${') and password.endswith('}'), password
+        assert ':-' not in password, 'a default password puts the credential back in the file: {}'.format(password)
+
+
+def test_the_sample_refuses_to_load_when_its_secrets_are_absent(monkeypatch):
+    """The safety property, demonstrated on the shipped file rather than a
+    synthetic one: no secret in the environment means no run, not an empty
+    password handed to the driver.
+    """
+    for name in SAMPLE_SECRETS:
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(ConfigurationError, match='SOURCE_DB_PASSWORD'):
+        _load('database.yaml')

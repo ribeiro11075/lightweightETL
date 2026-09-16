@@ -20,18 +20,14 @@ import logging
 import shutil
 import sys
 from pathlib import Path
+from typing import List, Optional
 
 exampleDirectory = Path(__file__).resolve().parent
 sys.path.append(str(exampleDirectory.parent))
 
 from lightweight_etl import Configuration, Database, DatabaseConnectionConfig, DatabaseType, DataJobsFile, FileMemory, runDataJobs
 
-workingDirectory = exampleDirectory / 'memory' / 'incremental_demo'
-databasePath = workingDirectory / 'demo.db'
-memoryPath = workingDirectory / 'memory.yaml'
-logPath = workingDirectory / 'incremental.log'
-
-connectionSettings = DatabaseConnectionConfig(type=DatabaseType.SQLITE, database=str(databasePath))
+DEFAULT_WORKING_DIRECTORY = exampleDirectory / 'memory' / 'incremental_demo'
 
 JOB_CONFIGURATION = {
     'workers': 1,
@@ -57,22 +53,39 @@ JOB_CONFIGURATION = {
     }
 
 
-def describe(database: Database, memory: FileMemory, heading: str) -> None:
+def describe(database: Database, memory: FileMemory, heading: str) -> Optional[str]:
+    """Prints what the run did, and returns the stored watermark so a caller
+    (the test that keeps this script from rotting) can assert on it.
+    """
 
     rows = database.query('SELECT id, name, updatedAt FROM ordersTarget ORDER BY id')
+    watermark = memory.readWatermarks().get('loadOrders')
 
     print('\n{}'.format(heading))
-    print('  stored watermark: {!r}'.format(memory.readWatermarks().get('loadOrders')))
+    print('  stored watermark: {!r}'.format(watermark))
     print('  ordersTarget ({} row(s)):'.format(len(rows)))
     for row in rows:
         print('    {}'.format(row))
 
+    return watermark
 
-def main() -> None:
+
+def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY) -> List[Optional[str]]:
+    """Runs the demonstration, returning the stored watermark after each pass.
+
+    workingDirectory is a parameter so the test that exercises this can point it
+    at a temporary directory instead of writing into the source tree.
+    """
+
+    databasePath = workingDirectory / 'demo.db'
+    memoryPath = workingDirectory / 'memory.yaml'
+    logPath = workingDirectory / 'incremental.log'
+    connectionSettings = DatabaseConnectionConfig(type=DatabaseType.SQLITE, database=str(databasePath))
 
     shutil.rmtree(workingDirectory, ignore_errors=True)
     workingDirectory.mkdir(parents=True, exist_ok=True)
 
+    watermarks: List[Optional[str]] = []
     memory = FileMemory(memoryFile=memoryPath)
     jobsFile = Configuration.validateJobConfiguration(JOB_CONFIGURATION, DataJobsFile)
     Configuration.validateJobGraph(jobsFile.jobs, databaseAliases={'demo'})
@@ -89,8 +102,8 @@ def main() -> None:
             ], chunkSize=10)
 
         runDataJobs(jobsFile=jobsFile, databaseConfiguration={'demo': connectionSettings},
-                     logFile=logPath, memory=memory, runForever=False, logLevel=logging.DEBUG)
-        describe(database, memory, 'RUN 1 -- first run, so it extracts everything from watermarkInitial')
+                     logFile=logPath, memory=memory, logLevel=logging.DEBUG)
+        watermarks.append(describe(database, memory, 'RUN 1 -- first run, so it extracts everything from watermarkInitial'))
 
         # Edited, but updatedAt deliberately left alone: an incremental extract
         # cannot see this row again, because the watermark is already past it.
@@ -98,14 +111,16 @@ def main() -> None:
         database.insert(table='ordersSource', data=[(4, 'fourth', '2026-01-04T00:00:00')], chunkSize=10)
 
         runDataJobs(jobsFile=jobsFile, databaseConfiguration={'demo': connectionSettings},
-                     logFile=logPath, memory=memory, runForever=False, logLevel=logging.DEBUG)
-        describe(database, memory, 'RUN 2 -- only row 4 is past the watermark; row 1 keeps its old name')
+                     logFile=logPath, memory=memory, logLevel=logging.DEBUG)
+        watermarks.append(describe(database, memory, 'RUN 2 -- only row 4 is past the watermark; row 1 keeps its old name'))
 
         runDataJobs(jobsFile=jobsFile, databaseConfiguration={'demo': connectionSettings},
-                     logFile=logPath, memory=memory, runForever=False, logLevel=logging.DEBUG)
-        describe(database, memory, 'RUN 3 -- nothing new, so nothing loads and the watermark stays put')
+                     logFile=logPath, memory=memory, logLevel=logging.DEBUG)
+        watermarks.append(describe(database, memory, 'RUN 3 -- nothing new, so nothing loads and the watermark stays put'))
 
     print('\nPer-chunk detail was logged at DEBUG to {}'.format(logPath))
+
+    return watermarks
 
 
 if __name__ == '__main__':

@@ -14,13 +14,13 @@ A lightweight python library to perform ETL (Extract, Transform, Load) and table
 
 Worker processes, the process pool, and the dependency graph between jobs are all managed internally; you don't write a worker function or touch `multiprocessing` yourself.
 
-`example/` shows one way to wire this up end to end -- it's a fully self-contained reference implementation, with its own `example/configuration/` (YAML job/database definitions), `example/log/`, and `example/memory/` (gitignored, written at runtime). Nothing outside `example/` is deployment-specific.
+`example/` holds two pieces of executable documentation: `incremental_demo.py`, which runs against a throwaway SQLite database with nothing installed or configured, and `configuration/`, a complete worked set of the YAML files the CLI expects. Both are exercised by tests, so neither can drift from what the code actually accepts -- see `example/README.md`.
 
 ### Project layout
 | Path | What it is |
 | --- | --- |
 | `lightweight_etl/` | The package. `cli.py` (the `lightweight-etl` command), `Configuration` (validation), `Database` + per-dialect SQL (`databaseDialects.py`), `DependencyGraph` (scheduling), `Transform`/`Scramble` (row-level work, in `transform.py`/`scramble.py`) with stock transformers in `builtinTransforms.py`, `MemoryBackend`/`FileMemory`/`Log` (`memory.py`/`log.py`), and `runner.py` (the two public entry points, `runDataJobs`/`runScrambleJobs`) |
-| `example/` | `example_incremental.py`, a self-contained runnable demo needing no config or server, and `configuration/`, a complete worked YAML config |
+| `example/` | `incremental_demo.py`, a self-contained runnable demo needing no config or server, and `configuration/`, a complete worked YAML config. Both are exercised by tests -- see `example/README.md` |
 | `tests/` | pytest suite -- see "Running the tests" below |
 
 
@@ -114,7 +114,7 @@ Both runners return a `RunResult`: `succeeded`, `completed`/`failed`/`skipped` (
 
 `runForever=False` (the default for both) makes a single pass over every active job and returns. Pass `True` to keep running, honoring each job's `refresh` window -- see "Single runs, not a daemon" below for why that isn't the default.
 
-For a runnable demonstration of streaming and incremental loads that needs no configuration, credentials or server, run `python example/example_incremental.py`. It builds a throwaway SQLite database, runs a real job through `runDataJobs` three times, and prints the watermark moving -- see "Incremental loads" below for what it's showing.
+For a runnable demonstration of streaming and incremental loads that needs no configuration, credentials or server, run `python example/incremental_demo.py`. It builds a throwaway SQLite database, runs a real job through `runDataJobs` three times, and prints the watermark moving -- see "Incremental loads" below for what it's showing.
 
 `runScrambleJobs(jobsFile, databaseConfiguration, logFile)` is the scramble-job equivalent -- no `memory` argument, since scramble jobs have no `refresh` window or watermark to track.
 

@@ -24,8 +24,6 @@ env/
 .idea/
 .DS_Store
 
-# example runner output (see example/log/.gitkeep, example/memory/.gitkeep)
-example/log/*
-!example/log/.gitkeep
+# example runner output (see example/memory/.gitkeep)
 example/memory/*
 !example/memory/.gitkeep

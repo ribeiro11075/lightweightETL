@@ -1,21 +1,35 @@
-# Sample configuration -- these are placeholder values, not real credentials.
-# Replace with your own database aliases before running `lightweight-etl run`
-# against real infrastructure.
+# Sample configuration -- placeholder values, not a real deployment.
+#
+# Credentials are read from the environment with ${NAME}, so this file holds a
+# *reference* to each secret rather than the secret itself, and is safe to keep
+# in version control alongside your job definitions. Connection topology is
+# worth tracking; passwords are not.
+#
+#     export SOURCE_DB_PASSWORD='...'
+#     lightweight-etl run
+#
+# An unset variable with no default stops the run before anything connects,
+# rather than expanding to an empty string. ${NAME:-default} supplies a
+# fallback -- use it for ports and hosts, never for a secret, since a default
+# password just moves the credential back into this file.
+#
+# A literal value still works, which is convenient for local development and
+# for sqlite (which has no credentials at all). Don't do it for anything real.
 sourceDb:
   type: mysql
-  user: exampleUser
-  password: examplePassword
+  user: ${SOURCE_DB_USER:-etl}
+  password: ${SOURCE_DB_PASSWORD}
   database: exampleSourceDatabase
-  host: source.example.com
-  port: 3306
+  host: ${SOURCE_DB_HOST:-source.example.com}
+  port: ${SOURCE_DB_PORT:-3306}
   serviceName:
   sid:
 targetDb:
   type: postgresql
-  user: exampleUser
-  password: examplePassword
+  user: ${TARGET_DB_USER:-etl}
+  password: ${TARGET_DB_PASSWORD}
   database: exampleTargetDatabase
-  host: target.example.com
-  port: 5432
+  host: ${TARGET_DB_HOST:-target.example.com}
+  port: ${TARGET_DB_PORT:-5432}
   serviceName:
   sid:
