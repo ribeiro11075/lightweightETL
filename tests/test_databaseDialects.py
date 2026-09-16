@@ -11,16 +11,65 @@ def test_mysql_placeholders():
     assert MySQLDialect().placeholders(3) == ['%s', '%s', '%s']
 
 
-def test_mysql_primary_key_query_names_the_table():
-    query = MySQLDialect().primaryKeyQuery('people')
-    assert "t.table_name='people'" in query
-    assert "t.constraint_type='PRIMARY KEY'" in query
+@pytest.mark.parametrize('dialect', [MySQLDialect(), PostgreSQLDialect(), OracleDialect(), MSSQLDialect()])
+@pytest.mark.parametrize('query', ['primaryKeyQuery', 'columnsQuery', 'tableExistsQuery'])
+def test_catalog_queries_bind_the_schema_and_table_rather_than_interpolating_them(dialect, query):
+    """A lookup that ignored the schema used to pick up a same-named table
+    elsewhere on the server, and its key columns with it. Both parts are bound,
+    and a NULL schema falls back to the connection's current one.
+    """
+    text = getattr(dialect, query)()
+
+    assert text.count('{}') == 2
+    assert 'COALESCE(' in text
+
+
+@pytest.mark.parametrize('dialect', [MySQLDialect(), PostgreSQLDialect(), OracleDialect(), MSSQLDialect()])
+def test_the_primary_key_query_ignores_unique_constraints(dialect):
+    """Treating UNIQUE columns as key columns made an upsert match on (id,
+    email): a changed email became an insert that violated the real key, and
+    PostgreSQL refused the ON CONFLICT list outright.
+    """
+    assert 'UNIQUE' not in dialect.primaryKeyQuery().upper().replace('INDISUNIQUE', '')
+    assert "'U'" not in dialect.primaryKeyQuery()
+
+
+class _RecordingCursor:
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.executed = []
+
+    def execute(self, query, parameters=()):
+        self.executed.append((query, parameters))
+
+    def fetchall(self):
+        return self.rows
+
+
+@pytest.mark.parametrize('table,expected', [('people', (None, 'people')), ('sales.people', ('sales', 'people'))])
+def test_the_primary_key_lookup_splits_a_qualified_table_name(table, expected):
+    cursor = _RecordingCursor([('id',)])
+
+    assert MySQLDialect().primaryKey(cursor, table) == ['id']
+    assert cursor.executed[0][1] == expected
+    assert '%s' in cursor.executed[0][0]
 
 
 def test_mysql_upsert_query():
     query = MySQLDialect().upsertQuery('people', ALL_COLUMNS, PRIMARY_KEY_COLUMNS, NON_PRIMARY_KEY_COLUMNS)
     assert query == ('INSERT INTO people (id, name, amount) VALUES (%s, %s, %s) '
                       'ON DUPLICATE KEY UPDATE name=VALUES(name), amount=VALUES(amount)')
+
+
+def test_mysql_upsert_of_a_key_only_table_does_not_use_insert_ignore():
+    """INSERT IGNORE also turns truncation, NOT NULL and foreign-key errors into
+    warnings, silently dropping or mangling rows.
+    """
+    query = MySQLDialect().upsertQuery('links', ['a', 'b'], ['a', 'b'], [])
+
+    assert 'IGNORE' not in query
+    assert query.endswith('ON DUPLICATE KEY UPDATE links.a=links.a')
 
 
 def test_mysql_upsert_from_stage_query():
@@ -41,7 +90,7 @@ def test_postgresql_placeholders():
 def test_postgresql_upsert_query():
     query = PostgreSQLDialect().upsertQuery('people', ALL_COLUMNS, PRIMARY_KEY_COLUMNS, NON_PRIMARY_KEY_COLUMNS)
     assert query == ('INSERT INTO people (id, name, amount) VALUES (%s, %s, %s) '
-                      'ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name, amount=EXCLUDED.amount')
+                      'ON CONFLICT(id) DO UPDATE SET name=excluded.name, amount=excluded.amount')
 
 
 def test_postgresql_swap_is_one_chained_statement():
@@ -50,14 +99,35 @@ def test_postgresql_swap_is_one_chained_statement():
     assert queries[0].count(';') == 2
 
 
+@pytest.mark.parametrize('dialect', [PostgreSQLDialect(), OracleDialect(), SQLiteDialect()])
+def test_a_rename_takes_the_new_name_unqualified(dialect):
+    """`ALTER TABLE sales.orders RENAME TO sales.orders_tmp` is a syntax error;
+    the renamed table stays in its schema anyway.
+    """
+    queries = ' '.join(dialect.swapQueries('sales.orders', 'sales.orders_stage', 'sales.orders_tmp'))
+
+    assert 'RENAME TO sales.' not in queries
+    assert 'ALTER TABLE sales.orders_stage RENAME TO orders_tmp' in queries
+    assert 'ALTER TABLE sales.orders RENAME TO orders_stage' in queries
+    assert 'ALTER TABLE sales.orders_tmp RENAME TO orders' in queries
+
+
+def test_mssql_sp_rename_takes_the_new_name_unqualified():
+    """sp_rename would otherwise create a table literally named `sales.orders_tmp`."""
+    (query,) = MSSQLDialect().swapQueries('sales.orders', 'sales.orders_stage', 'sales.orders_tmp')
+
+    assert query == ("EXEC sp_rename 'sales.orders_stage', 'orders_tmp'; EXEC sp_rename 'sales.orders', 'orders_stage'; "
+                     "EXEC sp_rename 'sales.orders_tmp', 'orders';")
+
+
 def test_oracle_placeholders_are_positional_binds():
     assert OracleDialect().placeholders(3) == [':1', ':2', ':3']
 
 
-def test_oracle_primary_key_query_names_the_table_case_insensitively():
-    query = OracleDialect().primaryKeyQuery('people')
-    assert "UPPER(cols.table_name) = UPPER('people')" in query
-    assert "constraint_type IN ('P', 'U')" in query
+def test_oracle_catalog_queries_look_in_the_current_schema_not_every_schema():
+    for query in (OracleDialect().primaryKeyQuery(), OracleDialect().columnsQuery(), OracleDialect().tableExistsQuery()):
+        assert "SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')" in query
+        assert 'table_name = UPPER({})' in query
 
 
 def test_oracle_upsert_query_is_a_merge_with_matched_and_not_matched():
@@ -95,12 +165,6 @@ def test_oracle_swap_is_three_separate_statements():
 
 def test_mssql_placeholders():
     assert MSSQLDialect().placeholders(3) == ['%s', '%s', '%s']
-
-
-def test_mssql_primary_key_query_names_the_table():
-    query = MSSQLDialect().primaryKeyQuery('people')
-    assert "t.table_name = 'people'" in query
-    assert "t.constraint_type = 'PRIMARY KEY'" in query
 
 
 def test_mssql_upsert_query_is_a_merge_with_matched_and_not_matched():
@@ -141,7 +205,7 @@ def test_mariadb_reuses_mysql_dialect_wholesale():
     placeholder method from MySQLDialect unchanged.
     """
     assert MariaDBDialect().placeholders(2) == MySQLDialect().placeholders(2)
-    assert MariaDBDialect().primaryKeyQuery('people') == MySQLDialect().primaryKeyQuery('people')
+    assert MariaDBDialect().primaryKeyQuery() == MySQLDialect().primaryKeyQuery()
     assert MariaDBDialect().upsertQuery('people', ALL_COLUMNS, PRIMARY_KEY_COLUMNS, NON_PRIMARY_KEY_COLUMNS) == \
         MySQLDialect().upsertQuery('people', ALL_COLUMNS, PRIMARY_KEY_COLUMNS, NON_PRIMARY_KEY_COLUMNS)
     assert MariaDBDialect().swapQueries('people', 'people_stage', 'people_tmp') == MySQLDialect().swapQueries('people', 'people_stage', 'people_tmp')
@@ -162,9 +226,13 @@ def test_other_dialects_default_truncate_query_is_ansi_truncate():
     assert MSSQLDialect().truncateQuery('people') == 'TRUNCATE TABLE people'
 
 
-def test_sqlite_primary_key_query_uses_the_pragma_table_valued_function():
-    query = SQLiteDialect().primaryKeyQuery('people')
-    assert query == "SELECT name FROM pragma_table_info('people') WHERE pk > 0 ORDER BY pk"
+@pytest.mark.parametrize('table,expected', [('people', ('people', 'main')), ('other.people', ('people', 'other'))])
+def test_sqlite_primary_key_lookup_binds_the_table_and_attached_database(table, expected):
+    cursor = _RecordingCursor([('id',)])
+
+    assert SQLiteDialect().primaryKey(cursor, table) == ['id']
+    assert 'pragma_table_info(?, ?)' in cursor.executed[0][0]
+    assert cursor.executed[0][1] == expected
 
 
 def test_sqlite_upsert_query():
@@ -225,12 +293,13 @@ def test_mssql_and_sqlite_column_category_is_unimplemented():
     assert SQLiteDialect().columnCategory(None) is None
 
 
-def test_sqlite_swap_is_three_separate_statements():
-    """Same reasoning as the equivalent Oracle test: sqlite3's cursor.execute() can
-    only run one statement at a time.
+def test_sqlite_swap_is_three_separate_statements_in_one_transaction():
+    """sqlite3's cursor.execute() runs one statement at a time, and doesn't open a
+    transaction before DDL -- without the BEGIN, each rename would commit alone.
     """
     queries = SQLiteDialect().swapQueries('people', 'people_stage', 'people_tmp')
     assert queries == [
+        'BEGIN',
         'ALTER TABLE people_stage RENAME TO people_tmp',
         'ALTER TABLE people RENAME TO people_stage',
         'ALTER TABLE people_tmp RENAME TO people',
@@ -247,13 +316,14 @@ def test_upsert_of_a_key_only_table_is_valid_sql(dialect):
     and fail at the database (sqlite3: "incomplete input"). Oracle and MSSQL
     already dropped WHEN MATCHED from their MERGE for this case.
 
-    Bridge tables and id-only lookup tables have exactly this shape.
+    Bridge tables and id-only lookup tables have exactly this shape. MySQL
+    assigns the key to itself, the one conflict action it has that does nothing.
     """
     query = dialect.upsertQuery(table='t', allColumns=['id'], primaryKeyColumns=['id'], nonPrimaryKeyColumns=[])
 
     assert not query.rstrip().endswith(('SET', 'UPDATE'))
     assert 'DO UPDATE SET ' not in query
-    assert 'ON DUPLICATE KEY UPDATE ' not in query
+    assert 'ON DUPLICATE KEY UPDATE ' not in query or query.endswith('ON DUPLICATE KEY UPDATE t.id=t.id')
 
 
 @pytest.mark.parametrize('dialect', [
@@ -264,4 +334,4 @@ def test_upsert_from_stage_of_a_key_only_table_is_valid_sql(dialect):
 
     assert not query.rstrip().endswith(('SET', 'UPDATE'))
     assert 'DO UPDATE SET ' not in query
-    assert 'ON DUPLICATE KEY UPDATE ' not in query
+    assert 'ON DUPLICATE KEY UPDATE ' not in query or query.endswith('ON DUPLICATE KEY UPDATE t.id=t.id')

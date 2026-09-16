@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import datetime
 import decimal
-import hashlib
 import hmac
 import math
 import random
@@ -814,6 +813,10 @@ class ShuffleStrategy(Strategy):
     this is **not** anonymization: every real value is still in the table, on
     another row. Only rows in the same chunk are shuffled together, since a
     streamed job never holds more than one chunk.
+
+    So a small chunk hides little: a chunk of one row -- the tail of a load, or
+    an incremental run that found one changed row -- keeps its value on its own
+    row, and any row keeps its own value with probability 1/len(chunk).
     """
 
     NAME = 'shuffle'

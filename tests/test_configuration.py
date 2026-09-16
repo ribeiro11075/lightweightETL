@@ -6,7 +6,7 @@ from lightweight_etl.configuration import (
     ConfigurationError,
     DatabaseConnectionConfig,
     DataJobsFile,
-    ScrambleJobsFile,
+    findCycle,
     )
 
 
@@ -147,15 +147,64 @@ def test_cycle_sleep_seconds_defaults_and_is_configurable():
     assert jobsFile.cycleSleepSeconds == 5
 
 
-def test_default_column_values_scalar_survives_cleanup():
-    raw = {'workers': 1, 'jobs': {'job1': {
-        'active': True, 'database': 'a', 'table': 't', 'randomSalt': 's',
-        'defaultColumnValues': {'status': 'active', 'ignored': None},
-        }}}
+def _job(**overrides):
+    fields = dict(active=True, sourceDatabase='a', sourceQuery='select 1', targetDatabase='a', targetTableFinal='t',
+                  insertStrategy='upsert', chunkSize=10)
+    fields.update(overrides)
+    return fields
 
-    jobsFile = Configuration.validateJobConfiguration(raw, ScrambleJobsFile)
 
-    assert jobsFile.jobs['job1'].defaultColumnValues == {'status': 'active'}
+def test_a_predecessor_cycle_is_rejected_rather_than_run_forever():
+    """Every job in a cycle waits for another that waits for it, so a run
+    containing one could never finish. It has to fail validation instead.
+    """
+    raw = {'workers': 1, 'jobs': {'first': _job(predecessors=['second']), 'second': _job(predecessors=['first']), 'third': _job()}}
+    jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
+
+    with pytest.raises(ConfigurationError, match='cycle.*first -> second -> first'):
+        Configuration.validateJobGraph(jobsFile.jobs, databaseAliases={'a'})
+
+
+def test_a_job_that_is_its_own_predecessor_is_a_cycle():
+    raw = {'workers': 1, 'jobs': {'only': _job(predecessors=['only'])}}
+    jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
+
+    with pytest.raises(ConfigurationError, match='only -> only'):
+        Configuration.validateJobGraph(jobsFile.jobs)
+
+
+def test_find_cycle_accepts_a_diamond_and_ignores_unknown_predecessors():
+    assert findCycle({'a': [], 'b': ['a'], 'c': ['a'], 'd': ['b', 'c', 'missing']}) is None
+
+
+def test_workers_must_be_positive():
+    with pytest.raises(ConfigurationError, match='workers'):
+        Configuration.validateJobConfiguration({'workers': 0, 'jobs': {}}, DataJobsFile)
+
+
+def test_a_swap_stage_table_must_share_the_targets_schema():
+    """A rename never moves a table between schemas, so the three-way rename
+    would fail part-way.
+    """
+    raw = {'workers': 1, 'jobs': {'j': _job(insertStrategy='swap', targetTableFinal='sales.orders', targetTableStage='staging.orders')}}
+
+    with pytest.raises(ConfigurationError, match='same schema'):
+        Configuration.validateJobConfiguration(raw, DataJobsFile)
+
+
+@pytest.mark.parametrize('final,stage', [('orders', 'orders_stage'), ('sales.orders', 'SALES.orders_stage')])
+def test_a_swap_stage_table_in_the_same_schema_is_accepted(final, stage):
+    raw = {'workers': 1, 'jobs': {'j': _job(insertStrategy='swap', targetTableFinal=final, targetTableStage=stage)}}
+
+    Configuration.validateJobConfiguration(raw, DataJobsFile)
+
+
+def test_a_password_never_appears_in_the_models_repr():
+    settings = DatabaseConnectionConfig(type='postgresql', user='u', password='hunter2', database='d', host='h')
+
+    assert 'hunter2' not in repr(settings)
+    assert 'hunter2' not in str(settings.model_dump())
+    assert settings.plainPassword() == 'hunter2'
 
 
 def _watermarkJob(**overrides):

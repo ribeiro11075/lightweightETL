@@ -3,9 +3,11 @@
 The behaviour behind the fields in [configuration.md](configuration.md), and the consequences worth knowing before you rely on it.
 
 - [How a data job moves rows](#how-a-data-job-moves-rows)
+- [How a swap works](#how-a-swap-works)
 - [Incremental loads](#incremental-loads)
 - [refresh and predecessors](#refresh-and-predecessors)
 - [Single runs, not a daemon](#single-runs-not-a-daemon)
+- [Workers](#workers)
 - [Retries](#retries)
 - [Structured logs](#structured-logs)
 - [Masking](#masking)
@@ -31,6 +33,21 @@ Streaming is per-driver, because `fetchmany()` bounds nothing if the driver has 
 - **Visible** for a stage-less `upsert`, which writes partial results straight into the live target. Use a stage table for anything large.
 
 Masking is a stage of this same pipeline (transform, then mask, then load), so a masked job streams like any other. See [masking](#masking).
+
+
+## How a swap works
+
+`swap` exchanges `targetTableStage` and `targetTableFinal` by renaming them, through a temporary `<target>_tmp` name. A rename never moves a table between schemas, so the two must share one; validation checks. Names may be schema-qualified (`sales.orders`).
+
+| Dialect | Atomic |
+| --- | --- |
+| mysql, mariadb | yes: one `RENAME TABLE` statement |
+| postgresql, mssql, sqlite | yes: the renames run in one transaction |
+| oracle | **no**: Oracle commits each DDL statement on its own |
+
+On Oracle, a failure between the renames can leave the target under its temporary name; the job fails and says which statement failed.
+
+**Views and foreign keys.** PostgreSQL ties a view or foreign key to the table itself, not to its name. After a swap, a view over the target reads what is now the stage table, which the next run truncates. Recreate such views in `postTargetAdhocQueries`, or use `upsert` with a stage table. The other dialects resolve views by name, so views follow the swap.
 
 
 ## Incremental loads
@@ -91,7 +108,7 @@ A reasonable split: `swap` for small tables and anywhere deletes matter; waterma
 
 ### Where watermarks are kept
 
-In the `MemoryBackend`. `FileMemory` assumes a filesystem that persists between runs and is shared by every worker. Where that's false — a container without a volume, anything scaled across machines, serverless — use `DatabaseMemory`. `FileMemory` there doesn't fail loudly: it silently forgets every watermark and re-extracts from `watermarkInitial`. See [library.md](library.md#memory-backends).
+In the `MemoryBackend`. `FileMemory` writes each update to a temporary file and renames it into place, so a process killed mid-write leaves the previous version rather than a file nothing can parse. It assumes a filesystem that persists between runs and is shared by every worker. Where that's false — a container without a volume, anything scaled across machines, serverless — use `DatabaseMemory`. `FileMemory` there doesn't fail loudly: it silently forgets every watermark and re-extracts from `watermarkInitial`. See [library.md](library.md#memory-backends).
 
 
 ## refresh and predecessors
@@ -115,9 +132,24 @@ The trade-off is freshness, not correctness: between windows the dependent reads
 */5 * * * *  cd /srv/etl && lightweight-etl run --memory ./memory.yaml
 ```
 
-`--forever` keeps the process resident, for freshness below cron's one-minute floor or where there's no scheduler. It handles `SIGINT` and `SIGTERM` by finishing the current cycle and stopping its workers cleanly; without that, a container's ordinary shutdown would orphan them mid-job.
+`--forever` keeps the process resident, for freshness below cron's one-minute floor or where there's no scheduler.
+
+**Stopping.** On `SIGINT` or `SIGTERM`, a run starts no new jobs, lets the running ones finish, reports the rest as skipped, and exits with status 130. Killing workers mid-job instead would leave a streaming cursor or a half-loaded table for the database to clean up. A container's grace period has to cover the longest job for this to finish.
+
+**Overlapping runs.** `run` holds a lock (`memory.yaml.run.lock`, beside the memory file) for as long as it runs. A second invocation sharing that memory file exits with status 1 instead of running the same jobs at the same time, which a cron interval shorter than a slow run would otherwise cause. The operating system releases the lock if the process dies.
 
 A skipped job exits non-zero just as a failed one does: it didn't run, so its data isn't there.
+
+
+## Workers
+
+Jobs run in a pool of `workers` processes, each job as soon as its predecessors have completed.
+
+**A worker that dies** — killed for memory, crashed in a driver — fails the job it was running, and any others running in the same pool at that moment. Their dependents are skipped, jobs that start later get a new pool, and the run still ends. It no longer waits forever for a job that will never report back.
+
+**Logs from workers** are sent back to the main process and written by its handlers, so they follow `--log`, `--log-format` and `--quiet` like everything else.
+
+**Ctrl-C** reaches every process in the terminal's group; workers ignore it and leave the decision to the main process, as described under stopping above.
 
 
 ## Retries
@@ -126,9 +158,9 @@ A data job with `retries: 3` gets up to four attempts. The delay starts at `retr
 
 Retrying a whole job is safe because both strategies converge on a re-run: `swap` restages and re-swaps, and `upsert` reapplies existing rows as a no-op.
 
-**What isn't retried:** configuration errors, transform errors, unresolvable transformer references and masking errors. All of them come from this package and fail the same way every time; retrying would only delay the failure and bury the message under repeats. Everything a database driver raises *is* retried — transient and permanent database errors can't be told apart reliably across six drivers, and a needless retry costs far less than losing a load to one dropped connection.
+**What isn't retried:** configuration errors (including a target without a primary key), transform errors, unresolvable transformer references and masking errors. All of them come from this package and fail the same way every time; retrying would only delay the failure and bury the message under repeats. Everything a database driver raises *is* retried — transient and permanent database errors can't be told apart reliably across six drivers, and a needless retry costs far less than losing a load to one dropped connection.
 
-**Deprecated scramble jobs have no retries.** A failure can leave the table truncated, and a second attempt would find it empty and report success having masked nothing. Masked data jobs retry like any other data job.
+Masked data jobs retry like any other data job. The watermark is read again on each attempt, so a `DatabaseMemory` that fails once is retried too.
 
 
 ## Structured logs
@@ -156,7 +188,7 @@ Every mask is derived from `HMAC(key, domain, value)`, keyed on the value itself
 
 A policy must list **every column the query returns**, or the job fails before writing anything. A new production column should stop the job, not flow into a non-production copy unmasked.
 
-[masking.md](masking.md) has the strategies, the key, the manifest, `discover`, `subset`, `schema`, `clear`, and how to migrate from the deprecated `scramble` command.
+[masking.md](masking.md) has the strategies, the key, the manifest, `discover`, `subset`, `schema`, `clear`, and how to migrate from the removed `scramble` command.
 
 
 ## Moving values between drivers

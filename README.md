@@ -57,7 +57,6 @@ lightweight-etl discover    propose a masking policy for tables
 lightweight-etl subset      generate jobs that copy a referentially complete subset
 lightweight-etl schema      create target tables from source ones, in the target's dialect
 lightweight-etl clear       empty the target tables of jobs, children first
-lightweight-etl scramble    deprecated: in-place scrambling, replaced by masking
 ```
 
 | Exit code | Meaning |
@@ -65,9 +64,9 @@ lightweight-etl scramble    deprecated: in-place scrambling, replaced by masking
 | `0` | every job completed |
 | `1` | a job failed, or was skipped because a predecessor failed |
 | `2` | invalid configuration or usage |
-| `130` | interrupted |
+| `130` | interrupted by a signal: running jobs finished, the rest were skipped |
 
-`run` makes one pass and exits, so it fits under cron or a Kubernetes CronJob. The useful flags:
+`run` makes one pass and exits, so it fits under cron or a Kubernetes CronJob. A second `run` sharing the same run state refuses to start while the first is still going. The useful flags:
 
 | Flag | |
 | --- | --- |
@@ -77,6 +76,7 @@ lightweight-etl scramble    deprecated: in-place scrambling, replaced by masking
 | `--forever` | stay running; for freshness under a minute |
 | `--log-format json` | structured logs for a collector |
 | `--log FILE` | also log to a file, in addition to stderr (`--quiet` silences stderr) |
+| `--memory FILE` | where run state (last runs, watermarks) is kept; default `memory.yaml` in the config directory |
 | `--manifest FILE` | write a JSON record of what was masked, and how |
 
 
@@ -95,7 +95,7 @@ lightweight-etl scramble    deprecated: in-place scrambling, replaced by masking
 
 | | |
 | --- | --- |
-| `lightweight_etl/` | the package: `cli.py`, `configuration.py`, `database.py` with per-dialect SQL in `databaseDialects.py`, `dependencyGraph.py`, `runner.py`, `transform.py`, `builtinTransforms.py`, `masking.py`, `discovery.py`, `subset.py`, `schema.py`, `memory.py`, `log.py`, and the deprecated `scramble.py` |
+| `lightweight_etl/` | the package: `cli.py`, `configuration.py`, `database.py` with per-dialect SQL in `databaseDialects.py`, `dependencyGraph.py`, `runner.py`, `transform.py`, `builtinTransforms.py`, `masking.py`, `discovery.py`, `subset.py`, `schema.py`, `memory.py` and `log.py` |
 | `example/` | runnable demos and a complete sample configuration — see [its README](example/README.md) |
 | `docs/` | the documentation above |
 | `tests/` | the test suite |

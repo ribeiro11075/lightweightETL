@@ -30,13 +30,13 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import yaml
 
-from .configuration import Configuration, ConfigurationError, DatabaseConnectionConfig, DataJobsFile, ScrambleJobsFile, expandEnvironmentVariables
+from .configuration import Configuration, ConfigurationError, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, expandEnvironmentVariables
 from .database import Database
 from .dependencyGraph import DependencyGraph
-from .log import LOGGER_NAME, Log
+from .log import Log
 from .masking import MaskingError
-from .memory import FileMemory
-from .runner import RunResult, runDataJobs, runScrambleJobs
+from .memory import FileMemory, RunInProgressError, exclusiveRun
+from .runner import RunResult, runDataJobs
 
 EXIT_SUCCESS = 0
 EXIT_JOBS_DID_NOT_SUCCEED = 1
@@ -68,21 +68,46 @@ def _loadYaml(path: Path) -> Any:
         raise UsageError('{} is not valid YAML: {}'.format(path, error)) from error
 
 
-def _resolveConfigurationPaths(arguments: argparse.Namespace, jobsFileName: str) -> Tuple[Path, Path]:
-    """Explicit --jobs/--databases win; otherwise both come from a config directory.
-
-    The directory falls back to $LIGHTWEIGHT_ETL_CONFIG and then to ./configuration,
-    so the common case is a bare `lightweight-etl run` -- passing two paths on
-    every invocation gets old quickly.
+def _configDirectory(arguments: argparse.Namespace) -> Path:
+    """--config, else $LIGHTWEIGHT_ETL_CONFIG, else ./configuration -- so the
+    common case is a bare `lightweight-etl run`.
     """
 
-    directory = arguments.config or os.environ.get(CONFIG_DIRECTORY_VARIABLE) or 'configuration'
-    configDirectory = Path(directory)
+    return Path(arguments.config or os.environ.get(CONFIG_DIRECTORY_VARIABLE) or 'configuration')
 
-    jobsPath = Path(arguments.jobs) if arguments.jobs else configDirectory / jobsFileName
+
+def _resolveConfigurationPaths(arguments: argparse.Namespace) -> Tuple[Path, Path]:
+    """Explicit --jobs/--databases win; otherwise both come from the config directory."""
+
+    configDirectory = _configDirectory(arguments)
+    jobsPath = Path(arguments.jobs) if arguments.jobs else configDirectory / 'jobs.yaml'
     databasesPath = Path(arguments.databases) if arguments.databases else configDirectory / 'database.yaml'
 
     return jobsPath, databasesPath
+
+
+def _resolveMemoryPath(arguments: argparse.Namespace, log: Log) -> Path:
+    """--memory, else memory.yaml in the config directory.
+
+    Beside the configuration rather than in the working directory, so that a
+    cron entry or a container that starts somewhere else still finds the same
+    run state -- losing it silently means every incremental job re-extracts
+    from watermarkInitial. A memory.yaml left in the working directory by an
+    earlier version is still used, with a warning, until it is moved.
+    """
+
+    if arguments.memory:
+        return Path(arguments.memory)
+
+    path = _configDirectory(arguments) / 'memory.yaml'
+    legacy = Path('memory.yaml')
+
+    if not path.exists() and legacy.exists() and legacy.resolve() != path.resolve():
+        log.logging.warning('Using ./memory.yaml from the working directory; run state now defaults to {}. '
+                            'Move the file there, or pass --memory'.format(path))
+        return legacy
+
+    return path
 
 
 def _configureLogging(arguments: argparse.Namespace) -> Log:
@@ -104,14 +129,14 @@ def _configureLogging(arguments: argparse.Namespace) -> Log:
 
 def _loadDatabases(arguments: argparse.Namespace) -> Dict[str, DatabaseConnectionConfig]:
 
-    _, databasesPath = _resolveConfigurationPaths(arguments, jobsFileName='jobs.yaml')
+    _, databasesPath = _resolveConfigurationPaths(arguments)
 
     return Configuration.validateDatabaseConfiguration(_loadYaml(databasesPath))
 
 
 def _loadDataJobs(arguments: argparse.Namespace) -> Tuple[DataJobsFile, Dict[str, DatabaseConnectionConfig]]:
 
-    jobsPath, databasesPath = _resolveConfigurationPaths(arguments, jobsFileName='jobs.yaml')
+    jobsPath, databasesPath = _resolveConfigurationPaths(arguments)
     databaseConfiguration = Configuration.validateDatabaseConfiguration(_loadYaml(databasesPath))
     jobsFile = Configuration.validateJobConfiguration(_loadYaml(jobsPath), DataJobsFile)
     Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databaseConfiguration))
@@ -119,17 +144,7 @@ def _loadDataJobs(arguments: argparse.Namespace) -> Tuple[DataJobsFile, Dict[str
     return jobsFile, databaseConfiguration
 
 
-def _loadScrambleJobs(arguments: argparse.Namespace) -> Tuple[ScrambleJobsFile, Dict[str, DatabaseConnectionConfig]]:
-
-    jobsPath, databasesPath = _resolveConfigurationPaths(arguments, jobsFileName='scramble.yaml')
-    databaseConfiguration = Configuration.validateDatabaseConfiguration(_loadYaml(databasesPath))
-    jobsFile = Configuration.validateJobConfiguration(_loadYaml(jobsPath), ScrambleJobsFile)
-    Configuration.validateJobGraph(jobsFile.jobs)
-
-    return jobsFile, databaseConfiguration
-
-
-def _selectJobs(jobs: Dict[str, Any], requested: Optional[List[str]], log: Log) -> Dict[str, Any]:
+def _selectJobs(jobs: Dict[str, DataJobConfig], requested: Optional[List[str]], log: Log) -> Dict[str, DataJobConfig]:
     """Narrow a job map to --job selections, warning about predecessors dropped.
 
     Running only what was asked for is the right default here: the use case is
@@ -156,7 +171,7 @@ def _selectJobs(jobs: Dict[str, Any], requested: Optional[List[str]], log: Log) 
     return selected
 
 
-def _applyJobSelection(jobsFile: Any, arguments: argparse.Namespace, log: Log) -> Any:
+def _applyJobSelection(jobsFile: DataJobsFile, arguments: argparse.Namespace, log: Log) -> DataJobsFile:
     """--job also forces the selected jobs to run, ignoring `refresh`.
 
     Asking for a job explicitly and getting nothing because it ran four minutes
@@ -178,6 +193,9 @@ def _reportRun(result: RunResult, log: Log) -> int:
                           extra={'job': outcome.job, 'status': outcome.status.value, 'rowCount': outcome.rowCount,
                                  'durationSeconds': round(outcome.durationSeconds, 3), 'attempts': outcome.attempts})
 
+    if result.interrupted:
+        return EXIT_INTERRUPTED
+
     if result.succeeded:
         return EXIT_SUCCESS
 
@@ -185,6 +203,10 @@ def _reportRun(result: RunResult, log: Log) -> int:
 
 
 def _commandRun(arguments: argparse.Namespace, log: Log) -> int:
+    """Holds a lock beside the memory file for the whole run, so an overlapping
+    invocation -- a cron interval shorter than a slow run -- exits instead of
+    running the same jobs concurrently.
+    """
 
     jobsFile, databaseConfiguration = _loadDataJobs(arguments)
     jobsFile = _applyJobSelection(jobsFile, arguments, log)
@@ -192,10 +214,17 @@ def _commandRun(arguments: argparse.Namespace, log: Log) -> int:
     if arguments.dry_run:
         return _dryRunDataJobs(jobsFile, databaseConfiguration, log)
 
-    memoryPath = Path(arguments.memory) if arguments.memory else Path('memory.yaml')
-    result = runDataJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration, logFile=arguments.log,
-                          memory=FileMemory(memoryFile=memoryPath), runForever=arguments.forever,
-                          logLevel=getattr(logging, arguments.log_level.upper()), logFormat=arguments.log_format)
+    memoryPath = _resolveMemoryPath(arguments, log)
+    memoryPath.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with exclusiveRun(memoryPath.with_name(memoryPath.name + '.run.lock')):
+            result = runDataJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration, logFile=arguments.log,
+                                 memory=FileMemory(memoryFile=memoryPath), runForever=arguments.forever,
+                                 logLevel=getattr(logging, arguments.log_level.upper()), logFormat=arguments.log_format)
+    except RunInProgressError as error:
+        log.logging.error(str(error))
+        return EXIT_JOBS_DID_NOT_SUCCEED
 
     if arguments.manifest:
         _writeManifest(Path(arguments.manifest), result, jobsFile, log)
@@ -214,21 +243,6 @@ def _writeManifest(path: Path, result: RunResult, jobsFile: DataJobsFile, log: L
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, indent=2, default=str) + '\n')
     log.logging.info('Wrote the masking manifest for {} job(s) to {}'.format(len(manifest['jobs']), path))
-
-
-def _commandScramble(arguments: argparse.Namespace, log: Log) -> int:
-
-    jobsFile, databaseConfiguration = _loadScrambleJobs(arguments)
-    jobsFile = _applyJobSelection(jobsFile, arguments, log)
-
-    if arguments.dry_run:
-        return _dryRunScrambleJobs(jobsFile, databaseConfiguration, log)
-
-    result = runScrambleJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration, logFile=arguments.log,
-                              runForever=arguments.forever, logLevel=getattr(logging, arguments.log_level.upper()),
-                              logFormat=arguments.log_format)
-
-    return _reportRun(result, log)
 
 
 def _commandValidate(arguments: argparse.Namespace, log: Log) -> int:
@@ -334,28 +348,6 @@ def _checkMaskingCoverage(name: str, job: Any, databaseConfiguration: Dict[str, 
         return '{}: sourceQuery could not be checked against the masking policy -- {}: {}'.format(name, type(error).__name__, error)
 
     return None
-
-
-def _dryRunScrambleJobs(jobsFile: ScrambleJobsFile, databaseConfiguration: Dict[str, DatabaseConnectionConfig], log: Log) -> int:
-
-    problems: List[str] = []
-
-    for name, job in jobsFile.jobs.items():
-        try:
-            with Database(connectionSettings=databaseConfiguration[job.database]) as database:
-                columns = database.getAllColumnNames(table=job.table)
-                log.logging.info('{}: {} has {} column(s)'.format(name, job.table, len(columns)))
-        except Exception as error:
-            problems.append('{}: {} is not readable -- {}: {}'.format(name, job.table, type(error).__name__, error))
-
-    if problems:
-        for problem in problems:
-            log.logging.error(problem)
-        return EXIT_JOBS_DID_NOT_SUCCEED
-
-    print('dry run passed: {} job(s), nothing scrambled'.format(len(jobsFile.jobs)))
-
-    return EXIT_SUCCESS
 
 
 def _writeOutput(text: str, output: Optional[str]) -> None:
@@ -617,8 +609,7 @@ def _commandJobs(arguments: argparse.Namespace, log: Log) -> int:
     """
 
     jobsFile, _ = _loadDataJobs(arguments)
-    memoryPath = Path(arguments.memory) if arguments.memory else Path('memory.yaml')
-    memory = FileMemory(memoryFile=memoryPath)
+    memory = FileMemory(memoryFile=_resolveMemoryPath(arguments, log))
     graph = DependencyGraph(jobs=jobsFile.jobs, memory=memory.read())
     watermarks = memory.readWatermarks()
 
@@ -642,18 +633,27 @@ def _commandJobs(arguments: argparse.Namespace, log: Log) -> int:
 
 def _addCommonArguments(parser: argparse.ArgumentParser, jobs: bool = True) -> None:
 
-    parser.add_argument('--config', help='directory holding jobs.yaml/scramble.yaml and database.yaml (default: ${} or ./configuration)'.format(
+    parser.add_argument('--config', help='directory holding jobs.yaml and database.yaml (default: ${} or ./configuration)'.format(
         CONFIG_DIRECTORY_VARIABLE))
     if jobs:
         parser.add_argument('--jobs', help='explicit path to the jobs file, overriding --config')
     parser.add_argument('--databases', help='explicit path to the database file, overriding --config')
     if jobs:
-        parser.add_argument('--memory', help='path to the run-memory file (default: ./memory.yaml)')
+        parser.add_argument('--memory', help='path to the run-memory file (default: memory.yaml in the --config directory)')
     parser.add_argument('--log', help='also write logs to this file (logs always go to stderr unless --quiet)')
     parser.add_argument('--log-level', default='info', choices=['debug', 'info', 'warning', 'error'], help='default: info')
     parser.add_argument('--log-format', default='text', choices=['text', 'json'],
                         help='json emits one object per record, carrying job/status/rowCount as fields a log collector can filter and alert on')
     parser.add_argument('--quiet', action='store_true', help='do not log to stderr')
+
+
+def _positiveInteger(text: str) -> int:
+
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError('must be at least 1, got {}'.format(value))
+
+    return value
 
 
 def _addRunArguments(parser: argparse.ArgumentParser) -> None:
@@ -663,7 +663,7 @@ def _addRunArguments(parser: argparse.ArgumentParser) -> None:
                              'use this only for freshness below cron\'s one-minute floor, or where there is no scheduler')
     parser.add_argument('--job', action='append', help='run only this job (repeatable). Implies --force, and does NOT run its predecessors')
     parser.add_argument('--force', action='store_true', help='ignore refresh windows')
-    parser.add_argument('--workers', type=int, help='override the worker count from configuration')
+    parser.add_argument('--workers', type=_positiveInteger, help='override the worker count from configuration')
     parser.add_argument('--dry-run', action='store_true',
                         help='check connections, target tables, primary keys and masking coverage without moving any rows')
 
@@ -686,11 +686,6 @@ def _buildParser() -> argparse.ArgumentParser:
     _addRunArguments(runParser)
     runParser.add_argument('--manifest', help='write a JSON record of what was masked, how, and under which key fingerprint')
     runParser.set_defaults(handler=_commandRun)
-
-    scrambleParser = subparsers.add_parser('scramble', help='deprecated: run scramble.yaml jobs, which rewrite tables in place')
-    _addCommonArguments(scrambleParser)
-    _addRunArguments(scrambleParser)
-    scrambleParser.set_defaults(handler=_commandScramble)
 
     validateParser = subparsers.add_parser('validate', help='check configuration offline, without connecting to anything')
     _addCommonArguments(validateParser)

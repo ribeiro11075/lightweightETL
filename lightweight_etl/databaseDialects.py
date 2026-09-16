@@ -71,6 +71,26 @@ def _columnDefinitions(rows: Sequence[Sequence[Any]]) -> List[ColumnDefinition]:
         ]
 
 
+def splitTableName(table: str) -> Tuple[Optional[str], str]:
+    """`schema.table` -> ('schema', 'table'); a bare `table` -> (None, 'table').
+
+    None means the connection's current schema, which is what every catalog
+    lookup below falls back to. Looking a table up without a schema at all is
+    how a same-named table in another schema used to leak its key columns into
+    an upsert.
+    """
+
+    schema, _, name = table.rpartition('.')
+
+    return schema or None, name
+
+
+def unqualifiedName(table: str) -> str:
+    """The name without its schema -- what `RENAME TO` and sp_rename take."""
+
+    return splitTableName(table)[1]
+
+
 class ColumnCategory(str, Enum):
     NUMBER = 'number'
     DATE = 'date'
@@ -155,59 +175,58 @@ class DatabaseDialect(ABC):
         """Maps one raw value from cursor.description's type_code field (a shape
         that's entirely up to the driver -- a type-name string, a numeric OID, a
         driver-specific type object, ...) to a NUMBER/DATE/TEXT ColumnCategory, for
-        Scramble's random-data generation (see scramble.py) to use
-        without knowing or caring which database the data came from.
+        discovery.py to classify columns without knowing or caring which
+        database the data came from.
 
         None means "not recognized" -- the default here, for any dialect that
-        hasn't overridden this -- and Scramble treats that exactly like an
-        explicitly untyped column: shuffled rather than regenerated, never an
-        error, since guessing wrong would be worse than not categorizing at all.
+        hasn't overridden this -- and discovery then infers a category from
+        sampled values instead.
         """
 
         return None
 
-    @abstractmethod
-    def primaryKeyQuery(self, table: str) -> str:
-        ...
+    # The three catalog queries below each bind two parameters, the schema and
+    # the table, from splitTableName. A NULL schema means the current one.
 
-    def columnsQuery(self) -> str:
-        """One table's columns, in order, as rows of (name, type, length,
-        precision, scale, nullable). Binds the table name as its one parameter.
-        """
+    def primaryKeyQuery(self) -> str:
+        """One table's primary-key columns, in key order.
 
-        raise NotImplementedError('{} cannot describe columns'.format(type(self).__name__))
-
-    def definedPrimaryKeyQuery(self) -> str:
-        """One table's primary-key columns, in key order, binding the table name.
-
-        Stricter than primaryKeyQuery, which on some dialects also returns
-        UNIQUE columns: generated DDL must declare exactly the real key.
+        The declared primary key only. UNIQUE constraints are left out: an
+        upsert matching on (id, email) treats a row whose email changed as a new
+        row, and PostgreSQL rejects an ON CONFLICT list no single index matches.
         """
 
         raise NotImplementedError('{} cannot describe primary keys'.format(type(self).__name__))
 
+    def columnsQuery(self) -> str:
+        """One table's columns, in order, as rows of (name, type, length,
+        precision, scale, nullable).
+        """
+
+        raise NotImplementedError('{} cannot describe columns'.format(type(self).__name__))
+
     def tableExistsQuery(self) -> str:
-        """A count of tables with the bound name in the current schema."""
+        """A count of tables with the bound name in the bound schema."""
 
         raise NotImplementedError('{} cannot check for tables'.format(type(self).__name__))
 
+    def _catalog(self, cursor: Any, query: str, table: str) -> List[Any]:
+
+        cursor.execute(query.format(*self.placeholders(2)), splitTableName(table))
+
+        return cursor.fetchall()
+
+    def primaryKey(self, cursor: Any, table: str) -> List[str]:
+
+        return [row[0] for row in self._catalog(cursor, self.primaryKeyQuery(), table)]
+
     def columnDefinitions(self, cursor: Any, table: str) -> List[ColumnDefinition]:
 
-        cursor.execute(self.columnsQuery().format(*self.placeholders(1)), (table,))
-
-        return _columnDefinitions(cursor.fetchall())
-
-    def definedPrimaryKey(self, cursor: Any, table: str) -> List[str]:
-
-        cursor.execute(self.definedPrimaryKeyQuery().format(*self.placeholders(1)), (table,))
-
-        return [row[0] for row in cursor.fetchall()]
+        return _columnDefinitions(self._catalog(cursor, self.columnsQuery(), table))
 
     def tableExists(self, cursor: Any, table: str) -> bool:
 
-        cursor.execute(self.tableExistsQuery().format(*self.placeholders(1)), (table,))
-
-        return bool(cursor.fetchone()[0])
+        return bool(self._catalog(cursor, self.tableExistsQuery(), table)[0][0])
 
     def foreignKeysQuery(self) -> str:
         """Every foreign key in the connection's current schema, as rows of
@@ -236,7 +255,45 @@ class DatabaseDialect(ABC):
 
     @abstractmethod
     def swapQueries(self, targetTable: str, stageTable: str, tempTable: str) -> List[str]:
-        """One or more statements to execute in order, then commit once."""
+        """One or more statements to execute in order, then commit once.
+
+        `tempTable` is in the stage table's schema, and `stageTable` must share
+        the target's (configuration checks that), since a rename never moves a
+        table between schemas. Renames take the new name unqualified.
+        """
+
+
+class _OnConflictDialect(DatabaseDialect):
+    """PostgreSQL and SQLite share `INSERT ... ON CONFLICT` word for word.
+
+    A table whose every column is part of the primary key has nothing to update
+    on a conflict, and an empty SET clause is a syntax error, so the conflict
+    action becomes DO NOTHING. The MERGE dialects drop WHEN MATCHED instead.
+
+    The stage form's `WHERE true` is SQLite's documented workaround for a
+    grammar ambiguity: without a clause after FROM, it reads ON as the start of
+    a join constraint and rejects the statement. PostgreSQL accepts it as the
+    no-op it is.
+    """
+
+    @staticmethod
+    def _onConflict(primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
+
+        if not nonPrimaryKeyColumns:
+            return 'ON CONFLICT({}) DO NOTHING'.format(','.join(primaryKeyColumns))
+
+        return 'ON CONFLICT({}) DO UPDATE SET {}'.format(
+            ','.join(primaryKeyColumns), ', '.join('{0}=excluded.{0}'.format(column) for column in nonPrimaryKeyColumns))
+
+    def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
+
+        return 'INSERT INTO {} ({}) VALUES ({}) {}'.format(table, ', '.join(allColumns), ', '.join(self.placeholders(len(allColumns))),
+                                                          self._onConflict(primaryKeyColumns, nonPrimaryKeyColumns))
+
+    def upsertFromStageQuery(self, targetTable: str, stageTable: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
+
+        return 'INSERT INTO {} ({}) SELECT {} FROM {} WHERE true {}'.format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable,
+                                                                          self._onConflict(primaryKeyColumns, nonPrimaryKeyColumns))
 
 
 class MySQLDialect(DatabaseDialect):
@@ -249,7 +306,7 @@ class MySQLDialect(DatabaseDialect):
 
         import mysql.connector
 
-        connection = mysql.connector.connect(user=settings.user, password=settings.password, host=settings.host, database=settings.database, port=settings.port)
+        connection = mysql.connector.connect(user=settings.user, password=settings.plainPassword(), host=settings.host, database=settings.database, port=settings.port)
         cursor = connection.cursor(buffered=True)
 
         return connection, cursor
@@ -317,11 +374,6 @@ class MySQLDialect(DatabaseDialect):
         return None
 
 
-    def primaryKeyQuery(self, table: str) -> str:
-
-        return "SELECT k.COLUMN_NAME FROM information_schema.table_constraints t LEFT JOIN information_schema.key_column_usage k USING(constraint_name, table_schema, table_name) WHERE t.constraint_type='PRIMARY KEY' AND t.table_name='{}'".format(table)
-
-
     def foreignKeysQuery(self) -> str:
 
         return ("SELECT table_name, column_name, referenced_table_name, referenced_column_name, constraint_name "
@@ -333,62 +385,54 @@ class MySQLDialect(DatabaseDialect):
     def columnsQuery(self) -> str:
 
         return ("SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale, is_nullable "
-                "FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = {} ORDER BY ordinal_position")
+                "FROM information_schema.columns WHERE table_schema = COALESCE({}, DATABASE()) AND table_name = {} ORDER BY ordinal_position")
 
 
-    def definedPrimaryKeyQuery(self) -> str:
+    def primaryKeyQuery(self) -> str:
 
         return ("SELECT column_name FROM information_schema.key_column_usage "
-                "WHERE table_schema = DATABASE() AND table_name = {} AND constraint_name = 'PRIMARY' ORDER BY ordinal_position")
+                "WHERE table_schema = COALESCE({}, DATABASE()) AND table_name = {} AND constraint_name = 'PRIMARY' ORDER BY ordinal_position")
 
 
     def tableExistsQuery(self) -> str:
 
-        return "SELECT count(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = {}"
+        return "SELECT count(*) FROM information_schema.tables WHERE table_schema = COALESCE({}, DATABASE()) AND table_name = {}"
+
+
+    @staticmethod
+    def _onDuplicateKey(table: str, primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
+        """A key-only table has nothing to update, so the update is a no-op
+        assignment of its own key -- an empty SET clause is a syntax error.
+
+        Not INSERT IGNORE, which also downgrades truncation, NOT NULL and
+        foreign-key errors to warnings, silently dropping or mangling rows.
+        """
+
+        if not nonPrimaryKeyColumns:
+            return 'ON DUPLICATE KEY UPDATE {0}.{1}={0}.{1}'.format(table, primaryKeyColumns[0])
+
+        return 'ON DUPLICATE KEY UPDATE {}'.format(', '.join('{0}=VALUES({0})'.format(column) for column in nonPrimaryKeyColumns))
 
 
     def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
-        """A table whose every column is part of the primary key has nothing to
-        update on a conflict, and an empty SET clause is a syntax error -- so the
-        conflict action becomes "do nothing" instead. OracleDialect and
-        MSSQLDialect already handled this by dropping WHEN MATCHED from their
-        MERGE; this is the same case on the INSERT-based dialects, which used to
-        emit a dangling `ON DUPLICATE KEY UPDATE` and fail at the database.
-        """
 
-        allColumnVariables = self.placeholders(len(allColumns))
-
-        if not nonPrimaryKeyColumns:
-            return 'INSERT IGNORE INTO {} ({}) VALUES ({})'.format(table, ', '.join(allColumns), ', '.join(allColumnVariables))
-
-        nonPrimaryKeyColumnVariables = [column + '=VALUES(' + column + ')' for column in nonPrimaryKeyColumns]
-
-        return 'INSERT INTO {} ({}) VALUES ({}) ON DUPLICATE KEY UPDATE {}'.format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ', '.join(nonPrimaryKeyColumnVariables))
+        return 'INSERT INTO {} ({}) VALUES ({}) {}'.format(table, ', '.join(allColumns), ', '.join(self.placeholders(len(allColumns))),
+                                                          self._onDuplicateKey(table, primaryKeyColumns, nonPrimaryKeyColumns))
 
 
     def upsertFromStageQuery(self, targetTable: str, stageTable: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
-        """A table whose every column is part of the primary key has nothing to
-        update on a conflict, and an empty SET clause is a syntax error -- so the
-        conflict action becomes "do nothing" instead. OracleDialect and
-        MSSQLDialect already handled this by dropping WHEN MATCHED from their
-        MERGE; this is the same case on the INSERT-based dialects, which used to
-        emit a dangling `ON DUPLICATE KEY UPDATE` and fail at the database.
-        """
 
-        if not nonPrimaryKeyColumns:
-            return 'INSERT IGNORE INTO {} ({}) SELECT {} FROM {}'.format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable)
-
-        nonPrimaryKeyColumnVariables = [column + '=VALUES(' + column + ')' for column in nonPrimaryKeyColumns]
-
-        return 'INSERT INTO {} ({}) SELECT {} FROM {} ON DUPLICATE KEY UPDATE {}'.format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable, ', '.join(nonPrimaryKeyColumnVariables))
+        return 'INSERT INTO {} ({}) SELECT {} FROM {} {}'.format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable,
+                                                                self._onDuplicateKey(targetTable, primaryKeyColumns, nonPrimaryKeyColumns))
 
 
     def swapQueries(self, targetTable: str, stageTable: str, tempTable: str) -> List[str]:
+        """One atomic statement; RENAME TABLE takes qualified names on both sides."""
 
         return ['RENAME TABLE {} TO {}, {} TO {}, {} TO {}'.format(stageTable, tempTable, targetTable, stageTable, tempTable, targetTable)]
 
 
-class PostgreSQLDialect(DatabaseDialect):
+class PostgreSQLDialect(_OnConflictDialect):
 
     _NUMBER_OIDS = {20, 21, 23}
     _DATE_OIDS = {1114, 1018}
@@ -398,7 +442,7 @@ class PostgreSQLDialect(DatabaseDialect):
 
         import psycopg2
 
-        connection = psycopg2.connect(user=settings.user, password=settings.password, host=settings.host, database=settings.database, port=settings.port)
+        connection = psycopg2.connect(user=settings.user, password=settings.plainPassword(), host=settings.host, database=settings.database, port=settings.port)
         cursor = connection.cursor()
 
         return connection, cursor
@@ -443,11 +487,6 @@ class PostgreSQLDialect(DatabaseDialect):
         return None
 
 
-    def primaryKeyQuery(self, table: str) -> str:
-
-        return "SELECT c.column_name FROM information_schema.key_column_usage AS c LEFT JOIN information_schema.table_constraints AS t ON t.constraint_name=c.constraint_name WHERE t.table_name='{}' AND t.constraint_type in ('PRIMARY KEY', 'UNIQUE')".format(table)
-
-
     def foreignKeysQuery(self) -> str:
         """From pg_catalog rather than information_schema, which can't pair a
         composite key's columns with the columns they reference.
@@ -467,69 +506,44 @@ class PostgreSQLDialect(DatabaseDialect):
 
     # PostgreSQL folds unquoted names to lower case, so a table created as
     # Customers is stored as customers; the lookups below fold the same way.
+    # The ::text casts give a NULL schema a type, which lower() needs.
 
     def columnsQuery(self) -> str:
 
         return ("SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale, is_nullable "
-                "FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = lower({}) ORDER BY ordinal_position")
+                "FROM information_schema.columns WHERE table_schema = COALESCE(lower({}::text), current_schema()) "
+                "AND table_name = lower({}::text) ORDER BY ordinal_position")
 
 
-    def definedPrimaryKeyQuery(self) -> str:
+    def primaryKeyQuery(self) -> str:
 
         return ("SELECT att.attname FROM pg_index idx "
                 "JOIN pg_class cl ON cl.oid = idx.indrelid "
                 "JOIN pg_namespace ns ON ns.oid = cl.relnamespace "
                 "CROSS JOIN LATERAL unnest(idx.indkey) WITH ORDINALITY AS k(attnum, position) "
                 "JOIN pg_attribute att ON att.attrelid = cl.oid AND att.attnum = k.attnum "
-                "WHERE idx.indisprimary AND ns.nspname = current_schema() AND cl.relname = lower({}) ORDER BY k.position")
+                "WHERE idx.indisprimary AND ns.nspname = COALESCE(lower({}::text), current_schema()) AND cl.relname = lower({}::text) "
+                "ORDER BY k.position")
 
 
     def tableExistsQuery(self) -> str:
 
-        return "SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = lower({})"
-
-
-    def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
-
-        """A table whose every column is part of the primary key has nothing to
-        update on a conflict, and an empty SET clause is a syntax error -- so the
-        conflict action becomes "do nothing" instead. OracleDialect and
-        MSSQLDialect already handled this by dropping WHEN MATCHED from their
-        MERGE; this is the same case on the INSERT-based dialects, which used to
-        emit a dangling `DO UPDATE SET` and fail at the database.
-        """
-
-        allColumnVariables = self.placeholders(len(allColumns))
-
-        if not nonPrimaryKeyColumns:
-            return 'INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO NOTHING'.format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ','.join(primaryKeyColumns))
-
-        nonPrimaryKeyColumnVariables = [column + '=EXCLUDED.' + column for column in nonPrimaryKeyColumns]
-
-        return 'INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO UPDATE SET {}'.format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ','.join(primaryKeyColumns), ', '.join(nonPrimaryKeyColumnVariables))
-
-
-    def upsertFromStageQuery(self, targetTable: str, stageTable: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
-
-        """A table whose every column is part of the primary key has nothing to
-        update on a conflict, and an empty SET clause is a syntax error -- so the
-        conflict action becomes "do nothing" instead. OracleDialect and
-        MSSQLDialect already handled this by dropping WHEN MATCHED from their
-        MERGE; this is the same case on the INSERT-based dialects, which used to
-        emit a dangling `DO UPDATE SET` and fail at the database.
-        """
-
-        if not nonPrimaryKeyColumns:
-            return 'INSERT INTO {} ({}) SELECT {} FROM {} ON CONFLICT({}) DO NOTHING'.format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable, ','.join(primaryKeyColumns))
-
-        nonPrimaryKeyColumnVariables = [column + '=EXCLUDED.' + column for column in nonPrimaryKeyColumns]
-
-        return 'INSERT INTO {} ({}) SELECT {} FROM {} ON CONFLICT({}) DO UPDATE SET {}'.format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable, ','.join(primaryKeyColumns), ', '.join(nonPrimaryKeyColumnVariables))
+        return ("SELECT count(*) FROM information_schema.tables "
+                "WHERE table_schema = COALESCE(lower({}::text), current_schema()) AND table_name = lower({}::text)")
 
 
     def swapQueries(self, targetTable: str, stageTable: str, tempTable: str) -> List[str]:
+        """Three renames in one transaction: PostgreSQL DDL is transactional, so
+        a failure part-way leaves both tables as they were.
 
-        return ['ALTER TABLE {} RENAME TO {}; ALTER TABLE {} RENAME TO {}; ALTER TABLE {} RENAME TO {}'.format(stageTable, tempTable, targetTable, stageTable, tempTable, targetTable)]
+        A view or foreign key that references the target follows the table
+        itself, not its name, so after a swap it points at what is now the
+        stage table. Recreate such views after the swap (postTargetAdhocQueries),
+        or use a stage-backed upsert instead.
+        """
+
+        return ['ALTER TABLE {} RENAME TO {}; ALTER TABLE {} RENAME TO {}; ALTER TABLE {} RENAME TO {}'.format(
+            stageTable, unqualifiedName(tempTable), targetTable, unqualifiedName(stageTable), tempTable, unqualifiedName(targetTable))]
 
 
 def _oracleLobsAsValues(cursor: Any, metadata: Any) -> Any:
@@ -554,6 +568,15 @@ def _oracleLobsAsValues(cursor: Any, metadata: Any) -> Any:
     return cursor.var(conversion, arraysize=cursor.arraysize) if conversion is not None else None
 
 
+def _renameInThreeSteps(targetTable: str, stageTable: str, tempTable: str) -> List[str]:
+
+    return [
+        'ALTER TABLE {} RENAME TO {}'.format(stageTable, unqualifiedName(tempTable)),
+        'ALTER TABLE {} RENAME TO {}'.format(targetTable, unqualifiedName(stageTable)),
+        'ALTER TABLE {} RENAME TO {}'.format(tempTable, unqualifiedName(targetTable)),
+        ]
+
+
 class OracleDialect(DatabaseDialect):
 
     _NUMBER_TYPE_NAMES = {'DB_TYPE_NUMBER', 'DB_TYPE_BINARY_INTEGER', 'DB_TYPE_BINARY_FLOAT', 'DB_TYPE_BINARY_DOUBLE'}
@@ -573,7 +596,7 @@ class OracleDialect(DatabaseDialect):
 
         import oracledb
 
-        connection = oracledb.connect(user=settings.user, password=settings.password, host=settings.host, port=settings.port,
+        connection = oracledb.connect(user=settings.user, password=settings.plainPassword(), host=settings.host, port=settings.port,
                                        service_name=settings.serviceName, sid=settings.sid)
         connection.outputtypehandler = _oracleLobsAsValues
         cursor = connection.cursor()
@@ -624,13 +647,6 @@ class OracleDialect(DatabaseDialect):
         return None
 
 
-    def primaryKeyQuery(self, table: str) -> str:
-
-        return ("SELECT cols.column_name FROM all_constraints cons JOIN all_cons_columns cols "
-                "ON cons.constraint_name = cols.constraint_name AND cons.owner = cols.owner "
-                "WHERE cons.constraint_type IN ('P', 'U') AND UPPER(cols.table_name) = UPPER('{}')").format(table)
-
-
     def foreignKeysQuery(self) -> str:
 
         return ("SELECT c.table_name, cc.column_name, rc.table_name, rcc.column_name, c.constraint_name "
@@ -642,23 +658,28 @@ class OracleDialect(DatabaseDialect):
                 "ORDER BY c.table_name, c.constraint_name, cc.position")
 
 
+    # The all_* views, filtered to one owner: the bound schema, or else the
+    # session's current schema -- which ALTER SESSION SET CURRENT_SCHEMA moves
+    # and the user_* views would not follow.
+    OWNER = "COALESCE(UPPER({}), SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA'))"
+
     def columnsQuery(self) -> str:
         """CHAR_LENGTH rather than DATA_LENGTH, which is in bytes."""
 
         return ("SELECT column_name, data_type, CASE WHEN char_length > 0 THEN char_length END, data_precision, data_scale, nullable "
-                "FROM user_tab_columns WHERE table_name = UPPER({}) ORDER BY column_id")
+                "FROM all_tab_columns WHERE owner = " + self.OWNER + " AND table_name = UPPER({}) ORDER BY column_id")
 
 
-    def definedPrimaryKeyQuery(self) -> str:
+    def primaryKeyQuery(self) -> str:
 
-        return ("SELECT cols.column_name FROM user_constraints cons "
-                "JOIN user_cons_columns cols ON cols.constraint_name = cons.constraint_name "
-                "WHERE cons.constraint_type = 'P' AND cons.table_name = UPPER({}) ORDER BY cols.position")
+        return ("SELECT cols.column_name FROM all_constraints cons "
+                "JOIN all_cons_columns cols ON cols.owner = cons.owner AND cols.constraint_name = cons.constraint_name "
+                "WHERE cons.constraint_type = 'P' AND cons.owner = " + self.OWNER + " AND cons.table_name = UPPER({}) ORDER BY cols.position")
 
 
     def tableExistsQuery(self) -> str:
 
-        return "SELECT count(*) FROM user_tables WHERE table_name = UPPER({})"
+        return "SELECT count(*) FROM all_tables WHERE owner = " + self.OWNER + " AND table_name = UPPER({})"
 
 
     def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
@@ -677,17 +698,14 @@ class OracleDialect(DatabaseDialect):
 
 
     def swapQueries(self, targetTable: str, stageTable: str, tempTable: str) -> List[str]:
-        """Three separate statements: Oracle's cursor.execute() runs exactly one
-        statement (an inherent limitation of Oracle's own SQL engine, not specific
-        to any particular Python driver), unlike mysql's single multi-target RENAME
-        TABLE or postgres's semicolon-chained simple-query execution.
+        """Three separate statements: Oracle's cursor.execute() runs exactly one.
+
+        Oracle commits every DDL statement on its own, so unlike the other
+        dialects this swap is not atomic. A failure between the renames leaves
+        the target under the temporary name, and the job's error says so.
         """
 
-        return [
-            'ALTER TABLE {} RENAME TO {}'.format(stageTable, tempTable),
-            'ALTER TABLE {} RENAME TO {}'.format(targetTable, stageTable),
-            'ALTER TABLE {} RENAME TO {}'.format(tempTable, targetTable),
-            ]
+        return _renameInThreeSteps(targetTable, stageTable, tempTable)
 
 
 class MSSQLDialect(DatabaseDialect):
@@ -705,9 +723,9 @@ class MSSQLDialect(DatabaseDialect):
         # doesn't fall back to its own default ('1433') when explicitly passed
         # None -- omit it entirely rather than pass a broken value through
         if settings.port is not None:
-            connection = pymssql.connect(server=settings.host, port=str(settings.port), user=settings.user, password=settings.password, database=settings.database)
+            connection = pymssql.connect(server=settings.host, port=str(settings.port), user=settings.user, password=settings.plainPassword(), database=settings.database)
         else:
-            connection = pymssql.connect(server=settings.host, user=settings.user, password=settings.password, database=settings.database)
+            connection = pymssql.connect(server=settings.host, user=settings.user, password=settings.plainPassword(), database=settings.database)
         cursor = connection.cursor()
 
         return connection, cursor
@@ -716,13 +734,6 @@ class MSSQLDialect(DatabaseDialect):
     def placeholders(self, count: int) -> List[str]:
 
         return count * ['%s']
-
-
-    def primaryKeyQuery(self, table: str) -> str:
-
-        return ("SELECT k.COLUMN_NAME FROM information_schema.table_constraints t "
-                "JOIN information_schema.key_column_usage k ON t.constraint_name = k.constraint_name AND t.table_name = k.table_name "
-                "WHERE t.constraint_type = 'PRIMARY KEY' AND t.table_name = '{}'").format(table)
 
 
     def foreignKeysQuery(self) -> str:
@@ -742,19 +753,20 @@ class MSSQLDialect(DatabaseDialect):
         """character_maximum_length is -1 for (MAX), which schema.py reads as unbounded."""
 
         return ("SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale, is_nullable "
-                "FROM information_schema.columns WHERE table_schema = SCHEMA_NAME() AND table_name = {} ORDER BY ordinal_position")
+                "FROM information_schema.columns WHERE table_schema = COALESCE({}, SCHEMA_NAME()) AND table_name = {} ORDER BY ordinal_position")
 
 
-    def definedPrimaryKeyQuery(self) -> str:
+    def primaryKeyQuery(self) -> str:
 
         return ("SELECT k.column_name FROM information_schema.table_constraints t "
                 "JOIN information_schema.key_column_usage k ON k.constraint_name = t.constraint_name AND k.table_schema = t.table_schema "
-                "WHERE t.constraint_type = 'PRIMARY KEY' AND t.table_schema = SCHEMA_NAME() AND t.table_name = {} ORDER BY k.ordinal_position")
+                "WHERE t.constraint_type = 'PRIMARY KEY' AND t.table_schema = COALESCE({}, SCHEMA_NAME()) AND t.table_name = {} "
+                "ORDER BY k.ordinal_position")
 
 
     def tableExistsQuery(self) -> str:
 
-        return "SELECT count(*) FROM information_schema.tables WHERE table_schema = SCHEMA_NAME() AND table_name = {}"
+        return "SELECT count(*) FROM information_schema.tables WHERE table_schema = COALESCE({}, SCHEMA_NAME()) AND table_name = {}"
 
 
     def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
@@ -777,16 +789,21 @@ class MSSQLDialect(DatabaseDialect):
     def swapQueries(self, targetTable: str, stageTable: str, tempTable: str) -> List[str]:
         """sp_rename is a stored procedure, not DDL -- EXEC calls chain fine in one
         execute(), so (unlike Oracle) this doesn't need three separate statements.
+        It runs inside the connection's transaction, so the swap is atomic.
+
+        The new name is taken literally: a qualified one would create a table
+        whose name contains the dot.
         """
 
-        return ["EXEC sp_rename '{0}', '{2}'; EXEC sp_rename '{1}', '{0}'; EXEC sp_rename '{2}', '{1}';".format(stageTable, targetTable, tempTable)]
+        return ["EXEC sp_rename '{}', '{}'; EXEC sp_rename '{}', '{}'; EXEC sp_rename '{}', '{}';".format(
+            stageTable, unqualifiedName(tempTable), targetTable, unqualifiedName(stageTable), tempTable, unqualifiedName(targetTable))]
 
     # columnCategory isn't overridden here -- pymssql's cursor.description type
     # codes are its own DBAPITypeObject constants (pymssql.NUMBER, .STRING, ...),
     # not reliably distinguishable without importing pymssql itself (unlike
     # Oracle's DB_TYPE_* objects, which expose a stable, driver-import-free `.name`
-    # string). Falls back to the base class's None, so Scramble shuffles rather
-    # than regenerates every MSSQL column.
+    # string). Falls back to the base class's None, so discovery infers each
+    # column's category from sampled values instead.
 
 
 class MariaDBDialect(MySQLDialect):
@@ -821,7 +838,7 @@ def _registerSqliteAdapters(sqlite3: Any) -> None:
     sqlite3.register_adapter(uuid.UUID, str)
 
 
-class SQLiteDialect(DatabaseDialect):
+class SQLiteDialect(_OnConflictDialect):
     """settings.database is a filesystem path (or ":memory:") -- SQLite is an
     embedded, file-based database with no server, so user/password/host/port are
     unused (DatabaseConnectionConfig only requires them for every other type).
@@ -829,7 +846,7 @@ class SQLiteDialect(DatabaseDialect):
     columnCategory isn't overridden here -- sqlite3's cursor.description always
     reports None for a column's type (SQLite is dynamically typed; there's no
     fixed type to report), so there's nothing to categorize. Falls back to the
-    base class's None -- Scramble shuffles rather than regenerates every column.
+    base class's None, and discovery infers a category from sampled values.
     """
 
     def connect(self, settings: DatabaseConnectionConfig) -> Tuple[Any, Any]:
@@ -874,15 +891,15 @@ class SQLiteDialect(DatabaseDialect):
         return 'DELETE FROM {}'.format(table)
 
 
-    def primaryKeyQuery(self, table: str) -> str:
-        """pragma_table_info is SQLite's table-valued-function form of `PRAGMA
-        table_info(table)` (available as a queryable "table" since 3.16, wrapping
-        the equivalent PRAGMA statement) -- used instead of the bare PRAGMA so the
-        result shape (one column-name column) matches every other dialect's
-        primaryKeyQuery, which Database.getPrimaryColumnNames reads as row[0].
-        """
+    # SQLite describes tables through pragma table-valued functions, whose
+    # optional second argument is the attached database -- SQLite's schema.
 
-        return "SELECT name FROM pragma_table_info('{}') WHERE pk > 0 ORDER BY pk".format(table)
+    def primaryKey(self, cursor: Any, table: str) -> List[str]:
+
+        schema, name = splitTableName(table)
+        cursor.execute('SELECT name FROM pragma_table_info(?, ?) WHERE pk > 0 ORDER BY pk', (name, schema or 'main'))
+
+        return [row[0] for row in cursor.fetchall()]
 
 
     def columnDefinitions(self, cursor: Any, table: str) -> List[ColumnDefinition]:
@@ -890,32 +907,27 @@ class SQLiteDialect(DatabaseDialect):
         `DECIMAL(10,2)`; the length, precision and scale are parsed out of it.
         """
 
-        cursor.execute('SELECT name, type, "notnull", pk FROM pragma_table_info(?) ORDER BY cid', (table,))
+        schema, name = splitTableName(table)
+        cursor.execute('SELECT name, type, "notnull", pk FROM pragma_table_info(?, ?) ORDER BY cid', (name, schema or 'main'))
         definitions = []
 
-        for name, declared, notNull, primaryKey in cursor.fetchall():
+        for columnName, declared, notNull, primaryKey in cursor.fetchall():
             match = re.match(r'^\s*([A-Za-z ]+?)\s*(?:\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\))?\s*$', declared or '')
             dataType = match.group(1) if match else (declared or '')
             first = int(match.group(2)) if match and match.group(2) else None
             second = int(match.group(3)) if match and match.group(3) else None
             numeric = any(word in dataType.upper() for word in ('DEC', 'NUM'))
             definitions.append(ColumnDefinition(
-                name=name, dataType=dataType, length=None if numeric else first, precision=first if numeric else None,
+                name=columnName, dataType=dataType, length=None if numeric else first, precision=first if numeric else None,
                 scale=second if numeric else None, nullable=not notNull and not primaryKey))
 
         return definitions
 
 
-    def definedPrimaryKey(self, cursor: Any, table: str) -> List[str]:
-
-        cursor.execute('SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk', (table,))
-
-        return [row[0] for row in cursor.fetchall()]
-
-
     def tableExists(self, cursor: Any, table: str) -> bool:
 
-        cursor.execute("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND lower(name) = lower(?)", (table,))
+        schema, name = splitTableName(table)
+        cursor.execute("SELECT count(*) FROM {}.sqlite_master WHERE type = 'table' AND lower(name) = lower(?)".format(schema or 'main'), (name,))
 
         return bool(cursor.fetchone()[0])
 
@@ -943,8 +955,7 @@ class SQLiteDialect(DatabaseDialect):
 
                 if referencedColumn is None:
                     if referencedTable not in primaryKeys:
-                        cursor.execute(self.primaryKeyQuery(referencedTable))
-                        primaryKeys[referencedTable] = [row[0] for row in cursor.fetchall()]
+                        primaryKeys[referencedTable] = self.primaryKey(cursor, referencedTable)
                     referencedColumn = primaryKeys[referencedTable][position]
 
                 rows.append((table, column, referencedTable, referencedColumn, '{}_fk{}'.format(table, constraintId)))
@@ -952,49 +963,11 @@ class SQLiteDialect(DatabaseDialect):
         return _groupForeignKeys(rows)
 
 
-    def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
-
-        """A table whose every column is part of the primary key has nothing to
-        update on a conflict, and an empty SET clause is a syntax error -- so the
-        conflict action becomes "do nothing" instead. OracleDialect and
-        MSSQLDialect already handled this by dropping WHEN MATCHED from their
-        MERGE; this is the same case on the INSERT-based dialects.
-        """
-
-        allColumnVariables = self.placeholders(len(allColumns))
-
-        if not nonPrimaryKeyColumns:
-            return 'INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO NOTHING'.format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ','.join(primaryKeyColumns))
-
-        nonPrimaryKeyColumnVariables = [column + '=excluded.' + column for column in nonPrimaryKeyColumns]
-
-        return 'INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO UPDATE SET {}'.format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ','.join(primaryKeyColumns), ', '.join(nonPrimaryKeyColumnVariables))
-
-
-    def upsertFromStageQuery(self, targetTable: str, stageTable: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
-        """The trailing "WHERE true" is SQLite's own documented workaround for a
-        grammar ambiguity: `INSERT INTO ... SELECT ... ON CONFLICT` parses "ON" as
-        if it could start a join-constraint inside the SELECT, and SQLite rejects
-        the statement outright ("near \"DO\": syntax error") unless the SELECT
-        carries some clause after its FROM to disambiguate -- a no-op WHERE is the
-        simplest one, and doesn't affect which rows are selected.
-        """
-
-        if not nonPrimaryKeyColumns:
-            return 'INSERT INTO {} ({}) SELECT {} FROM {} WHERE true ON CONFLICT({}) DO NOTHING'.format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable, ','.join(primaryKeyColumns))
-
-        nonPrimaryKeyColumnVariables = [column + '=excluded.' + column for column in nonPrimaryKeyColumns]
-
-        return 'INSERT INTO {} ({}) SELECT {} FROM {} WHERE true ON CONFLICT({}) DO UPDATE SET {}'.format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable, ','.join(primaryKeyColumns), ', '.join(nonPrimaryKeyColumnVariables))
-
-
     def swapQueries(self, targetTable: str, stageTable: str, tempTable: str) -> List[str]:
-        """Three separate statements, same reasoning as OracleDialect: sqlite3's
-        cursor.execute() runs exactly one statement at a time.
+        """Three statements, since sqlite3's cursor.execute() runs one at a time,
+        inside an explicit transaction. sqlite3 doesn't open one implicitly
+        before DDL, so without the BEGIN each rename would commit on its own and
+        a failure part-way would leave the target missing.
         """
 
-        return [
-            'ALTER TABLE {} RENAME TO {}'.format(stageTable, tempTable),
-            'ALTER TABLE {} RENAME TO {}'.format(targetTable, stageTable),
-            'ALTER TABLE {} RENAME TO {}'.format(tempTable, targetTable),
-            ]
+        return ['BEGIN'] + _renameInThreeSteps(targetTable, stageTable, tempTable)

@@ -224,7 +224,7 @@ def test_sqlite_columns_are_read_from_their_declared_types(sqliteDatabase):
 
 
 def test_the_defined_primary_key_keeps_its_declared_order(sqliteDatabase):
-    assert sqliteDatabase.getDefinedPrimaryKey('orders') == ['line', 'id']
+    assert sqliteDatabase.getPrimaryColumnNames('orders') == ['line', 'id']
 
 
 def test_table_existence_is_case_insensitive_on_sqlite(sqliteDatabase):
@@ -251,7 +251,7 @@ def test_generated_sqlite_ddl_round_trips(sqliteDatabase, tmp_path):
         for statement in createStatements(SQLITE, SQLITE, definitions):
             copy.alter(statement.sql)
 
-        assert copy.getDefinedPrimaryKey('orders') == ['line', 'id']
+        assert copy.getPrimaryColumnNames('orders') == ['line', 'id']
         assert copy.getForeignKeys() == sqliteDatabase.getForeignKeys()
         assert [definition.name for definition in copy.getColumnDefinitions('customers')] == ['id', 'email', 'balance', 'active', 'note']
 

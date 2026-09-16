@@ -287,16 +287,6 @@ def test_dry_run_passes_a_complete_masking_policy(maskedWorkspace, capsys):
     assert 'no rows moved' in capsys.readouterr().out
 
 
-def test_scramble_warns_that_it_is_deprecated(workspace, caplog):
-    (workspace / 'configuration' / 'scramble.yaml').write_text(
-        'workers: 1\njobs:\n  s:\n    active: false\n    database: demo\n    table: tgt\n    randomSalt: salt\n')
-
-    with pytest.warns(DeprecationWarning):
-        assert main(['scramble', '--quiet']) == EXIT_SUCCESS
-
-    assert 'deprecated' in caplog.text
-
-
 @pytest.fixture
 def schemaWorkspace(workspace):
     connection = sqlite3.connect(str(workspace / 'demo.db'))
@@ -468,3 +458,55 @@ def test_clear_rolls_back_and_exits_nonzero_when_a_delete_is_refused(schemaWorks
 
     assert main(['clear', '--quiet', '--yes']) == EXIT_JOBS_DID_NOT_SUCCEED
     assert 'nothing was cleared' in caplog.text
+
+
+def test_run_keeps_its_memory_beside_the_configuration(workspace):
+    """Not in the working directory, which differs between a cron entry, a
+    shell and a container -- losing the file silently resets every watermark.
+    """
+    assert main(['run', '--quiet']) == EXIT_SUCCESS
+
+    assert (workspace / 'configuration' / 'memory.yaml').exists()
+    assert not (workspace / 'memory.yaml').exists()
+
+
+def test_run_still_uses_a_memory_file_left_in_the_working_directory(workspace, caplog):
+    """An upgrade must not forget the run state an earlier version kept in ./memory.yaml."""
+    (workspace / 'memory.yaml').write_text('lastRun: {}\nwatermarks: {}\n')
+
+    assert main(['run', '--quiet']) == EXIT_SUCCESS
+
+    assert 'loadRows' in (workspace / 'memory.yaml').read_text()
+    assert not (workspace / 'configuration' / 'memory.yaml').exists()
+    assert 'Move the file there' in caplog.text
+
+
+def test_a_second_run_sharing_the_memory_file_refuses_to_start(workspace, caplog):
+    """Overlapping runs -- a cron interval shorter than a slow run -- would run
+    the same jobs at once, with two swaps renaming the same tables.
+    """
+    from lightweight_etl.memory import exclusiveRun
+
+    with exclusiveRun(workspace / 'configuration' / 'memory.yaml.run.lock'):
+        assert main(['run', '--quiet']) == EXIT_JOBS_DID_NOT_SUCCEED
+
+    assert 'another run is already using' in caplog.text
+    assert _targetRowCount(workspace) == 0
+
+    assert main(['run', '--quiet']) == EXIT_SUCCESS
+
+
+def test_an_interrupted_run_exits_130(workspace, monkeypatch):
+    from lightweight_etl.cli import EXIT_INTERRUPTED
+    from lightweight_etl.runner import RunResult
+
+    monkeypatch.setattr('lightweight_etl.cli.runDataJobs', lambda **kwargs: RunResult(outcomes=[], interrupted=True))
+
+    assert main(['run', '--quiet']) == EXIT_INTERRUPTED
+
+
+def test_workers_must_be_a_positive_number(workspace, capsys):
+    with pytest.raises(SystemExit):
+        main(['run', '--quiet', '--workers', '0'])
+
+    assert 'must be at least 1' in capsys.readouterr().err

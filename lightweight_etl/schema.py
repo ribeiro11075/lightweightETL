@@ -273,7 +273,7 @@ def readTable(database: Any, table: str, foreignKeys: Sequence[ForeignKey]) -> T
     name = next((foreignKey.table for foreignKey in foreignKeys if foreignKey.table.upper() == table.upper()), None) \
         or next((foreignKey.referencedTable for foreignKey in foreignKeys if foreignKey.referencedTable.upper() == table.upper()), table)
 
-    return TableDefinition(name=name, columns=columns, primaryKey=database.getDefinedPrimaryKey(table),
+    return TableDefinition(name=name, columns=columns, primaryKey=database.getPrimaryColumnNames(table),
                            foreignKeys=[foreignKey for foreignKey in foreignKeys if foreignKey.table.upper() == table.upper()])
 
 

@@ -91,5 +91,5 @@ def test_a_whole_database_configuration_can_be_kept_out_of_the_file(monkeypatch)
 
     configuration = Configuration.validateDatabaseConfiguration(expandEnvironmentVariables(raw))
 
-    assert configuration['prod'].password == 'hunter2'
+    assert configuration['prod'].plainPassword() == 'hunter2'
     assert configuration['prod'].port == 5432

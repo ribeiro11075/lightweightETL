@@ -8,19 +8,20 @@ Everything `lightweight-etl` does is described by YAML. This is the field refere
 - [Credentials](#credentials)
 - [`database.yaml`](#databaseyaml)
 - [`jobs.yaml` — data jobs](#jobsyaml--data-jobs)
-- [`scramble.yaml` — deprecated](#scrambleyaml--deprecated)
 - [Validation](#validation)
 
 
 ## Where configuration is found
 
-The CLI looks for a directory holding `database.yaml` plus either `jobs.yaml` (for `run`) or `scramble.yaml` (for `scramble`), in this order. `discover` and `subset` read only `database.yaml`.
+The CLI looks for a directory holding `database.yaml` and `jobs.yaml`, in this order. `discover`, `subset` and `schema` read only `database.yaml`.
 
 1. `--config DIR`
 2. `$LIGHTWEIGHT_ETL_CONFIG`
 3. `./configuration`
 
 `--jobs FILE` and `--databases FILE` override either file individually.
+
+`run` and `jobs` keep run state (last-run times and watermarks) in `memory.yaml` in the same directory, or wherever `--memory FILE` says. It sits beside the configuration rather than in the working directory, so a cron entry and a shell that start in different places still share it. A `memory.yaml` left in the working directory by an earlier version is still used, with a warning, until you move it.
 
 
 ## Credentials
@@ -60,7 +61,7 @@ warehouse:
 | --- | --- | --- |
 | `type` | required | `oracle`, `mysql`, `postgresql`, `mssql`, `mariadb` or `sqlite` |
 | `database` | required | The database name. For `sqlite`, a file path or `:memory:`. |
-| `host`, `user`, `password` | required except for `sqlite` | SQLite is a local file with no server or authentication, so these are omitted for it. |
+| `host`, `user`, `password` | required except for `sqlite` | SQLite is a local file with no server or authentication, so these are omitted for it. The password is held as a secret, so it never appears in a log line or a traceback. |
 | `port` | optional | The driver's standard port when omitted. |
 | `serviceName` / `sid` | oracle only | Exactly one is required for `type: oracle`. |
 
@@ -84,7 +85,7 @@ jobs:
 
 | Field | | |
 | --- | --- | --- |
-| `workers` | required | Worker processes to run jobs concurrently. |
+| `workers` | required | Worker processes to run jobs concurrently, at least 1. |
 | `cycleSleepSeconds` | optional, `0.5` | Pause between cycles under `--forever`. |
 | `jobs` | required | A map of job name to job definition. |
 
@@ -94,7 +95,7 @@ jobs:
 | --- | --- | --- |
 | `active` | required | Whether the job runs at all. |
 | `refresh` | optional | Minimum minutes between runs. Applies across separate invocations too. A predecessor inside its own refresh window is **not** waited for — see [refresh and predecessors](design.md#refresh-and-predecessors). |
-| `predecessors` | optional | Jobs that must complete first. A job whose predecessor fails is **skipped**. |
+| `predecessors` | optional | Jobs that must complete first. A job whose predecessor fails is **skipped**. Predecessors that form a cycle are a validation error. |
 | `retries` | optional, `0` | Extra attempts after a failure, with exponential backoff. See [retries](design.md#retries). |
 | `retryDelaySeconds` | optional, `5.0` | The first backoff delay; each subsequent one doubles. |
 
@@ -129,22 +130,22 @@ sourceQueryColumnTransforms:
 
 `currency`, `upper`, `lower`, `strip`, `truncate`, `nullIfBlank`, `digitsOnly`, `epochSecondsToDate` (UTC), `booleanToYN`. None of them is privileged; your own module works the same way.
 
-Transforms apply to **`sourceQuery`'s own result columns**, not the target's — they act on a value as extracted, before it's mapped to a target column. Naming a column the query doesn't return fails before anything is written. A transformer that raises on a value fails the job, with the column and offending value in the error.
+Transforms apply to **`sourceQuery`'s own result columns**, not the target's — they act on a value as extracted, before it's mapped to a target column. Naming a column the query doesn't return fails before anything is written. A transformer that raises on a value fails the job; the error names the column and the value's type, but never the value, since transforms see raw rows before any masking.
 
 ### Load
 
 | Field | | |
 | --- | --- | --- |
 | `targetDatabase` | required | An alias from `database.yaml`. |
-| `targetTableFinal` | required | The table to load. |
+| `targetTableFinal` | required | The table to load: `table`, or `schema.table` for one outside the connection's current schema. |
 | `insertStrategy` | required | `swap` or `upsert` — below. |
-| `targetTableStage` | required for `swap` | A staging table with the same shape. |
+| `targetTableStage` | required for `swap` | A staging table with the same shape. For `swap`, it must be in the same schema as `targetTableFinal`. |
 | `targetColumns` | optional | Target column names matching `sourceQuery`'s SELECT list **by position**. |
 | `preTargetAdhocQueries` | optional | SQL run on the target before any write, the stage load included. |
 | `postTargetAdhocQueries` | optional | SQL run on the target after the load. |
 
-- **`swap`** loads `targetTableStage`, then swaps it with `targetTableFinal`. The target is replaced wholesale.
-- **`upsert`** inserts or updates by primary key — from `targetTableStage` if set, otherwise straight from the extract. The target must have a primary key; `lightweight-etl run --dry-run` checks.
+- **`swap`** loads `targetTableStage`, then swaps it with `targetTableFinal` by renaming the two. The target is replaced wholesale. See [how the swap works](design.md#how-a-swap-works) for what renaming means for views and on Oracle.
+- **`upsert`** inserts or updates by the target's declared primary key — from `targetTableStage` if set, otherwise straight from the extract. UNIQUE constraints aren't part of the match. A target without a primary key fails the job before anything is written; `lightweight-etl run --dry-run` checks for one too.
 
 ### Mask
 
@@ -168,42 +169,8 @@ Masking runs after transforms, on `sourceQuery`'s result columns. **Every column
 **`targetColumns` is purely positional.** Left unset, `sourceQuery` must select every column of `targetTableFinal` in that table's own order. Real column names in the wrong order load data into the wrong columns *without any error*, since both sides are valid; a wrong name or count fails at the database.
 
 
-## `scramble.yaml` — deprecated
-
-**Deprecated, and removed in the next release.** Use a data job with a [`masking`](#mask) section instead. [masking.md](masking.md#migrating-from-scrambleyaml) maps each field below to its replacement, and `lightweight-etl discover` writes the replacement job for you.
-
-`lightweight-etl scramble` rewrites a table **in place** and logs a deprecation warning on every run.
-
-```yaml
-workers: 1
-jobs:
-  maskCustomers:
-    active: true
-    database: staging
-    table: customers
-    identifierColumns: [id]
-    scrambleColumns: [email, phone]
-    randomColumns: [birthDate]
-    randomSalt: ${MASKING_SALT}
-```
-
-`workers`, `cycleSleepSeconds`, `active`, `refresh`, `predecessors`, `preTargetAdhocQueries` and `postTargetAdhocQueries` mean what they do for data jobs. Scramble jobs have no `retries`, because a failure can leave the table truncated.
-
-| Field | | |
-| --- | --- | --- |
-| `database`, `table` | required | Where to mask. |
-| `randomSalt` | required | Seeds regenerated text. Treat it like a secret. |
-| `defaultColumnValues` | optional | Column → a constant written to every row. |
-| `identifierColumns` | optional | Columns left untouched. |
-| `scrambleColumns` | optional | Columns whose values are shuffled across rows. |
-| `randomColumns` | optional | Columns regenerated by type: numbers and dates within their range, text as salted hashes. |
-| `allDataRandom` | optional, `false` | Regenerate every column not listed above. |
-
-Each column gets the first treatment that applies, in the order listed. **A column mentioned nowhere is shuffled, not left alone.**
-
-
 ## Validation
 
-`lightweight-etl validate` checks everything above without connecting to anything: every field, every alias, every predecessor, every transformer reference, and every masking strategy, option and key length. Problems are reported all at once, as `ConfigurationError`, rather than one per run.
+`lightweight-etl validate` checks everything above without connecting to anything: every field, every alias, every predecessor and that they form no cycle, every transformer reference, and every masking strategy, option and key length. Problems are reported all at once, as `ConfigurationError`, rather than one per run.
 
 `lightweight-etl run --dry-run` adds the checks that need a connection: that each database is reachable, that target tables exist, that upsert targets have a primary key, and that each masking policy covers every column its query returns.

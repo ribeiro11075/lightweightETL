@@ -3,8 +3,9 @@ from __future__ import annotations
 from types import TracebackType
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Type
 
-from .configuration import WATERMARK_PLACEHOLDER, DatabaseConnectionConfig, DatabaseType
-from .databaseDialects import ColumnDefinition, DatabaseDialect, ForeignKey, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, SQLiteDialect
+from .configuration import WATERMARK_PLACEHOLDER, ConfigurationError, DatabaseConnectionConfig, DatabaseType
+from .databaseDialects import ColumnDefinition, DatabaseDialect, ForeignKey, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, \
+    SQLiteDialect, splitTableName
 
 DIALECTS: Dict[DatabaseType, DatabaseDialect] = {
     DatabaseType.MYSQL: MySQLDialect(),
@@ -73,8 +74,7 @@ class Database:
         The memory ceiling of an extract becomes chunkSize * row width, whatever
         the table's size -- where query()/fetchall() builds Python objects for
         every row at once. Prefer this for anything that isn't known to be small;
-        query() remains the right call for metadata and for the scramble path,
-        which has to hold a whole table to shuffle it anyway.
+        query() remains the right call for metadata.
 
         Two deliberate details:
 
@@ -140,17 +140,6 @@ class Database:
         return columns, chunks()
 
 
-    def getLastQueryColumnNames(self) -> List[str]:
-        """Column names from cursor.description for whatever query last ran on this
-        connection -- reflects exactly what that query actually returned (an
-        explicit column list, a `select *`, computed/aliased expressions, ...),
-        not any table's schema. Only meaningful right after query(); there's
-        nothing sensible to return before any query has run.
-        """
-
-        return [row[0] for row in self.cursor.description]
-
-
     def alter(self, query: str) -> None:
 
         self.cursor.execute(query)
@@ -185,19 +174,21 @@ class Database:
 
 
     def getPrimaryColumnNames(self, table: str) -> List[str]:
-        """Memoized for the life of this Database (which is one job).
+        """The table's declared primary key, in key order.
 
-        A streaming upsert calls this once per chunk through _getColumnBuckets,
-        which would otherwise put a full information_schema query between every
-        batch of rows. A table's primary key doesn't change under a running job,
-        so caching it is safe for exactly as long as the connection is -- and a
-        Database is opened per job and closed with it.
+        Looked up in the table's own schema -- `schema.table`, or the
+        connection's current schema -- so a same-named table elsewhere can't
+        contribute columns.
+
+        Memoized for the life of this Database (which is one job). A streaming
+        upsert calls this once per chunk through _getColumnBuckets, which would
+        otherwise put a catalog query between every batch of rows. A table's
+        primary key doesn't change under a running job, and a Database is opened
+        per job and closed with it.
         """
 
         if table not in self.primaryKeyCache:
-            query = self.dialect.primaryKeyQuery(table=table)
-            self.cursor.execute(query)
-            self.primaryKeyCache[table] = [row[0] for row in self.cursor.fetchall()]
+            self.primaryKeyCache[table] = self.dialect.primaryKey(self.cursor, table)
 
         return self.primaryKeyCache[table]
 
@@ -212,16 +203,6 @@ class Database:
         """Each column's catalog type, size and nullability -- what DDL needs."""
 
         return self.dialect.columnDefinitions(self.cursor, table)
-
-
-    def getDefinedPrimaryKey(self, table: str) -> List[str]:
-        """The primary key exactly as declared, in key order.
-
-        getPrimaryColumnNames serves upserts and, on some dialects, includes
-        UNIQUE columns too; generated DDL needs only the real key.
-        """
-
-        return self.dialect.definedPrimaryKey(self.cursor, table)
 
 
     def tableExists(self, table: str) -> bool:
@@ -272,10 +253,19 @@ class Database:
         each side supplied, which is what the generated SQL needs. Unquoted
         identifiers are case-insensitive to every dialect here, so `job` in the
         statement still resolves to a JOB column.
+
+        A table without a primary key can't be upserted into: there is nothing
+        to match rows on, and the generated statement would either be invalid
+        or, on MySQL, silently insert duplicates on every run. That's a
+        ConfigurationError, so the job fails once instead of being retried.
         """
 
         allColumns = columns if columns is not None else self.getAllColumnNames(table=table)
         primaryColumns = self.getPrimaryColumnNames(table=table)
+
+        if not primaryColumns:
+            raise ConfigurationError('{} has no primary key, so an upsert cannot match its rows -- add one, or use insertStrategy: swap'.format(table))
+
         primaryColumnsNormalized = {column.upper() for column in primaryColumns}
         nonPrimaryColumns = [column for column in allColumns if column.upper() not in primaryColumnsNormalized]
 
@@ -327,8 +317,16 @@ class Database:
 
 
     def swap(self, targetTable: str, stageTable: str) -> None:
+        """Exchanges the two tables by renaming, in one transaction where the
+        dialect allows it (every dialect but Oracle).
 
-        tempTable = targetTable + '_tmp'
+        The temporary name lives in the stage table's schema, since renaming the
+        stage table is what creates it.
+        """
+
+        stageSchema, _ = splitTableName(stageTable)
+        _, targetName = splitTableName(targetTable)
+        tempTable = '{}.{}_tmp'.format(stageSchema, targetName) if stageSchema else targetName + '_tmp'
 
         for query in self.dialect.swapQueries(targetTable=targetTable, stageTable=stageTable, tempTable=tempTable):
             self.cursor.execute(query)

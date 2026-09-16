@@ -142,3 +142,47 @@ def test_a_legacy_flat_memory_file_is_read_as_last_run_times(tmp_path):
 
     assert memory.read() == {'job1': 1726400000.0, 'job2': 1726400001.0}
     assert memory.readWatermarks() == {'job1': 7}
+
+
+def test_a_write_replaces_the_file_rather_than_rewriting_it_in_place(tmp_path, monkeypatch):
+    """A process killed mid-write used to leave a truncated file that every
+    later run failed to parse. A failed write now leaves the old file intact.
+    """
+    import yaml
+
+    memoryFile = tmp_path / 'memory.yaml'
+    memory = FileMemory(memoryFile=memoryFile)
+    memory.recordRun('first')
+    before = memoryFile.read_text()
+
+    def dieMidWrite(document, stream):
+        stream.write('lastRun:\n  fir')
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(yaml, 'dump', dieMidWrite)
+
+    with pytest.raises(KeyboardInterrupt):
+        memory.recordRun('second')
+
+    assert memoryFile.read_text() == before
+
+
+def test_the_run_lock_is_exclusive_and_released_afterwards(tmp_path):
+    from lightweight_etl.memory import RunInProgressError, exclusiveRun
+
+    lockFile = tmp_path / 'memory.yaml.run.lock'
+
+    with exclusiveRun(lockFile):
+        with pytest.raises(RunInProgressError):
+            with exclusiveRun(lockFile):
+                pass
+
+    with exclusiveRun(lockFile):
+        pass
+
+
+def test_the_database_memory_schema_uses_a_portable_float_type():
+    """DOUBLE alone is MySQL's spelling; PostgreSQL, Oracle and SQL Server reject it."""
+    from lightweight_etl.memory import DATABASE_MEMORY_SCHEMA
+
+    assert 'DOUBLE PRECISION' in DATABASE_MEMORY_SCHEMA

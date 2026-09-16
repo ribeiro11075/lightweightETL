@@ -54,7 +54,7 @@ def test_transform_raises_when_a_transform_names_a_column_not_in_columns_even_wi
         transform.transform()
 
 
-def test_transform_wraps_a_failing_transformer_with_column_and_value_context():
+def test_transform_wraps_a_failing_transformer_with_column_and_type_context():
     def onlyAcceptsStrings(value):
         return value.upper()
 
@@ -64,7 +64,25 @@ def test_transform_wraps_a_failing_transformer_with_column_and_value_context():
         transform.transform()
 
     assert 'onlyAcceptsStrings' in str(excinfo.value)
-    assert '1' in str(excinfo.value)
+    assert 'of type int' in str(excinfo.value)
+
+
+def test_a_failing_transformer_never_reveals_the_value():
+    """Transforms see raw production rows, before masking, and the error text
+    reaches logs and the run result. The transformer's own message is dropped
+    too, since it usually quotes the value.
+    """
+    def parseNumber(value):
+        return int(value)
+
+    transform = Transform(data=[('123-45-6789',)], columns=['ssn'], columnTransforms={'ssn': [parseNumber]})
+
+    with pytest.raises(TransformError) as excinfo:
+        transform.transform()
+
+    assert '123-45-6789' not in str(excinfo.value)
+    assert excinfo.value.__cause__ is None
+    assert excinfo.value.__suppress_context__
 
 
 def test_resolve_transformer_finds_a_real_function():

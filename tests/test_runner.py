@@ -1,49 +1,31 @@
+import json
 import os
 import pickle
 import signal
+import sqlite3
 import threading
-from typing import Any, List, Tuple
+import time
+from concurrent.futures import Future
+from concurrent.futures.process import BrokenProcessPool
+from typing import Any, Dict, List, Tuple
 
 import pytest
 
 from lightweight_etl.configuration import Configuration, ConfigurationError, DatabaseConnectionConfig, DatabaseType, DataJobConfig, DataJobsFile, \
-    InsertStrategy, ScrambleJobConfig, ScrambleJobsFile
-from lightweight_etl.databaseDialects import ColumnCategory
-from lightweight_etl.dependencyGraph import JobOutcome, JobStatus
-from lightweight_etl.log import Log
+    InsertStrategy
+from lightweight_etl.dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 from lightweight_etl.memory import FileMemory, MemoryBackend
-from lightweight_etl.runner import RunResult, _dataJobWorker, _terminationHandling, _executeDataJob, _executeScrambleJob, _scrambleJobWorker, runDataJobs, runScrambleJobs
+from lightweight_etl.runner import RunResult, _initializeWorker, _runCycle, _runDataJob, _terminationHandling, _executeDataJob, runDataJobs
 from lightweight_etl.transform import TransformError
 
 
-class _FakeDialect:
-    """columnCategory only -- _executeScrambleJob is the one caller that needs a
-    dialect off of _FakeDatabase; nothing else here touches connect()/queries.
-    """
-
-    def columnCategory(self, dataType: Any) -> Any:
-        return {'INT': ColumnCategory.NUMBER, 'VARCHAR': ColumnCategory.TEXT}.get(dataType)
-
-
 def test_worker_functions_are_picklable():
-    """multiprocessing's spawn start method (macOS/Windows default) unpickles the
-    Pool initializer by module+qualname in the child process -- a closure or
-    nested function wouldn't survive that. This is the trickiest part of moving
-    the worker functions into a library module rather than the entry script.
+    """The spawn and forkserver start methods (macOS, Windows, and Linux from
+    Python 3.14) unpickle what a worker runs by module+qualname in the child
+    process -- a closure or nested function wouldn't survive that.
     """
-    pickle.dumps(_dataJobWorker)
-    pickle.dumps(_scrambleJobWorker)
-
-
-def test_run_scramble_jobs_completes_with_zero_active_jobs(tmp_path):
-    """Exercises a real Pool spawn + teardown without any network I/O, since no
-    job is ever active enough to be pulled off the queue.
-    """
-    raw = {'workers': 2, 'jobs': {'noop': {'active': False, 'database': 'x', 'table': 'y', 'randomSalt': 's'}}}
-    jobsFile = Configuration.validateJobConfiguration(raw, ScrambleJobsFile)
-
-    with pytest.warns(DeprecationWarning, match='masking'):
-        runScrambleJobs(jobsFile=jobsFile, databaseConfiguration={}, logFile=tmp_path / 'runner.log', runForever=False)
+    pickle.dumps(_runDataJob)
+    pickle.dumps(_initializeWorker)
 
 
 def test_run_data_jobs_completes_with_zero_active_jobs_when_not_forever(tmp_path):
@@ -56,14 +38,12 @@ def test_run_data_jobs_completes_with_zero_active_jobs_when_not_forever(tmp_path
 
 
 class _FakeDatabase:
-    """Records calls instead of touching a real connection, so _executeDataJob and
-    _executeScrambleJob can be exercised without mocking at the driver level.
+    """Records calls instead of touching a real connection, so _executeDataJob
+    can be exercised without mocking at the driver level.
     """
 
     queryResult: List[Tuple[Any, ...]] = [(1, 'a'), (2, 'b')]
     columnNames: List[str] = ['id', 'name']
-    columnTypes: List[str] = ['INT', 'VARCHAR']
-    dialect = _FakeDialect()
 
     def __init__(self, connectionSettings: DatabaseConnectionConfig) -> None:
         self.connectionSettings = connectionSettings
@@ -74,10 +54,6 @@ class _FakeDatabase:
 
     def __exit__(self, *args: Any) -> None:
         return None
-
-    def query(self, query: str) -> List[Tuple[Any, ...]]:
-        self.calls.append(('query', query))
-        return self.queryResult
 
     def substituteWatermarkPlaceholder(self, query: str) -> str:
         return query.replace('{{ watermark }}', '?')
@@ -94,17 +70,9 @@ class _FakeDatabase:
 
         return self.columnNames, chunks()
 
-    def getLastQueryColumnNames(self) -> List[str]:
-        self.calls.append(('getLastQueryColumnNames',))
-        return self.columnNames
-
     def getAllColumnNames(self, table: str) -> List[str]:
         self.calls.append(('getAllColumnNames', table))
         return self.columnNames
-
-    def getAllColumnTypes(self, table: str) -> List[str]:
-        self.calls.append(('getAllColumnTypes', table))
-        return self.columnTypes
 
     def truncate(self, table: str) -> None:
         self.calls.append(('truncate', table))
@@ -323,50 +291,6 @@ def test_execute_data_job_runs_adhoc_queries_before_and_after_load(fakeDatabases
     assert preIndex < upsertIndex < postIndex
 
 
-def _scrambleJobConfig(**overrides: Any) -> ScrambleJobConfig:
-    fields = dict(active=True, database='db1', table='people', randomSalt='s')
-    fields.update(overrides)
-    return ScrambleJobConfig(**fields)
-
-
-def test_execute_scramble_job_truncates_and_reinserts_when_the_table_has_rows(fakeDatabases):
-    jobConfig = _scrambleJobConfig(identifierColumns=['id'])
-    databaseConfiguration = {'db1': _dbConfig()}
-
-    _executeScrambleJob('scrambleJob1', jobConfig, databaseConfiguration)
-
-    (database,) = fakeDatabases
-    assert ('truncate', 'people') in database.calls
-    assert any(call[0] == 'insert' and call[1] == 'people' for call in database.calls)
-
-
-def test_execute_scramble_job_writes_nothing_when_the_table_is_empty(fakeDatabases, monkeypatch):
-    monkeypatch.setattr(_FakeDatabase, 'queryResult', [])
-    jobConfig = _scrambleJobConfig()
-    databaseConfiguration = {'db1': _dbConfig()}
-
-    _executeScrambleJob('scrambleJob1', jobConfig, databaseConfiguration)
-
-    (database,) = fakeDatabases
-    calledMethods = [call[0] for call in database.calls]
-    assert 'truncate' not in calledMethods
-    assert 'insert' not in calledMethods
-
-
-def test_execute_scramble_job_runs_adhoc_queries_before_and_after(fakeDatabases):
-    jobConfig = _scrambleJobConfig(preTargetAdhocQueries=['pre1'], postTargetAdhocQueries=['post1'])
-    databaseConfiguration = {'db1': _dbConfig()}
-
-    _executeScrambleJob('scrambleJob1', jobConfig, databaseConfiguration)
-
-    (database,) = fakeDatabases
-    calls = database.calls
-    preIndex = calls.index(('alter', 'pre1'))
-    insertIndex = next(index for index, call in enumerate(calls) if call[0] == 'insert')
-    postIndex = calls.index(('alter', 'post1'))
-    assert preIndex < insertIndex < postIndex
-
-
 def test_execute_data_job_runs_pre_adhoc_queries_before_loading_the_stage_table(fakeDatabases):
     """The existing before/after test uses the stage-less upsert path, where a
     pre-query lands before the only write either way. With a stage table the
@@ -392,33 +316,6 @@ def test_execute_data_job_runs_pre_adhoc_queries_before_loading_the_stage_table(
     assert preIndex < truncateIndex < insertIndex < swapIndex < postIndex
 
 
-class _StopWorker(Exception):
-    """Breaks _dataJobWorker out of its otherwise infinite readyQueue.get() loop."""
-
-
-class _OneShotReadyQueue:
-
-    def __init__(self, job: str) -> None:
-        self.remaining = [job]
-
-    def get(self) -> str:
-        if self.remaining:
-            return self.remaining.pop()
-        raise _StopWorker
-
-
-class _TimelineQueue:
-    """Records completion signals into a timeline shared with _TimelineMemory, so
-    a test can assert the *order* of the two, not just that both happened.
-    """
-
-    def __init__(self, timeline: List[Tuple[Any, ...]]) -> None:
-        self.timeline = timeline
-
-    def put(self, item: Any) -> None:
-        self.timeline.append(('completed', item.job, item.status))
-
-
 class _TimelineMemory(MemoryBackend):
 
     def __init__(self, timeline: List[Tuple[Any, ...]], failing: bool = False) -> None:
@@ -434,25 +331,27 @@ class _TimelineMemory(MemoryBackend):
         self.timeline.append(('recordRun', job))
 
 
-def _runDataWorkerOnce(monkeypatch, tmp_path, succeeds: bool, memoryFails: bool = False) -> List[Tuple[Any, ...]]:
-    """Drives _dataJobWorker through exactly one job, returning the ordered
-    timeline of its memory writes and completion signals.
+def _runJobWithTimeline(jobConfig: DataJobConfig, memory: '_TimelineMemory') -> List[Tuple[Any, ...]]:
+    """Runs _runDataJob for one job, returning the ordered timeline of its
+    memory writes, ending with its completion -- the point the parent sees it.
     """
 
-    def fakeExecute(job: Any, jobConfig: Any, databaseConfiguration: Any, log: Any = None, watermark: Any = None) -> JobOutcome:
+    outcome = _runDataJob('job1', jobConfig, {}, memory)
+    memory.timeline.append(('completed', outcome.job, outcome.status))
+
+    return memory.timeline
+
+
+def _runDataWorkerOnce(monkeypatch, succeeds: bool, memoryFails: bool = False) -> List[Tuple[Any, ...]]:
+
+    def fakeExecute(job: Any, jobConfig: Any, databaseConfiguration: Any, watermark: Any = None) -> JobOutcome:
         if not succeeds:
             raise RuntimeError('job blew up')
         return JobOutcome(job=job, status=JobStatus.COMPLETED, rowCount=1)
 
     monkeypatch.setattr('lightweight_etl.runner._executeDataJob', fakeExecute)
 
-    timeline: List[Tuple[Any, ...]] = []
-
-    with pytest.raises(_StopWorker):
-        _dataJobWorker(_OneShotReadyQueue('job1'), _TimelineQueue(timeline), {'job1': _dataJobConfig()},
-                        {}, tmp_path / 'worker.log', _TimelineMemory(timeline, failing=memoryFails))
-
-    return timeline
+    return _runJobWithTimeline(_dataJobConfig(), _TimelineMemory([], failing=memoryFails))
 
 
 def test_a_failed_data_job_does_not_record_a_run(monkeypatch, tmp_path):
@@ -461,19 +360,18 @@ def test_a_failed_data_job_does_not_record_a_run(monkeypatch, tmp_path):
     retry. A job failing every time went quiet for `refresh` minutes instead of
     being retried on the next cycle.
     """
-    timeline = _runDataWorkerOnce(monkeypatch, tmp_path, succeeds=False)
+    timeline = _runDataWorkerOnce(monkeypatch, succeeds=False)
 
     assert ('recordRun', 'job1') not in timeline
     assert timeline == [('completed', 'job1', JobStatus.FAILED)]
 
 
 def test_a_successful_data_job_records_its_run_before_signalling_completion(monkeypatch, tmp_path):
-    """completedQueue is what DependencyGraph.run() watches to decide a cycle is
-    done, and runDataJobs terminates the pool the moment it returns -- so a
-    recordRun placed after the put could be killed before it landed, losing the
-    stamp for a job that really did complete.
+    """The parent treats a returned outcome as the job being over, and may shut
+    the pool down straight after -- so a recordRun placed after the return could
+    be lost for a job that really did complete.
     """
-    timeline = _runDataWorkerOnce(monkeypatch, tmp_path, succeeds=True)
+    timeline = _runDataWorkerOnce(monkeypatch, succeeds=True)
 
     assert timeline == [('recordRun', 'job1'), ('completed', 'job1', JobStatus.COMPLETED)]
 
@@ -482,7 +380,7 @@ def test_a_completed_job_stays_completed_when_the_memory_backend_fails(monkeypat
     """The data did land, so reporting FAILED would be a worse lie than the
     missing stamp -- whose only consequence is an earlier re-run.
     """
-    timeline = _runDataWorkerOnce(monkeypatch, tmp_path, succeeds=True, memoryFails=True)
+    timeline = _runDataWorkerOnce(monkeypatch, succeeds=True, memoryFails=True)
 
     assert timeline == [('completed', 'job1', JobStatus.COMPLETED)]
 
@@ -707,20 +605,14 @@ class _WatermarkTimelineMemory(_TimelineMemory):
 
 def _runWatermarkWorkerOnce(monkeypatch, tmp_path, succeeds: bool, watermarks: Dict[str, Any]) -> List[Tuple[Any, ...]]:
 
-    def fakeExecute(job: Any, jobConfig: Any, databaseConfiguration: Any, log: Any = None, watermark: Any = None) -> JobOutcome:
+    def fakeExecute(job: Any, jobConfig: Any, databaseConfiguration: Any, watermark: Any = None) -> JobOutcome:
         if not succeeds:
             raise RuntimeError('job blew up')
         return JobOutcome(job=job, status=JobStatus.COMPLETED, rowCount=3, watermark='reached-{}'.format(watermark))
 
     monkeypatch.setattr('lightweight_etl.runner._executeDataJob', fakeExecute)
 
-    timeline: List[Tuple[Any, ...]] = []
-
-    with pytest.raises(_StopWorker):
-        _dataJobWorker(_OneShotReadyQueue('job1'), _TimelineQueue(timeline), {'job1': _watermarkJobConfig()},
-                        {}, tmp_path / 'worker.log', _WatermarkTimelineMemory(timeline, watermarks))
-
-    return timeline
+    return _runJobWithTimeline(_watermarkJobConfig(), _WatermarkTimelineMemory([], watermarks))
 
 
 def test_a_failed_incremental_job_does_not_advance_its_watermark(monkeypatch, tmp_path):
@@ -809,17 +701,6 @@ def test_run_data_jobs_returns_a_result_rather_than_discarding_it(tmp_path):
     assert result.succeeded is True
 
 
-def test_run_scramble_jobs_returns_a_result(tmp_path):
-    raw = {'workers': 1, 'jobs': {'noop': {'active': False, 'database': 'x', 'table': 'y', 'randomSalt': 's'}}}
-    jobsFile = Configuration.validateJobConfiguration(raw, ScrambleJobsFile)
-
-    with pytest.warns(DeprecationWarning):
-        result = runScrambleJobs(jobsFile=jobsFile, databaseConfiguration={}, logFile=tmp_path / 'runner.log', runForever=False)
-
-    assert result.succeeded is True
-    assert 'deprecated' in (tmp_path / 'runner.log').read_text()
-
-
 def test_a_run_result_separates_completed_failed_and_skipped():
     result = RunResult(outcomes=[
         JobOutcome(job='a', status=JobStatus.COMPLETED, rowCount=400),
@@ -857,7 +738,7 @@ def test_a_job_outcome_reports_its_duration():
 
 
 def test_a_job_outcome_survives_pickling(fakeDatabases):
-    """Outcomes cross a process boundary on completedQueue. The error is a
+    """Outcomes cross a process boundary from worker to parent. The error is a
     formatted string rather than the exception for exactly this reason: database
     drivers raise types that don't reliably pickle.
     """
@@ -868,21 +749,12 @@ def test_a_job_outcome_survives_pickling(fakeDatabases):
 
 def test_the_data_worker_reports_row_count_and_error_on_its_outcome(monkeypatch, tmp_path):
 
-    def fakeExecute(job: Any, jobConfig: Any, databaseConfiguration: Any, log: Any = None, watermark: Any = None) -> JobOutcome:
+    def fakeExecute(job: Any, jobConfig: Any, databaseConfiguration: Any, watermark: Any = None) -> JobOutcome:
         return JobOutcome(job=job, status=JobStatus.COMPLETED, rowCount=42)
 
     monkeypatch.setattr('lightweight_etl.runner._executeDataJob', fakeExecute)
-    outcomes: List[Any] = []
 
-    class _CollectingQueue:
-        def put(self, item: Any) -> None:
-            outcomes.append(item)
-
-    with pytest.raises(_StopWorker):
-        _dataJobWorker(_OneShotReadyQueue('job1'), _CollectingQueue(), {'job1': _dataJobConfig()},
-                        {}, tmp_path / 'worker.log', _TimelineMemory([]))
-
-    (outcome,) = outcomes
+    outcome = _runDataJob('job1', _dataJobConfig(), {}, _TimelineMemory([]))
 
     assert outcome.job == 'job1'
     assert outcome.status == JobStatus.COMPLETED
@@ -893,21 +765,12 @@ def test_the_data_worker_reports_row_count_and_error_on_its_outcome(monkeypatch,
 
 def test_the_data_worker_records_the_failure_text_on_its_outcome(monkeypatch, tmp_path):
 
-    def fakeExecute(job: Any, jobConfig: Any, databaseConfiguration: Any, log: Any = None, watermark: Any = None) -> JobOutcome:
+    def fakeExecute(job: Any, jobConfig: Any, databaseConfiguration: Any, watermark: Any = None) -> JobOutcome:
         raise RuntimeError('the source went away')
 
     monkeypatch.setattr('lightweight_etl.runner._executeDataJob', fakeExecute)
-    outcomes: List[Any] = []
 
-    class _CollectingQueue:
-        def put(self, item: Any) -> None:
-            outcomes.append(item)
-
-    with pytest.raises(_StopWorker):
-        _dataJobWorker(_OneShotReadyQueue('job1'), _CollectingQueue(), {'job1': _dataJobConfig()},
-                        {}, tmp_path / 'worker.log', _TimelineMemory([]))
-
-    (outcome,) = outcomes
+    outcome = _runDataJob('job1', _dataJobConfig(), {}, _TimelineMemory([]))
 
     assert outcome.status == JobStatus.FAILED
     assert outcome.error == 'RuntimeError: the source went away'
@@ -919,11 +782,10 @@ def test_termination_handling_sets_a_flag_and_restores_the_previous_handlers(tmp
     checkpoint. Doing it inside the handler would run pool teardown on whatever
     frame happened to be executing, including one inside multiprocessing itself.
     """
-    log = Log(logFile=tmp_path / 'x.log')
     originalInterrupt = signal.getsignal(signal.SIGINT)
     originalTerminate = signal.getsignal(signal.SIGTERM)
 
-    with _terminationHandling(log) as termination:
+    with _terminationHandling() as termination:
         assert termination['terminating'] is False
         assert signal.getsignal(signal.SIGTERM) is not originalTerminate
 
@@ -936,11 +798,10 @@ def test_termination_handling_sets_a_flag_and_restores_the_previous_handlers(tmp
 
 
 def test_termination_handling_restores_handlers_even_when_the_body_raises(tmp_path):
-    log = Log(logFile=tmp_path / 'x.log')
     originalTerminate = signal.getsignal(signal.SIGTERM)
 
     with pytest.raises(RuntimeError):
-        with _terminationHandling(log):
+        with _terminationHandling():
             raise RuntimeError('boom')
 
     assert signal.getsignal(signal.SIGTERM) is originalTerminate
@@ -951,12 +812,11 @@ def test_termination_handling_is_a_no_op_off_the_main_thread(tmp_path):
     and a library has no business failing because its caller ran it on a worker
     thread -- it just leaves signal handling to them.
     """
-    log = Log(logFile=tmp_path / 'x.log')
     failures = []
 
     def useOffMainThread():
         try:
-            with _terminationHandling(log) as termination:
+            with _terminationHandling() as termination:
                 assert termination['terminating'] is False
         except Exception as error:
             failures.append(error)
@@ -970,8 +830,8 @@ def test_termination_handling_is_a_no_op_off_the_main_thread(tmp_path):
 
 def test_run_data_jobs_stops_on_sigterm_rather_than_running_forever(tmp_path):
     """Without this, a Ctrl-C or a container's SIGTERM tears down the parent while
-    its pool workers are mid-job, orphaning them. In Kubernetes, SIGTERM arrives
-    on every ordinary pod shutdown, so it's the common path.
+    its workers are mid-job, orphaning them. In Kubernetes, SIGTERM arrives on
+    every ordinary pod shutdown, so it's the common path.
     """
     raw = {'workers': 1, 'cycleSleepSeconds': 0.1,
            'jobs': {'noop': {'active': False, 'sourceDatabase': 'x', 'targetDatabase': 'y', 'insertStrategy': 'upsert',
@@ -984,6 +844,7 @@ def test_run_data_jobs_stops_on_sigterm_rather_than_running_forever(tmp_path):
                           memory=FileMemory(memoryFile=tmp_path / 'runner.yaml'), runForever=True)
 
     assert result.succeeded is True
+    assert result.interrupted is True
 
 
 def _retryJobConfig(**overrides: Any) -> DataJobConfig:
@@ -996,19 +857,9 @@ def _retryJobConfig(**overrides: Any) -> DataJobConfig:
 
 def _runRetryWorker(monkeypatch, tmp_path, attempt: Any, jobConfig: Any = None) -> List[Any]:
 
-    monkeypatch.setattr('lightweight_etl.runner._executeDataJob', lambda job, config, databases, log=None, watermark=None: attempt())
+    monkeypatch.setattr('lightweight_etl.runner._executeDataJob', lambda job, config, databases, watermark=None: attempt())
 
-    outcomes: List[Any] = []
-
-    class _CollectingQueue:
-        def put(self, item: Any) -> None:
-            outcomes.append(item)
-
-    with pytest.raises(_StopWorker):
-        _dataJobWorker(_OneShotReadyQueue('job1'), _CollectingQueue(), {'job1': jobConfig or _retryJobConfig()},
-                        {}, tmp_path / 'worker.log', _TimelineMemory([]))
-
-    return outcomes
+    return [_runDataJob('job1', jobConfig or _retryJobConfig(), {}, _TimelineMemory([]))]
 
 
 def test_a_transient_failure_is_retried_and_can_succeed(monkeypatch, tmp_path):
@@ -1093,3 +944,147 @@ def test_retry_backoff_grows_between_attempts(monkeypatch, tmp_path):
     _runRetryWorker(monkeypatch, tmp_path, alwaysFails, jobConfig=_retryJobConfig(retries=3, retryDelaySeconds=2.0))
 
     assert delays == [2.0, 4.0, 8.0]
+
+
+def test_the_stored_watermark_is_read_again_on_each_attempt(monkeypatch):
+    """A memory backend kept in a database fails transiently like any other
+    database, so reading it belongs inside the retried attempt.
+    """
+
+    class _FlakyWatermarks(_WatermarkTimelineMemory):
+        reads = 0
+
+        def readWatermarks(self) -> Dict[str, Any]:
+            self.reads += 1
+            if self.reads == 1:
+                raise OSError('memory database unavailable')
+            return {'job1': 'stored'}
+
+    monkeypatch.setattr('lightweight_etl.runner._executeDataJob',
+                        lambda job, config, databases, watermark=None: JobOutcome(job=job, status=JobStatus.COMPLETED, watermark=watermark))
+    memory = _FlakyWatermarks([], {})
+
+    outcome = _runDataJob('job1', _watermarkJobConfig(retries=1, retryDelaySeconds=0.0), {}, memory)
+
+    assert outcome.status == JobStatus.COMPLETED
+    assert outcome.attempts == 2
+    assert ('recordWatermark', 'job1', 'stored') in memory.timeline
+
+
+def _sqliteJob(databasePath: Any, **overrides: Any) -> Dict[str, Any]:
+    fields = dict(active=True, sourceDatabase='lite', targetDatabase='lite', insertStrategy='upsert', chunkSize=10,
+                  sourceQuery='select id, name from source', targetTableFinal='target')
+    fields.update(overrides)
+    return fields
+
+
+@pytest.fixture
+def sqliteDatabase(tmp_path):
+    path = tmp_path / 'lite.db'
+    connection = sqlite3.connect(path)
+    connection.executescript('create table source (id integer primary key, name text);'
+                             "insert into source values (1, 'Ann'), (2, 'Bo');"
+                             'create table target (id integer primary key, name text);')
+    connection.close()
+
+    return {'lite': DatabaseConnectionConfig(type=DatabaseType.SQLITE, database=str(path))}
+
+
+def test_a_worker_that_dies_fails_its_job_instead_of_hanging_the_run(tmp_path, sqliteDatabase):
+    """A worker killed mid-job -- by the OOM killer, say -- never reports back.
+    The run used to wait for it forever, so a cron job never exited and the next
+    invocations piled up behind it. Now the job fails, its dependents are
+    skipped, and the run returns.
+    """
+    raw = {'workers': 1, 'jobs': {
+        'crashes': _sqliteJob(sqliteDatabase, sourceQueryColumnTransforms={'name': ['tests.crashingTransforms:exitAbruptly']}),
+        'dependent': _sqliteJob(sqliteDatabase, predecessors=['crashes']),
+        }}
+    jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
+    results: List[RunResult] = []
+
+    thread = threading.Thread(target=lambda: results.append(runDataJobs(
+        jobsFile=jobsFile, databaseConfiguration=sqliteDatabase, memory=FileMemory(tmp_path / 'memory.yaml'))), daemon=True)
+    thread.start()
+    thread.join(timeout=60)
+
+    assert not thread.is_alive(), 'the run is still waiting on a worker that died'
+    statuses = {outcome.job: outcome.status for outcome in results[0].outcomes}
+    assert statuses == {'crashes': JobStatus.FAILED, 'dependent': JobStatus.SKIPPED}
+    assert 'worker process exited abruptly' in results[0].failed[0].error
+
+
+class _FakeWorkers:
+    """Stands in for the process pool: completes jobs at once, except that
+    'crashes' breaks the pool, as a dead worker does.
+    """
+
+    def __init__(self) -> None:
+        self.submitted: List[str] = []
+        self.discarded = 0
+
+    def submit(self, function: Any, job: str, *arguments: Any) -> 'Future[JobOutcome]':
+        self.submitted.append(job)
+        future: 'Future[JobOutcome]' = Future()
+        if job == 'crashes':
+            future.set_exception(BrokenProcessPool('a worker died'))
+        else:
+            future.set_result(JobOutcome(job=job, status=JobStatus.COMPLETED))
+        return future
+
+    def discardBroken(self) -> None:
+        self.discarded += 1
+
+
+def _graph(**predecessors: List[str]) -> DependencyGraph:
+    return DependencyGraph({name: _dataJobConfig(predecessors=names) for name, names in predecessors.items()})
+
+
+def test_jobs_started_after_a_worker_dies_run_in_a_fresh_pool():
+    graph = _graph(crashes=[], fine=[], later=['fine'])
+    workers = _FakeWorkers()
+
+    _runCycle(graph, workers, {}, _TimelineMemory([]), {'terminating': False})  # type: ignore[arg-type]
+
+    statuses = {outcome.job: outcome.status for outcome in graph.outcomes}
+    assert statuses == {'crashes': JobStatus.FAILED, 'fine': JobStatus.COMPLETED, 'later': JobStatus.COMPLETED}
+    assert workers.discarded == 1
+    assert workers.submitted == ['crashes', 'fine', 'later']
+
+
+def test_a_signal_stops_new_jobs_from_starting_and_reports_them_skipped():
+    """After SIGTERM a container has seconds left: jobs already running are
+    allowed to finish, but nothing new is started.
+    """
+    graph = _graph(first=[], second=['first'])
+    workers = _FakeWorkers()
+
+    _runCycle(graph, workers, {}, _TimelineMemory([]), {'terminating': True})  # type: ignore[arg-type]
+
+    assert workers.submitted == []
+    assert {outcome.job: outcome.status for outcome in graph.outcomes} == {'first': JobStatus.SKIPPED, 'second': JobStatus.SKIPPED}
+    assert 'stopped by a signal' in graph.outcomes[0].error
+
+
+def test_worker_log_records_reach_the_parents_handlers_in_its_format(tmp_path, sqliteDatabase):
+    """Workers used to log through a handler they didn't have: INFO lines were
+    dropped, and warnings and errors reached stderr as bare text even under
+    --log-format json. They now travel to the parent and are written there.
+    """
+    raw = {'workers': 1, 'jobs': {
+        'copies': _sqliteJob(sqliteDatabase),
+        'fails': _sqliteJob(sqliteDatabase, sourceQuery='select id, name from missing_table'),
+        }}
+    jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
+    logPath = tmp_path / 'run.log'
+
+    runDataJobs(jobsFile=jobsFile, databaseConfiguration=sqliteDatabase, memory=FileMemory(tmp_path / 'memory.yaml'),
+                logFile=logPath, logFormat='json')
+
+    records = [json.loads(line) for line in logPath.read_text().splitlines()]
+    messages = [record['message'] for record in records]
+
+    assert 'Starting copies' in messages
+    assert any(record.get('job') == 'copies' and record.get('status') == 'completed' for record in records)
+    failure = next(record for record in records if record['message'].startswith('Failed to complete fails'))
+    assert 'no such table' in failure['exception']

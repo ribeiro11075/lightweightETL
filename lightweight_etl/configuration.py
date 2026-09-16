@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Mapping, Optional, Set, Type, TypeVar
+from typing import Annotated, Any, Dict, List, Mapping, Optional, Sequence, Set, Type, TypeVar
 
 from pydantic import BaseModel, BeforeValidator, Field, SecretStr, ValidationError, field_validator, model_validator
 
@@ -41,7 +41,6 @@ def _dropNoneMappingListItems(value: Any) -> Any:
 
 
 CleanedStringList = Annotated[List[str], BeforeValidator(_dropNoneListItems)]
-CleanedMapping = Annotated[Dict[str, Any], BeforeValidator(_dropNoneMappingEntries)]
 CleanedListMapping = Annotated[Dict[str, List[str]], BeforeValidator(_dropNoneMappingListItems)]
 
 
@@ -135,10 +134,15 @@ class InsertStrategy(str, Enum):
 
 
 class DatabaseConnectionConfig(BaseModel):
+    """`password` is a SecretStr, like the masking key, so it can't reach a log
+    line or a traceback through the model's repr. Drivers get it from
+    plainPassword().
+    """
+
     type: DatabaseType
     database: str
     user: Optional[str] = None
-    password: Optional[str] = None
+    password: Optional[SecretStr] = None
     host: Optional[str] = None
     port: Optional[int] = None
     serviceName: Optional[str] = None
@@ -167,6 +171,11 @@ class DatabaseConnectionConfig(BaseModel):
             raise ValueError('user, password, and host are required for every database type except sqlite')
 
         return self
+
+
+    def plainPassword(self) -> Optional[str]:
+
+        return None if self.password is None else self.password.get_secret_value()
 
 
 class BaseJobConfig(BaseModel):
@@ -247,9 +256,21 @@ class DataJobConfig(BaseJobConfig):
 
     @model_validator(mode='after')
     def _requireStageTableForSwap(self) -> 'DataJobConfig':
+        """A swap renames the two tables into each other's places, and a rename
+        never moves a table to another schema -- so the stage table has to live
+        in the target's schema.
+        """
 
-        if self.insertStrategy == InsertStrategy.SWAP and not self.targetTableStage:
+        if self.insertStrategy != InsertStrategy.SWAP:
+            return self
+
+        if not self.targetTableStage:
             raise ValueError('targetTableStage is required when insertStrategy is swap')
+
+        stageSchema, finalSchema = (table.rpartition('.')[0].upper() for table in (self.targetTableStage, self.targetTableFinal))
+        if stageSchema != finalSchema:
+            raise ValueError('targetTableStage and targetTableFinal must be in the same schema for insertStrategy: swap, '
+                             'since a rename cannot move a table between schemas')
 
         return self
 
@@ -311,31 +332,47 @@ class DataJobConfig(BaseJobConfig):
         return self
 
 
-class ScrambleJobConfig(BaseJobConfig):
-    """Deprecated: in-place scrambling, superseded by a data job's `masking`."""
-
-    database: str
-    table: str
-    defaultColumnValues: CleanedMapping = Field(default_factory=dict)
-    identifierColumns: CleanedStringList = Field(default_factory=list)
-    scrambleColumns: CleanedStringList = Field(default_factory=list)
-    randomColumns: CleanedStringList = Field(default_factory=list)
-    randomSalt: str
-    allDataRandom: bool = False
-    preTargetAdhocQueries: CleanedStringList = Field(default_factory=list)
-    postTargetAdhocQueries: CleanedStringList = Field(default_factory=list)
-
-
 class DataJobsFile(BaseModel):
-    workers: int
+    workers: int = Field(ge=1)
     cycleSleepSeconds: float = 0.5
     jobs: Dict[str, DataJobConfig]
 
 
-class ScrambleJobsFile(BaseModel):
-    workers: int
-    cycleSleepSeconds: float = 0.5
-    jobs: Dict[str, ScrambleJobConfig]
+def findCycle(predecessors: Mapping[str, Sequence[str]]) -> Optional[List[str]]:
+    """A cycle in a job -> predecessors graph, as a path that ends where it
+    starts, or None. Predecessors that aren't keys are ignored.
+
+    A cycle can never be scheduled: each job waits for another that waits for
+    it. Found before running, it's a configuration error; missed, the run
+    waits forever.
+    """
+
+    state: Dict[str, int] = {}
+    path: List[str] = []
+
+    def visit(job: str) -> Optional[List[str]]:
+        state[job] = 1
+        path.append(job)
+        for predecessor in predecessors[job]:
+            if predecessor not in predecessors:
+                continue
+            if state.get(predecessor) == 1:
+                return path[path.index(predecessor):] + [predecessor]
+            if predecessor not in state:
+                found = visit(predecessor)
+                if found:
+                    return found
+        path.pop()
+        state[job] = 2
+        return None
+
+    for job in sorted(predecessors):
+        if job not in state:
+            found = visit(job)
+            if found:
+                return found
+
+    return None
 
 
 T = TypeVar('T', bound=BaseModel)
@@ -390,6 +427,10 @@ class Configuration:
                     problems.append(f'{jobName}: sourceDatabase "{job.sourceDatabase}" is not a known database alias')
                 if job.targetDatabase not in databaseAliases:
                     problems.append(f'{jobName}: targetDatabase "{job.targetDatabase}" is not a known database alias')
+
+        cycle = findCycle({jobName: job.predecessors for jobName, job in jobs.items()})
+        if cycle:
+            problems.append('predecessors form a cycle, so none of these jobs could ever start: {}'.format(' -> '.join(cycle)))
 
         if problems:
             raise ConfigurationError('Invalid job graph:\n' + '\n'.join(problems))

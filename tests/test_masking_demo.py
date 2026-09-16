@@ -81,4 +81,4 @@ def test_the_subset_follows_the_foreign_key(demoRun):
 def test_the_demo_writes_only_inside_the_directory_it_is_given(demoRun):
     _, workingDirectory = demoRun
 
-    assert {path.name for path in workingDirectory.iterdir()} == {'prod.db', 'staging.db', 'memory.yaml', 'masking.log', 'manifest.json'}
+    assert {path.name for path in workingDirectory.iterdir()} == {'prod.db', 'staging.db', 'memory.yaml', 'memory.yaml.lock', 'masking.log', 'manifest.json'}

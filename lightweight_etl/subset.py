@@ -23,8 +23,9 @@ reported, and the caller breaks each one by ignoring a foreign key.
 """
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
+from typing import Dict, Iterable, List, NamedTuple, Sequence, Set, Tuple
 
+from .configuration import findCycle
 from .databaseDialects import ForeignKey
 
 
@@ -58,36 +59,6 @@ def parseIgnore(entries: Iterable[str]) -> Set[Tuple[str, str]]:
         parsed.add((table.upper(), column.upper()))
 
     return parsed
-
-
-def _findCycle(tables: Iterable[str], edges: Dict[str, List[ForeignKey]]) -> Optional[List[str]]:
-    """A cycle among `tables` along child -> parent edges, if there is one."""
-
-    state: Dict[str, int] = {}
-    path: List[str] = []
-
-    def visit(table: str) -> Optional[List[str]]:
-        state[table] = 1
-        path.append(table)
-        for foreignKey in edges.get(table, []):
-            parent = foreignKey.referencedTable.upper()
-            if state.get(parent) == 1:
-                return path[path.index(parent):] + [parent]
-            if parent not in state:
-                found = visit(parent)
-                if found:
-                    return found
-        path.pop()
-        state[table] = 2
-        return None
-
-    for table in sorted(tables):
-        if table not in state:
-            found = visit(table)
-            if found:
-                return found
-
-    return None
 
 
 class _Builder:
@@ -203,8 +174,7 @@ def planSubset(foreignKeys: Sequence[ForeignKey], root: str, where: str, followC
     rootKey = root.upper()
     down, included = _traverse(parentEdges, childEdges, [rootKey], followChildren)
 
-    cycle = _findCycle(included, {table: [edge for edge in edges if edge.referencedTable.upper() in included]
-                                  for table, edges in parentEdges.items() if table in included})
+    cycle = findCycle({table: [edge.referencedTable.upper() for edge in parentEdges.get(table, [])] for table in included})
     if cycle:
         described = ' -> '.join(names[table] for table in cycle)
         raise SubsetError('foreign keys form a cycle ({}), which plain SQL cannot close. Break it with '

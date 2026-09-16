@@ -103,4 +103,4 @@ def test_the_demo_writes_only_inside_the_directory_it_is_given(demoRun):
     """
     _, workingDirectory = demoRun
 
-    assert {path.name for path in workingDirectory.iterdir()} == {'demo.db', 'memory.yaml', 'incremental.log'}
+    assert {path.name for path in workingDirectory.iterdir()} == {'demo.db', 'memory.yaml', 'memory.yaml.lock', 'incremental.log'}

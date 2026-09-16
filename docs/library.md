@@ -22,43 +22,47 @@ def load(path):
     with open(path) as file:
         return expandEnvironmentVariables(yaml.safe_load(file))
 
-databases = Configuration.validateDatabaseConfiguration(load('database.yaml'))
-jobsFile = Configuration.validateJobConfiguration(load('jobs.yaml'), DataJobsFile)
-Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databases))
+def main():
+    databases = Configuration.validateDatabaseConfiguration(load('database.yaml'))
+    jobsFile = Configuration.validateJobConfiguration(load('jobs.yaml'), DataJobsFile)
+    Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databases))
 
-result = runDataJobs(
-    jobsFile=jobsFile,
-    databaseConfiguration=databases,
-    memory=FileMemory(memoryFile='memory.yaml'),
-    )
+    result = runDataJobs(
+        jobsFile=jobsFile,
+        databaseConfiguration=databases,
+        memory=FileMemory(memoryFile='memory.yaml'),
+        )
 
-if not result.succeeded:
-    raise SystemExit(1)
+    if not result.succeeded:
+        raise SystemExit(1)
+
+if __name__ == '__main__':
+    main()
 ```
+
+**Keep the `if __name__ == '__main__':` guard.** Jobs run in worker processes, and on macOS, Windows, and Linux from Python 3.14, each worker starts by importing your script. Without the guard, that import starts the run again.
 
 `expandEnvironmentVariables` is what resolves `${NAME}` references — the CLI calls it for you, but a library caller must, before validating. It raises `ConfigurationError` naming every unset variable.
 
 ```python
 runDataJobs(jobsFile, databaseConfiguration, memory,
             logFile=None, runForever=False, logLevel=logging.INFO, logFormat='text')
-
-runScrambleJobs(jobsFile, databaseConfiguration,
-                logFile=None, runForever=False, logLevel=logging.INFO, logFormat='text')
 ```
 
-- **`runForever=False`** makes one pass and returns. `True` keeps running, honouring `refresh`, until `SIGINT` or `SIGTERM`.
-- **`logFile`** is optional. Without one, attach a stream yourself: `Log(level=...).addStreamHandler(sys.stderr)`.
+- **`runForever=False`** makes one pass and returns. `True` keeps running, honouring `refresh`, until `SIGINT` or `SIGTERM`. Either signal stops new jobs from starting and lets running ones finish; see [stopping](design.md#single-runs-not-a-daemon).
+- **`logFile`** is optional. Without one, attach a stream yourself: `Log(level=...).addStreamHandler(sys.stderr)`. Workers' records are written by the calling process's handlers, whichever those are.
 - **`logFormat='json'`** writes structured records — see [design.md](design.md#structured-logs).
-- `runScrambleJobs` is **deprecated**: it emits a `DeprecationWarning` and logs one. Mask in a data job instead; see [masking.md](masking.md#migrating-from-scrambleyaml). It takes no `memory`, since scramble jobs have no refresh window or watermark to track.
 
-Worker processes, the pool and the dependency graph are managed for you.
+Worker processes, the pool and the dependency graph are managed for you, including a worker that dies mid-job: see [workers](design.md#workers).
 
-Validation raises `ConfigurationError`. `runDataJobs` also raises it before starting any work if a job sets `watermarkColumn` against a backend that can't store watermarks.
+To keep two runs that share run state from overlapping, as the CLI does, hold `exclusiveRun(path)` around the call. It raises `RunInProgressError` if another process holds the same lock file.
+
+Validation raises `ConfigurationError`. `runDataJobs` also raises it before starting any work if a job sets `watermarkColumn` against a backend that can't store watermarks, and `DependencyGraph` raises it for predecessors that form a cycle.
 
 
 ## Results
 
-Both runners return a `RunResult`. It's returned, never written anywhere — turning it into an exit code, an alert or a log line is up to you, and needs no configuration.
+`runDataJobs` returns a `RunResult`. It's returned, never written anywhere — turning it into an exit code, an alert or a log line is up to you, and needs no configuration.
 
 | `RunResult` | |
 | --- | --- |
@@ -66,6 +70,7 @@ Both runners return a `RunResult`. It's returned, never written anywhere — tur
 | `completed`, `failed`, `skipped` | Lists of `JobOutcome`. |
 | `rowCount` | Rows moved across all jobs. |
 | `outcomes` | Every `JobOutcome`, in completion order. |
+| `interrupted` | `True` if a signal stopped the run. The CLI exits with 130. |
 
 | `JobOutcome` | |
 | --- | --- |
@@ -101,7 +106,7 @@ A `MemoryBackend` holds what the scheduler needs *before* a job runs: when it la
 ```sql
 CREATE TABLE lightweight_etl_memory (
     job VARCHAR(255) PRIMARY KEY,
-    last_run DOUBLE,
+    last_run DOUBLE PRECISION,
     watermark_value VARCHAR(255),
     watermark_type VARCHAR(32)
     )
@@ -151,7 +156,7 @@ with Database(connectionSettings=databases['prod']) as database:
 | `Database.getForeignKeys()` | Every foreign key in the connection's current schema, as `ForeignKey(table, columns, referencedTable, referencedColumns, name)`. |
 | `Database.sample(query, rows)` | Column names and at most `rows` rows, without reading the rest. |
 | `proposeTable(database, table, sampleSize=1000)` | A `TableProposal` with a suggested policy and the reason for it, per column. |
-| `Database.getColumnDefinitions(table)`, `getDefinedPrimaryKey(table)`, `tableExists(table)` | The catalog facts `schema` builds DDL from. |
+| `Database.getColumnDefinitions(table)`, `getPrimaryColumnNames(table)`, `tableExists(table)` | The catalog facts `schema` and upserts use. `table` may be `schema.table`; otherwise the connection's current schema is searched, and no other. |
 | `relatedTables(foreignKeys, roots, followChildren=True)` | Every table a subset from `roots` would copy. |
 | `schema.readTable`, `schema.createStatements`, `schema.renderScript` | A table's shape, CREATE TABLE statements for a target dialect, and the script form. |
 | `schema.clearTables(database, tables)` | Empties tables children-first, in one transaction. |

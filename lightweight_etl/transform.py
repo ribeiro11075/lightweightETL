@@ -23,9 +23,15 @@ class TransformError(Exception):
     name -- checked up front, before touching any row, so it fails the same way
     every time instead of being silently skipped; (2) a transformer raises on a
     particular value (e.g. a `str`-only transform handed a row where that column
-    is an int) -- caught per-value and re-raised with the column name and
-    offending value attached, since the original exception alone doesn't say
-    which column/value caused it.
+    is an int) -- caught per-value and re-raised with the column name and the
+    value's *type* attached, since the original exception alone doesn't say
+    which column caused it.
+
+    Never the value itself. Transforms run on raw production rows, before
+    masking, and this message ends up in logs, the run result and the job's
+    outcome -- one bad value would otherwise copy personal data into all three.
+    The original exception isn't chained for the same reason: drivers and
+    transformers routinely put the value in their own message.
     """
 
 
@@ -106,8 +112,8 @@ class Transform:
                         row[index] = transformer(value)
                     except Exception as error:
                         transformerName = getattr(transformer, '__name__', repr(transformer))
-                        raise TransformError('transformer "{}" failed on column "{}" for value {!r}: {}'.format(
-                            transformerName, self.columns[index], value, error)) from error
+                        raise TransformError('transformer "{}" failed on column "{}" for a value of type {}: {}'.format(
+                            transformerName, self.columns[index], type(value).__name__, type(error).__name__)) from None
 
         return [tuple(row) for row in rows]
 

@@ -44,7 +44,6 @@ cp example/configuration/*.yaml configuration/
 | --- | --- |
 | `database.yaml` | two database aliases, with credentials read from the environment |
 | `jobs.yaml` | data jobs, including an incremental one and two masked ones |
-| `scramble.yaml` | a deprecated scramble job, kept until the command is removed |
 | `demo/` | the SQLite configuration `incremental_demo.py` runs |
 | `masking/` | the SQLite configuration `masking_demo.py` runs |
 

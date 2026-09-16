@@ -130,7 +130,7 @@ def test_schema_creates_target_tables_that_a_copy_loads_into(sourceName, targetN
                 database.alter(statement.sql)
 
             assert database.tableExists(parentCopy) and database.tableExists(childCopy)
-            assert [column.lower() for column in database.getDefinedPrimaryKey(parentCopy)] == ['id']
+            assert [column.lower() for column in database.getPrimaryColumnNames(parentCopy)] == ['id']
             assert {foreignKey.referencedTable.lower() for foreignKey in database.getForeignKeys()
                     if foreignKey.table.lower() == childCopy.lower()} == {parentCopy.lower()}
 

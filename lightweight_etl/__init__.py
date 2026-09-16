@@ -9,18 +9,15 @@ from .configuration import (
     InsertStrategy,
     MaskingConfig,
     expandEnvironmentVariables,
-    ScrambleJobConfig,
-    ScrambleJobsFile,
     )
 from .databaseDialects import ColumnCategory, DatabaseDialect, ForeignKey, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, SQLiteDialect
 from .database import Database
-from .scramble import Scramble
 from .dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 from .discovery import TableProposal, proposeTable
 from .log import Log
 from .masking import STRATEGIES, MaskingError, MaskingPlan, Strategy, buildMaskingManifest, keyFingerprint
-from .memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory, FileMemory, MemoryBackend
-from .runner import RunResult, runDataJobs, runScrambleJobs
+from .memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory, FileMemory, MemoryBackend, RunInProgressError, exclusiveRun
+from .runner import RunResult, runDataJobs
 from .subset import SubsetError, SubsetPlan, planSubset
 from .transform import Transform, Transformer, TransformError, TransformResolutionError, resolveTransformer
 
@@ -36,6 +33,7 @@ __all__ = [
     'DatabaseDialect',
     'DatabaseMemory',
     'DatabaseType',
+    'exclusiveRun',
     'expandEnvironmentVariables',
     'DataJobConfig',
     'DataJobsFile',
@@ -58,10 +56,8 @@ __all__ = [
     'planSubset',
     'PostgreSQLDialect',
     'proposeTable',
+    'RunInProgressError',
     'RunResult',
-    'Scramble',
-    'ScrambleJobConfig',
-    'ScrambleJobsFile',
     'SQLiteDialect',
     'STRATEGIES',
     'Strategy',
@@ -74,5 +70,4 @@ __all__ = [
     'TransformResolutionError',
     'resolveTransformer',
     'runDataJobs',
-    'runScrambleJobs',
     ]

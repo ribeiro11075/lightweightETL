@@ -11,8 +11,7 @@ from pathlib import Path
 import pytest
 
 from lightweight_etl.cli import _buildParser
-from lightweight_etl.configuration import (Configuration, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, MaskingConfig, ScrambleJobConfig,
-                                           ScrambleJobsFile, expandEnvironmentVariables)
+from lightweight_etl.configuration import Configuration, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, MaskingConfig, expandEnvironmentVariables
 from lightweight_etl.masking import STRATEGIES
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,8 +52,7 @@ MASKING_DOC = ROOT / 'docs' / 'masking.md'
 
 
 @pytest.mark.parametrize('model,document', [(DatabaseConnectionConfig, CONFIGURATION_DOC), (DataJobConfig, CONFIGURATION_DOC),
-                                            (ScrambleJobConfig, CONFIGURATION_DOC), (DataJobsFile, CONFIGURATION_DOC),
-                                            (ScrambleJobsFile, CONFIGURATION_DOC), (MaskingConfig, MASKING_DOC)],
+                                            (DataJobsFile, CONFIGURATION_DOC), (MaskingConfig, MASKING_DOC)],
                          ids=lambda value: getattr(value, '__name__', None) or value.name)
 def test_every_configuration_field_is_documented(model, document):
     """A field added to a model without a line in the reference is the most

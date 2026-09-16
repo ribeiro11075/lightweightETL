@@ -76,7 +76,7 @@ A NULL stays NULL under every strategy except `constant` and `null`.
 | `dateShift` | Moved by a keyed number of whole days, never zero. Times of day are kept. ISO 8601 text, which is how SQLite stores dates, is written back in the same format. | `maxDays` (default 30) |
 | `key` | A one-to-one mapping, safe for primary and foreign keys. See below. | `charset`: `alphanumeric` (default), `digits`, `hex` |
 | `fakeName`, `fakeFirstName`, `fakeLastName`, `fakeCity`, `fakeCompany`, `fakeStreetAddress` | Realistic values from bundled lists. Not unique. | `maxLength` |
-| `shuffle` | The column's values rearranged among rows in the same chunk. **Not anonymization:** every real value is still in the table. | |
+| `shuffle` | The column's values rearranged among rows in the same chunk. **Not anonymization:** every real value is still in the table, and a small chunk barely moves them. See [limits](#limits). | |
 
 A value a strategy can't handle fails the job, for example text given to `number`. The error names the column and the value's type, never the value itself.
 
@@ -165,11 +165,11 @@ maskCustomersInPlace:
   masking: ...
 ```
 
-Masked rows stream into the stage table, and the stage is then swapped with the original. If a run fails, the original is untouched. The deprecated `scramble` command truncated the table first, so a failed run could leave it empty.
+Masked rows stream into the stage table, and the stage is then swapped with the original. If a run fails before the swap, the original is untouched. The removed `scramble` command truncated the table first, so a failed run could leave it empty.
 
 Use `swap` rather than `upsert` for this if any key column is masked. An upsert matches rows by primary key, and a masked key would add new rows instead of replacing the old ones.
 
-`swap` renames tables, and databases differ in how they treat foreign keys that point at a renamed table. For a table that other tables reference, copy into a separate database instead.
+`swap` renames tables, and databases differ in how they treat views and foreign keys that point at a renamed table; see [how a swap works](design.md#how-a-swap-works). For a table that other tables or views reference, copy into a separate database instead.
 
 
 ## The manifest
@@ -254,6 +254,8 @@ Each job's `sourceQuery` is plain SQL made of nested `EXISTS` subqueries, which 
 
 The generated queries grow with the depth of the schema, because every level nests the levels above it. For a very deep schema, root the subset lower down, or use `--no-children`.
 
+**Each table is read at a different moment**, by its own job. Rows written to the source between two of those reads can reference rows that weren't copied, and the target's foreign keys will then reject them. Subset from a replica or a snapshot that isn't being written to, or make `--where` exclude recent rows (`created_at < '2026-09-01'`) so late writes fall outside the subset.
+
 The target's tables must already exist. `subset` generates jobs; it doesn't create tables. See the next section for creating them.
 
 
@@ -313,13 +315,14 @@ Between `clear` and the end of the run, the copy is empty or partly loaded. For 
 - **Unique columns** need enough bits to avoid collisions. `hash` enforces a minimum length for that reason. The `fake*` strategies are never unique. For a unique column, use `key`, which never collides.
 - **`number` with `variance`** keeps magnitudes realistic, which also reveals them roughly. Use `min`/`max` if the magnitude itself is sensitive.
 - **`dateShift`** is keyed on the date, so everyone born on the same day still shares a birthday after masking. That's what keeps the data consistent, and it means dates are shifted, not randomized.
+- **`shuffle` needs large chunks.** Values only move within a chunk, so a row keeps its own value with probability 1/chunk size, and a chunk of one row isn't shuffled at all. The last chunk of a load and a small incremental run are both small. Don't use `shuffle` on incremental jobs.
 - **Masking hides values, not patterns.** Row counts, NULL rates and relationships are all preserved, which is the point, and a combination of kept columns (zip code, birth year and gender) can still identify someone. Review what you `keep`.
 - **Hard deletes** aren't propagated by incremental loads, masked or not. See [design.md](design.md#deletes).
 
 
 ## Migrating from `scramble.yaml`
 
-`lightweight-etl scramble` and `scramble.yaml` are **deprecated** and will be removed in the next release. They log a warning on every run. A scramble job holds the whole table in memory, truncates it and reinserts the rows. It has none of the properties above: masks aren't consistent across tables or runs, and a failure can leave the table empty.
+`lightweight-etl scramble` and `scramble.yaml` have been **removed**. A scramble job held the whole table in memory, truncated it and reinserted the rows. It had none of the properties above: masks weren't consistent across tables or runs, and a failure could leave the table empty.
 
 To migrate, turn each scramble job into an in-place data job ([masking in place](#masking-in-place)) with `sourceQuery: select * from <table>`, and translate its fields:
 

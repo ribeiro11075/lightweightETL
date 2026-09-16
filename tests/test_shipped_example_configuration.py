@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lightweight_etl.configuration import Configuration, ConfigurationError, DataJobsFile, ScrambleJobsFile, expandEnvironmentVariables
+from lightweight_etl.configuration import Configuration, ConfigurationError, DataJobsFile, expandEnvironmentVariables
 from lightweight_etl.transform import resolveTransformer
 
 CONFIGURATION_DIRECTORY = Path(__file__).resolve().parents[1] / 'example' / 'configuration'
@@ -75,13 +75,6 @@ def test_the_masking_demo_configuration_validates_as_a_complete_config_directory
     Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databases))
 
     assert all(job.masking is not None for job in jobsFile.jobs.values())
-
-
-def test_the_shipped_scramble_configuration_validates():
-    jobsFile = Configuration.validateJobConfiguration(_load('scramble.yaml'), ScrambleJobsFile)
-    Configuration.validateJobGraph(jobsFile.jobs)
-
-    assert jobsFile.jobs
 
 
 def test_every_transformer_the_sample_references_actually_resolves():

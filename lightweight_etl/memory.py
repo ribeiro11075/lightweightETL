@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import datetime
 import decimal
 import os
@@ -7,19 +8,22 @@ import sys
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Iterator, Tuple, Union
 
 import yaml
 
 from .configuration import DatabaseConnectionConfig
 from .database import Database
 
+# Locks are taken on a separate, empty `.lock` file rather than on the data
+# file itself, because the data file is replaced on every write: a lock held on
+# the old inode would guard nothing once the new one is renamed into place.
 if sys.platform == 'win32':
     import msvcrt
 
-    def _lock(file: Any) -> None:
+    def _lock(file: Any, blocking: bool = True) -> None:
         file.seek(0)
-        msvcrt.locking(file.fileno(), msvcrt.LK_LOCK, 1)
+        msvcrt.locking(file.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
 
     def _unlock(file: Any) -> None:
         file.seek(0)
@@ -27,22 +31,58 @@ if sys.platform == 'win32':
 else:
     import fcntl
 
-    def _lock(file: Any) -> None:
-        fcntl.flock(file.fileno(), fcntl.LOCK_EX)
+    def _lock(file: Any, blocking: bool = True) -> None:
+        fcntl.flock(file.fileno(), fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def _unlock(file: Any) -> None:
         fcntl.flock(file.fileno(), fcntl.LOCK_UN)
 
 
+@contextlib.contextmanager
+def _locked(path: Path, blocking: bool = True) -> Iterator[None]:
+    """Holds an exclusive lock on `path`, creating it if needed. Raises
+    OSError at once if `blocking` is False and someone else holds it.
+    """
+
+    with open(path, 'a') as file:
+        _lock(file, blocking=blocking)
+        try:
+            yield
+        finally:
+            _unlock(file)
+
+
+class RunInProgressError(Exception):
+    """Another run already holds the run lock."""
+
+
+@contextlib.contextmanager
+def exclusiveRun(lockFile: Union[str, Path]) -> Iterator[None]:
+    """Holds `lockFile` for the life of a run, or raises RunInProgressError.
+
+    Two runs sharing run state must not overlap -- a cron interval shorter than
+    a slow run is enough to cause it. Both would run the same jobs at once:
+    two swaps renaming the same tables, two upserts racing, and each recording
+    watermarks the other then moves. The second run refuses to start instead.
+    The lock is released by the operating system if the process dies.
+    """
+
+    try:
+        with _locked(Path(lockFile), blocking=False):
+            yield
+    except OSError as error:
+        raise RunInProgressError('another run is already using {} -- not starting a second one alongside it'.format(lockFile)) from error
+
+
 class MemoryBackend(ABC):
     """Tracks each job's last-run time, wherever an implementation chooses to keep it.
 
-    Implementations must be safe to pass through multiprocessing.Pool's initargs --
-    runDataJobs hands the same instance to every worker process, which pickles it
-    and reconstructs a separate copy per process. Concretely: hold picklable
-    settings (a Path, connection settings, ...), not a live file handle or database
-    connection, and open whatever resource you need inside read()/recordRun()
-    itself -- the same contract Database's dialects follow for the ETL databases.
+    Implementations must be picklable -- runDataJobs hands the same instance to
+    every job it runs in a worker process, which pickles it and reconstructs a
+    separate copy there. Concretely: hold picklable settings (a Path, connection
+    settings, ...), not a live file handle or database connection, and open
+    whatever resource you need inside read()/recordRun() itself -- the same
+    contract Database's dialects follow for the ETL databases.
     """
 
     @abstractmethod
@@ -99,11 +139,16 @@ def _yamlSafe(value: Any) -> Any:
 class FileMemory(MemoryBackend):
     """The default MemoryBackend: a YAML file, safe to share across worker processes.
 
-    Every write re-reads and re-locks the file rather than trusting a cached
+    Every write re-reads the file under a lock rather than trusting a cached
     snapshot, since multiple worker processes each hold their own FileMemory
     instance -- without this, two workers finishing around the same time would
     each write back a stale copy of the whole file, silently losing each other's
     update.
+
+    A write goes to a temporary file that then replaces the original, so a
+    process killed mid-write leaves the previous version intact rather than a
+    truncated file that no later run could parse. The lock lives beside it, in
+    `<file>.lock`.
 
     The document is namespaced:
 
@@ -117,13 +162,21 @@ class FileMemory(MemoryBackend):
     windows survive the upgrade rather than every job firing at once.
     """
 
-    def __init__(self, memoryFile: Path) -> None:
-        self.memoryFile = memoryFile
+    def __init__(self, memoryFile: Union[str, Path]) -> None:
+        self.memoryFile = Path(memoryFile)
+        self._lockFile = self.memoryFile.with_name(self.memoryFile.name + '.lock')
 
 
-    def _load(self, file: Any) -> Dict[str, Any]:
+    def _load(self) -> Dict[str, Any]:
+        """A missing file means nothing has been recorded yet and reads as
+        empty, rather than raising -- a fresh checkout has no memory file at all.
+        """
 
-        document = yaml.load(file, Loader=yaml.FullLoader) or {}
+        try:
+            with open(self.memoryFile) as file:
+                document = yaml.load(file, Loader=yaml.FullLoader) or {}
+        except FileNotFoundError:
+            document = {}
 
         if document and 'lastRun' not in document and 'watermarks' not in document:
             return {'lastRun': document, 'watermarks': {}}
@@ -135,37 +188,29 @@ class FileMemory(MemoryBackend):
 
 
     def _read(self, section: str) -> Dict[str, Any]:
-        """A missing file means nothing has been recorded yet and reads as empty,
-        rather than raising -- a fresh checkout has no memory file at all.
-        """
 
-        try:
-            with open(self.memoryFile) as file:
-                _lock(file)
-                try:
-                    return self._load(file)[section]
-                finally:
-                    _unlock(file)
-        except FileNotFoundError:
+        # Checked first so that reading never creates a lock file beside a
+        # memory file that doesn't exist yet.
+        if not self.memoryFile.exists():
             return {}
+
+        with _locked(self._lockFile):
+            return dict(self._load()[section])
 
 
     def _write(self, section: str, job: str, value: Any) -> None:
 
-        fileDescriptor = os.open(self.memoryFile, os.O_RDWR | os.O_CREAT, 0o644)
+        temporary = self.memoryFile.with_name(self.memoryFile.name + '.tmp')
 
-        with os.fdopen(fileDescriptor, 'r+') as file:
-            _lock(file)
-            try:
-                file.seek(0)
-                document = self._load(file)
-                document[section][job] = value
+        with _locked(self._lockFile):
+            document = self._load()
+            document[section][job] = value
 
-                file.seek(0)
-                file.truncate()
+            with open(temporary, 'w') as file:
                 yaml.dump(document, file)
-            finally:
-                _unlock(file)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary, self.memoryFile)
 
 
     def read(self) -> Dict[str, float]:
@@ -190,7 +235,7 @@ class FileMemory(MemoryBackend):
 
 DATABASE_MEMORY_SCHEMA = """CREATE TABLE lightweight_etl_memory (
     job VARCHAR(255) PRIMARY KEY,
-    last_run DOUBLE,
+    last_run DOUBLE PRECISION,
     watermark_value VARCHAR(255),
     watermark_type VARCHAR(32)
     )"""

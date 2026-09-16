@@ -55,7 +55,7 @@ def test_upsert_from_stage_executes_for_every_dialect(dbType):
     (DatabaseType.POSTGRESQL, 1),
     (DatabaseType.ORACLE, 3),
     (DatabaseType.MSSQL, 1),
-    (DatabaseType.SQLITE, 3),
+    (DatabaseType.SQLITE, 4),
     (DatabaseType.MARIADB, 1),
     ])
 def test_swap_executes_the_right_number_of_statements(dbType, expectedStatementCount):
@@ -112,16 +112,34 @@ def test_get_all_column_names_and_types_use_a_bounded_query():
         assert 'WHERE 1=0' in callArgs[0][0]
 
 
-def test_get_last_query_column_names_reads_the_cursors_own_description():
-    """Reflects whatever the last query actually returned -- an explicit column
-    list, a `select *`, computed/aliased expressions -- not any table's schema,
-    which is the whole point of using it to validate sourceQueryColumnTransforms
-    against sourceQuery's real result rather than the target table.
+@pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.SQLITE])
+def test_an_upsert_into_a_table_without_a_primary_key_fails_rather_than_guessing(dbType):
+    """With no key there's nothing to match rows on. MySQL used to insert a
+    duplicate of every row on every run; the others generated invalid SQL.
     """
-    database = _mockedDatabase(DatabaseType.MYSQL)
-    database.cursor.description = [('id', 'INT'), ('customName', 'VARCHAR')]
+    from lightweight_etl.configuration import ConfigurationError
 
-    assert database.getLastQueryColumnNames() == ['id', 'customName']
+    database = _mockedDatabase(dbType)
+    database.getPrimaryColumnNames = MagicMock(return_value=[])
+
+    with pytest.raises(ConfigurationError, match='no primary key'):
+        database.upsert(table='people', data=[(1, 'a')])
+
+    database.cursor.executemany.assert_not_called()
+
+
+@pytest.mark.parametrize('target,stage,expectedTemp', [
+    ('people', 'people_stage', 'people_tmp'),
+    ('sales.people', 'sales.people_stage', 'sales.people_tmp'),
+    ])
+def test_swap_puts_the_temporary_table_in_the_stage_tables_schema(target, stage, expectedTemp):
+    database = _mockedDatabase(DatabaseType.MYSQL)
+    database.dialect = MagicMock()
+    database.dialect.swapQueries.return_value = []
+
+    database.swap(targetTable=target, stageTable=stage)
+
+    database.dialect.swapQueries.assert_called_once_with(targetTable=target, stageTable=stage, tempTable=expectedTemp)
 
 
 def test_chunk_insert_splits_data_into_multiple_batches():
