@@ -13,7 +13,7 @@ jobs:
     targetColumns:
     sourceQueryColumnTransforms:
       amount:
-      - example.example_transforms:currency
+      - lightweight_etl.builtinTransforms:currency
     targetDatabase: targetDb
     targetTableStage:
     targetTableFinal: table1
@@ -35,5 +35,48 @@ jobs:
     targetTableFinal: table2
     insertStrategy: swap
     chunkSize: 500
+    preTargetAdhocQueries:
+    postTargetAdhocQueries:
+  # An incremental job: instead of re-copying the whole table every run, it
+  # extracts only the rows whose watermarkColumn is past where the last
+  # successful run got to, and the library stores that high-water mark in
+  # `memory` between runs.
+  #
+  # The three parts have to agree, and configuration validation enforces it:
+  #   - `{{ watermark }}` in sourceQuery is where the stored value is bound.
+  #     It is a *bound parameter*, not text substitution, so the placeholder
+  #     goes wherever a value could go -- including inside a join or subquery.
+  #   - `watermarkColumn` names which of sourceQuery's own result columns to
+  #     take the high-water mark from. It must be one the query actually selects.
+  #   - `watermarkInitial` is what the first run binds, before anything is stored.
+  #
+  # insertStrategy must be `upsert`. `swap` is rejected outright: it replaces the
+  # target with the stage table's contents, so staging only the changed rows
+  # would delete every row that hadn't changed.
+  #
+  # The `- interval 5 minute` below is a lookback window, and it is the reason
+  # this is safe. A transaction that starts before the run and commits after it,
+  # carrying an earlier updated_at, was never visible to the query -- yet a bare
+  # `>` watermark would have already moved past it, skipping that row forever.
+  # Re-reading a small overlap every run closes that hole, and costs nothing
+  # because upsert makes re-loading a row a no-op. Write the arithmetic in your
+  # own dialect: postgres `- interval '5 minutes'`, oracle
+  # `- numtodsinterval(5, 'minute')`, sqlite `datetime({{ watermark }}, '-5 minutes')`,
+  # or plain `- 5` if your watermark is a numeric id rather than a timestamp.
+  loadOrdersIncrementally:
+    active: true
+    refresh: 5
+    predecessors:
+    sourceDatabase: sourceDb
+    sourceQuery: select id, customerId, amount, updatedAt from orders where updatedAt > {{ watermark }} - interval 5 minute
+    targetColumns:
+    sourceQueryColumnTransforms:
+    targetDatabase: targetDb
+    targetTableStage:
+    targetTableFinal: orders
+    insertStrategy: upsert
+    watermarkColumn: updatedAt
+    watermarkInitial: '1970-01-01 00:00:00'
+    chunkSize: 5000
     preTargetAdhocQueries:
     postTargetAdhocQueries:

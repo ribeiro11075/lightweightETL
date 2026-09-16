@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import uuid
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, List, Optional, Tuple
 
-from .configurationInterface import DatabaseConnectionConfig
+from .configuration import DatabaseConnectionConfig
 
 
 class ColumnCategory(str, Enum):
@@ -42,9 +43,39 @@ class DatabaseDialect(ABC):
         """Returns (connection, cursor).
 
         Implementations import their driver lazily, inside this method, so that
-        `import library` doesn't require every database driver to be installed --
+        `import lightweight_etl` doesn't require every database driver to be installed --
         only the one you actually connect with.
         """
+
+    def streamingCursor(self, connection: Any, chunkSize: int) -> Any:
+        """A cursor that does *not* buffer the whole result set client-side.
+
+        This is what bounds an extract's memory to one chunk rather than the
+        whole table, and it can only be decided per driver: a plain DB-API
+        cursor.fetchmany() bounds how many rows *Python* builds objects for, but
+        says nothing about how many the driver already pulled off the socket. A
+        client-buffered cursor has spent the memory before fetchmany() is ever
+        called.
+
+        The default is a plain cursor, which is correct for the drivers that
+        already stream row-by-row off the connection (sqlite3, pymssql).
+        Dialects whose driver buffers by default override this.
+        """
+
+        return connection.cursor()
+
+
+    def discardRemaining(self, connection: Any, cursor: Any) -> None:
+        """Release rows left unread on `cursor`, so `connection` stays usable.
+
+        Called when a stream is abandoned before exhaustion. The default is a
+        no-op, which is correct wherever the *server* still owns the unsent rows
+        and closing the cursor is enough to discard them: PostgreSQL's
+        server-side cursor gets a CLOSE, and Oracle and sqlite3 drop their
+        remaining rows on close. Only a driver that has already pulled rows onto
+        the client connection needs to do anything here.
+        """
+
 
     @abstractmethod
     def placeholders(self, count: int) -> List[str]:
@@ -61,7 +92,7 @@ class DatabaseDialect(ABC):
         """Maps one raw value from cursor.description's type_code field (a shape
         that's entirely up to the driver -- a type-name string, a numeric OID, a
         driver-specific type object, ...) to a NUMBER/DATE/TEXT ColumnCategory, for
-        Scramble's random-data generation (see databaseScrambleInterface.py) to use
+        Scramble's random-data generation (see scramble.py) to use
         without knowing or caring which database the data came from.
 
         None means "not recognized" -- the default here, for any dialect that
@@ -105,6 +136,42 @@ class MySQLDialect(DatabaseDialect):
         return connection, cursor
 
 
+    def streamingCursor(self, connection: Any, chunkSize: int) -> Any:
+        """The inverse of connect()'s cursor: buffered=False.
+
+        connect() deliberately uses buffered=True, which fetches the entire
+        result set at execute() time -- that's what makes row counts and
+        re-iteration cheap for the small metadata queries Database runs, and
+        it's exactly what has to be turned off to stream a large extract.
+
+        The trade-off an unbuffered cursor brings: it holds the connection until
+        it is fully drained, so no other statement can run on this connection
+        while a stream is open. _executeDataJob is safe because it reads through
+        the *source* connection and writes through a separate target one --
+        anything that interleaves a second query onto a streaming connection
+        will raise InternalError: Unread result found.
+        """
+
+        return connection.cursor(buffered=False)
+
+
+    def discardRemaining(self, connection: Any, cursor: Any) -> None:
+        """mysql.connector queues unread rows on the *connection*, not the cursor.
+
+        Closing an unbuffered cursor does not drop them, so the next statement on
+        that connection fails with "InternalError: Unread result found" -- the
+        connection is effectively poisoned by an abandoned stream. consume_results()
+        is the driver's own remedy: it reads and discards whatever is outstanding.
+
+        That costs a network transfer of the rows nobody wanted, which is the
+        price of leaving the connection usable; it is bounded in memory, not in
+        bandwidth. Abandoning a stream over a very large result set is therefore
+        cheap in RAM and expensive in time on this dialect alone.
+        """
+
+        connection.consume_results()
+
+
     def placeholders(self, count: int) -> List[str]:
 
         return count * ['%s']
@@ -137,14 +204,35 @@ class MySQLDialect(DatabaseDialect):
 
 
     def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
+        """A table whose every column is part of the primary key has nothing to
+        update on a conflict, and an empty SET clause is a syntax error -- so the
+        conflict action becomes "do nothing" instead. OracleDialect and
+        MSSQLDialect already handled this by dropping WHEN MATCHED from their
+        MERGE; this is the same case on the INSERT-based dialects, which used to
+        emit a dangling `ON DUPLICATE KEY UPDATE` and fail at the database.
+        """
 
         allColumnVariables = self.placeholders(len(allColumns))
+
+        if not nonPrimaryKeyColumns:
+            return 'INSERT IGNORE INTO {} ({}) VALUES ({})'.format(table, ', '.join(allColumns), ', '.join(allColumnVariables))
+
         nonPrimaryKeyColumnVariables = [column + '=VALUES(' + column + ')' for column in nonPrimaryKeyColumns]
 
         return 'INSERT INTO {} ({}) VALUES ({}) ON DUPLICATE KEY UPDATE {}'.format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ', '.join(nonPrimaryKeyColumnVariables))
 
 
     def upsertFromStageQuery(self, targetTable: str, stageTable: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
+        """A table whose every column is part of the primary key has nothing to
+        update on a conflict, and an empty SET clause is a syntax error -- so the
+        conflict action becomes "do nothing" instead. OracleDialect and
+        MSSQLDialect already handled this by dropping WHEN MATCHED from their
+        MERGE; this is the same case on the INSERT-based dialects, which used to
+        emit a dangling `ON DUPLICATE KEY UPDATE` and fail at the database.
+        """
+
+        if not nonPrimaryKeyColumns:
+            return 'INSERT IGNORE INTO {} ({}) SELECT {} FROM {}'.format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable)
 
         nonPrimaryKeyColumnVariables = [column + '=VALUES(' + column + ')' for column in nonPrimaryKeyColumns]
 
@@ -172,6 +260,27 @@ class PostgreSQLDialect(DatabaseDialect):
         return connection, cursor
 
 
+    def streamingCursor(self, connection: Any, chunkSize: int) -> Any:
+        """psycopg2 only streams through a *named* cursor.
+
+        An unnamed cursor is client-side: psycopg2 pulls the entire result set
+        into the client at execute() time, so fetchmany() on one bounds nothing.
+        Passing a name creates a server-side cursor (a real PostgreSQL DECLARE
+        ... CURSOR), which fetches in batches of `itersize`.
+
+        The name has to be unique within the session, hence the uuid suffix --
+        two concurrent streams on one connection would otherwise collide. Note a
+        server-side cursor lives inside a transaction and is invalidated by a
+        commit on its connection, which is why the extract side never commits
+        (Database.query/alter commit; stream() does not).
+        """
+
+        cursor = connection.cursor(name='lightweight_etl_{}'.format(uuid.uuid4().hex))
+        cursor.itersize = chunkSize
+
+        return cursor
+
+
     def placeholders(self, count: int) -> List[str]:
 
         return count * ['%s']
@@ -197,13 +306,36 @@ class PostgreSQLDialect(DatabaseDialect):
 
     def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
 
+        """A table whose every column is part of the primary key has nothing to
+        update on a conflict, and an empty SET clause is a syntax error -- so the
+        conflict action becomes "do nothing" instead. OracleDialect and
+        MSSQLDialect already handled this by dropping WHEN MATCHED from their
+        MERGE; this is the same case on the INSERT-based dialects, which used to
+        emit a dangling `DO UPDATE SET` and fail at the database.
+        """
+
         allColumnVariables = self.placeholders(len(allColumns))
+
+        if not nonPrimaryKeyColumns:
+            return 'INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO NOTHING'.format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ','.join(primaryKeyColumns))
+
         nonPrimaryKeyColumnVariables = [column + '=EXCLUDED.' + column for column in nonPrimaryKeyColumns]
 
         return 'INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO UPDATE SET {}'.format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ','.join(primaryKeyColumns), ', '.join(nonPrimaryKeyColumnVariables))
 
 
     def upsertFromStageQuery(self, targetTable: str, stageTable: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
+
+        """A table whose every column is part of the primary key has nothing to
+        update on a conflict, and an empty SET clause is a syntax error -- so the
+        conflict action becomes "do nothing" instead. OracleDialect and
+        MSSQLDialect already handled this by dropping WHEN MATCHED from their
+        MERGE; this is the same case on the INSERT-based dialects, which used to
+        emit a dangling `DO UPDATE SET` and fail at the database.
+        """
+
+        if not nonPrimaryKeyColumns:
+            return 'INSERT INTO {} ({}) SELECT {} FROM {} ON CONFLICT({}) DO NOTHING'.format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable, ','.join(primaryKeyColumns))
 
         nonPrimaryKeyColumnVariables = [column + '=EXCLUDED.' + column for column in nonPrimaryKeyColumns]
 
@@ -230,6 +362,23 @@ class OracleDialect(DatabaseDialect):
         cursor = connection.cursor()
 
         return connection, cursor
+
+
+    def streamingCursor(self, connection: Any, chunkSize: int) -> Any:
+        """oracledb already streams; arraysize is what makes it stream *efficiently*.
+
+        A plain cursor fetches 100 rows per round trip by default, so a large
+        extract at a large chunkSize would otherwise spend most of its time on
+        network latency rather than data. prefetchrows is set one above arraysize
+        -- oracledb's documented pairing, which lets the first fetch and the
+        describe share a single round trip.
+        """
+
+        cursor = connection.cursor()
+        cursor.arraysize = chunkSize
+        cursor.prefetchrows = chunkSize + 1
+
+        return cursor
 
 
     def placeholders(self, count: int) -> List[str]:
@@ -384,7 +533,24 @@ class SQLiteDialect(DatabaseDialect):
 
         import sqlite3
 
-        connection = sqlite3.connect(settings.database)
+        # WAL, because this library reads and writes the same SQLite file from
+        # two places at once. In SQLite's default rollback-journal mode a reader
+        # holds a SHARED lock for as long as its statement is open, and a writer
+        # on any other connection fails outright with "database is locked" --
+        # which a streaming extract hits immediately whenever sourceDatabase and
+        # targetDatabase are the same file, since _executeDataJob opens a
+        # separate connection for each side and the read stays open across every
+        # write. (This was latent before streaming too: runDataJobs runs multiple
+        # worker *processes*, so two jobs writing the same file contended the
+        # same way.) WAL lets one writer proceed alongside readers, which is
+        # exactly that shape.
+        #
+        # Note this is a persistent property of the database file, not of the
+        # connection -- opening a database in WAL leaves it in WAL afterwards. It
+        # is a no-op for ":memory:", and requires a local filesystem: WAL uses
+        # shared memory, so it does not work over NFS or SMB.
+        connection = sqlite3.connect(settings.database, timeout=30.0)
+        connection.execute('PRAGMA journal_mode=WAL')
         cursor = connection.cursor()
 
         return connection, cursor
@@ -416,7 +582,18 @@ class SQLiteDialect(DatabaseDialect):
 
     def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
 
+        """A table whose every column is part of the primary key has nothing to
+        update on a conflict, and an empty SET clause is a syntax error -- so the
+        conflict action becomes "do nothing" instead. OracleDialect and
+        MSSQLDialect already handled this by dropping WHEN MATCHED from their
+        MERGE; this is the same case on the INSERT-based dialects.
+        """
+
         allColumnVariables = self.placeholders(len(allColumns))
+
+        if not nonPrimaryKeyColumns:
+            return 'INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO NOTHING'.format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ','.join(primaryKeyColumns))
+
         nonPrimaryKeyColumnVariables = [column + '=excluded.' + column for column in nonPrimaryKeyColumns]
 
         return 'INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO UPDATE SET {}'.format(table, ', '.join(allColumns), ', '.join(allColumnVariables), ','.join(primaryKeyColumns), ', '.join(nonPrimaryKeyColumnVariables))
@@ -430,6 +607,9 @@ class SQLiteDialect(DatabaseDialect):
         carries some clause after its FROM to disambiguate -- a no-op WHERE is the
         simplest one, and doesn't affect which rows are selected.
         """
+
+        if not nonPrimaryKeyColumns:
+            return 'INSERT INTO {} ({}) SELECT {} FROM {} WHERE true ON CONFLICT({}) DO NOTHING'.format(targetTable, ', '.join(allColumns), ', '.join(allColumns), stageTable, ','.join(primaryKeyColumns))
 
         nonPrimaryKeyColumnVariables = [column + '=excluded.' + column for column in nonPrimaryKeyColumns]
 

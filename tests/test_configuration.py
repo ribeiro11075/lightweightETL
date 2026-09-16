@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from library.configurationInterface import (
+from lightweight_etl.configuration import (
     Configuration,
     ConfigurationError,
     DatabaseConnectionConfig,
@@ -156,3 +156,58 @@ def test_default_column_values_scalar_survives_cleanup():
     jobsFile = Configuration.validateJobConfiguration(raw, ScrambleJobsFile)
 
     assert jobsFile.jobs['job1'].defaultColumnValues == {'status': 'active'}
+
+
+def _watermarkJob(**overrides):
+    fields = dict(active=True, sourceDatabase='src', targetDatabase='tgt', insertStrategy='upsert', chunkSize=100,
+                  targetTableFinal='orders', sourceQuery='select id, updated_at from orders where updated_at > {{ watermark }}',
+                  watermarkColumn='updated_at', watermarkInitial='1970-01-01')
+    fields.update(overrides)
+    return {'workers': 1, 'jobs': {'loadOrders': fields}}
+
+
+def test_a_watermark_job_validates():
+    jobsFile = Configuration.validateJobConfiguration(_watermarkJob(), DataJobsFile)
+
+    assert jobsFile.jobs['loadOrders'].watermarkColumn == 'updated_at'
+
+
+def test_watermark_column_without_a_placeholder_is_rejected():
+    """The column and the token are two halves of one feature: a column with no
+    token extracts everything, then advances a watermark nothing filtered on.
+    """
+    raw = _watermarkJob(sourceQuery='select id, updated_at from orders')
+
+    with pytest.raises(ConfigurationError, match='no {{ watermark }} placeholder'):
+        Configuration.validateJobConfiguration(raw, DataJobsFile)
+
+
+def test_a_placeholder_without_a_watermark_column_is_rejected():
+    raw = _watermarkJob(watermarkColumn=None)
+
+    with pytest.raises(ConfigurationError, match='watermarkColumn is not set'):
+        Configuration.validateJobConfiguration(raw, DataJobsFile)
+
+
+def test_watermark_without_an_initial_value_is_rejected():
+    raw = _watermarkJob(watermarkInitial=None)
+
+    with pytest.raises(ConfigurationError, match='watermarkInitial is required'):
+        Configuration.validateJobConfiguration(raw, DataJobsFile)
+
+
+def test_watermark_with_swap_is_rejected():
+    """The important one: swap replaces the target with the stage contents, so an
+    incremental extract would stage only changed rows and delete everything else.
+    """
+    raw = _watermarkJob(insertStrategy='swap', targetTableStage='orders_stage')
+
+    with pytest.raises(ConfigurationError, match='requires insertStrategy: upsert'):
+        Configuration.validateJobConfiguration(raw, DataJobsFile)
+
+
+@pytest.mark.parametrize('placeholder', ['{{ watermark }}', '{{watermark}}', '{{   watermark   }}'])
+def test_placeholder_spacing_is_forgiving(placeholder):
+    raw = _watermarkJob(sourceQuery='select id, updated_at from orders where updated_at > {}'.format(placeholder))
+
+    Configuration.validateJobConfiguration(raw, DataJobsFile)
