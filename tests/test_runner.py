@@ -981,3 +981,112 @@ def test_run_data_jobs_stops_on_sigterm_rather_than_running_forever(tmp_path):
                           memory=FileMemory(memoryFile=tmp_path / 'runner.yaml'), runForever=True)
 
     assert result.succeeded is True
+
+
+def _retryJobConfig(**overrides: Any) -> DataJobConfig:
+    fields = dict(active=True, sourceDatabase='src', targetDatabase='tgt', insertStrategy=InsertStrategy.UPSERT,
+                   chunkSize=100, targetTableFinal='people', sourceQuery='select * from people',
+                   retries=2, retryDelaySeconds=0.0)
+    fields.update(overrides)
+    return DataJobConfig(**fields)
+
+
+def _runRetryWorker(monkeypatch, tmp_path, attempt: Any, jobConfig: Any = None) -> List[Any]:
+
+    monkeypatch.setattr('lightweight_etl.runner._executeDataJob', lambda job, config, databases, log=None, watermark=None: attempt())
+
+    outcomes: List[Any] = []
+
+    class _CollectingQueue:
+        def put(self, item: Any) -> None:
+            outcomes.append(item)
+
+    with pytest.raises(_StopWorker):
+        _dataJobWorker(_OneShotReadyQueue('job1'), _CollectingQueue(), {'job1': jobConfig or _retryJobConfig()},
+                        {}, tmp_path / 'worker.log', _TimelineMemory([]))
+
+    return outcomes
+
+
+def test_a_transient_failure_is_retried_and_can_succeed(monkeypatch, tmp_path):
+    """The common production failure is a dropped connection, not a bug. Losing a
+    nightly load to one blip -- until the next refresh window -- is the outcome
+    retries exist to prevent.
+    """
+    calls = []
+
+    def flakyThenFine():
+        calls.append(1)
+        if len(calls) < 3:
+            raise OSError('connection reset by peer')
+        return JobOutcome(job='job1', status=JobStatus.COMPLETED, rowCount=7)
+
+    (outcome,) = _runRetryWorker(monkeypatch, tmp_path, flakyThenFine)
+
+    assert outcome.status == JobStatus.COMPLETED
+    assert outcome.rowCount == 7
+    assert outcome.attempts == 3
+
+
+def test_retries_are_bounded_and_the_last_error_is_reported(monkeypatch, tmp_path):
+    calls = []
+
+    def alwaysFails():
+        calls.append(1)
+        raise OSError('connection reset by peer')
+
+    (outcome,) = _runRetryWorker(monkeypatch, tmp_path, alwaysFails)
+
+    assert len(calls) == 3
+    assert outcome.status == JobStatus.FAILED
+    assert outcome.error == 'OSError: connection reset by peer'
+    assert outcome.attempts == 3
+
+
+def test_a_job_with_no_retries_configured_is_attempted_once(monkeypatch, tmp_path):
+    calls = []
+
+    def alwaysFails():
+        calls.append(1)
+        raise OSError('connection reset by peer')
+
+    (outcome,) = _runRetryWorker(monkeypatch, tmp_path, alwaysFails, jobConfig=_retryJobConfig(retries=0))
+
+    assert len(calls) == 1
+    assert outcome.attempts == 1
+
+
+@pytest.mark.parametrize('error', [
+    ConfigurationError('watermarkColumn is not among the columns sourceQuery returns'),
+    TransformError('sourceQueryColumnTransforms references column(s) not present'),
+    ])
+def test_a_deterministic_error_is_not_retried(monkeypatch, tmp_path, error):
+    """These are raised by this package and cannot succeed on a second attempt.
+    Retrying only delays the failure and buries the real message under repeats.
+    """
+    calls = []
+
+    def alwaysFails():
+        calls.append(1)
+        raise error
+
+    (outcome,) = _runRetryWorker(monkeypatch, tmp_path, alwaysFails)
+
+    assert len(calls) == 1
+    assert outcome.status == JobStatus.FAILED
+    assert outcome.attempts == 1
+
+
+def test_retry_backoff_grows_between_attempts(monkeypatch, tmp_path):
+    """Exponential, so a database that is down doesn't get hammered at a fixed
+    interval while it tries to come back.
+    """
+    delays = []
+    monkeypatch.setattr('lightweight_etl.runner.time.sleep', lambda seconds: delays.append(seconds))
+
+    def alwaysFails():
+        raise OSError('down')
+
+    _runRetryWorker(monkeypatch, tmp_path, alwaysFails, jobConfig=_retryJobConfig(retries=3, retryDelaySeconds=2.0))
+
+    assert delays == [2.0, 4.0, 8.0]

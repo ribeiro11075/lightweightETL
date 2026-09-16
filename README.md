@@ -47,7 +47,7 @@ Worker processes, the process pool, and the dependency graph between jobs are al
     - [ ] **Required**: Edit `example/configuration/database.yaml` -- one entry per database alias:
         - `type` (**Required**): `oracle`, `mysql`, `postgresql`, `mssql`, `mariadb`, or `sqlite`
         - `database` (**Required**): the database name -- for `sqlite`, this is instead a filesystem path (or `:memory:`)
-        - `user` / `password` / `host` (**Required for every type except `sqlite`**): connection credentials -- `sqlite` is a local file with no server or authentication, so these are omitted entirely for it
+        - `user` / `password` / `host` (**Required for every type except `sqlite`**): connection credentials -- use `${VAR}` to read them from the environment rather than storing them here, see "Credentials, retries and structured logs" below -- `sqlite` is a local file with no server or authentication, so these are omitted entirely for it
         - `port` (**Optional**): defaults to the driver's standard port when omitted
         - `serviceName` / `sid` (oracle only): exactly one of these is **required** for `type: oracle`
     - [ ] **Required**: Edit `example/configuration/jobs.yaml`
@@ -67,6 +67,7 @@ Worker processes, the process pool, and the dependency graph between jobs are al
             - `insertStrategy` (**Required**): `swap` or `upsert`
                 - `swap`: loads into `targetTableStage`, then swaps it with `targetTableFinal`
                 - `upsert`: upserts from `targetTableStage` if set, otherwise straight from the extracted data
+            - `retries` (**Optional**, default `0`) / `retryDelaySeconds` (**Optional**, default `5.0`): additional attempts for a failing job, with exponential backoff -- see "Retries" below
             - `chunkSize` (**Required**): rows per batch (number). Extracts are streamed, so this is the **memory dial**, not just the insert batch size -- peak memory is roughly `chunkSize` x row width no matter how large the source table is. See "How a data job moves rows" below
             - `watermarkColumn` (**Optional**): makes the job incremental -- see "Incremental loads" below. Names which of `sourceQuery`'s own result columns to take a high-water mark from; the job then extracts only rows past where the last *successful* run got to. Requires a `{{ watermark }}` placeholder in `sourceQuery`, `watermarkInitial`, and `insertStrategy: upsert`
             - `watermarkInitial` (**Required when `watermarkColumn` is set**): the value bound on the very first run, before anything has been stored
@@ -169,6 +170,58 @@ A skipped job counts as failure on purpose: it never ran, so the data it was mea
 - `--force` ignores refresh windows.
 - `--dry-run` is the online counterpart to `validate`: it connects to every alias, checks each driver is installed, checks target tables are readable, and checks that `insertStrategy: upsert` targets actually have a primary key -- without that key the upsert degrades silently rather than failing loudly. No rows move.
 - `--log PATH` additionally writes a log file. Logs go to stderr by default, since in a container they have to reach stdout/stderr to be collected at all.
+- `--log-format json` emits structured records carrying `job`/`status`/`rowCount` as fields a collector can filter on.
+
+
+## Credentials, retries and structured logs
+
+### Keep credentials out of the config file
+Any string in either YAML file may reference the environment:
+
+```yaml
+prod:
+  type: postgresql
+  database: app
+  host: db.internal
+  user: etl
+  password: ${PROD_DB_PASSWORD}
+  port: ${PROD_DB_PORT:-5432}
+```
+
+An unset variable with **no default raises `ConfigurationError` before anything runs**, rather than expanding to an empty string -- a blank password fails later with the driver's own unhelpful message, and a blank host silently connects somewhere unintended. Every unset name in the document is reported at once.
+
+Defaults are for the values that are awkward without them (ports, hosts, schema names). Don't give a secret a default; that just moves the credential back into the file.
+
+A literal `${...}` is escaped as `$${...}`, since `sourceQuery` is arbitrary SQL. PostgreSQL's dollar-quoting (`$$body$$`) is never followed by a brace and passes through untouched.
+
+The CLI expands automatically. A library caller loading their own YAML calls `expandEnvironmentVariables` on the loaded structure before validating it.
+
+### Retries
+A data job may set `retries` (default `0`) and `retryDelaySeconds` (default `5.0`); the delay doubles between attempts, so a database that is down isn't hammered at a fixed interval while it recovers.
+
+```yaml
+retries: 3
+retryDelaySeconds: 5
+```
+
+Retrying a whole data job is safe because both insert strategies converge on a re-run: `swap` restages and re-swaps, and `upsert` re-applies rows already present as a no-op.
+
+`ConfigurationError`, `TransformError` and `TransformResolutionError` are **never** retried. All three are raised by this package and are deterministic -- an unresolvable transformer reference or a column the query doesn't return cannot succeed on a second attempt, and retrying only delays the failure and buries the real message under identical repeats. Everything a driver raises *is* retried, because transient and permanent database errors cannot be told apart reliably across six drivers, and a needless retry costs far less than a nightly load lost to one dropped connection.
+
+Scramble jobs deliberately have no retries: a failure there can leave the table truncated, and a second pass would find it empty and report success having masked nothing.
+
+`JobOutcome.attempts` records how many it took.
+
+### Structured logs
+`--log-format json` emits one object per record, for a collector rather than a person:
+
+```json
+{"timestamp": "2026-09-16 01:00:12.514", "level": "INFO", "logger": "lightweight_etl",
+ "message": "loadOrders: completed in 12.5s, 4200 row(s)", "file": "cli.py", "line": 167,
+ "job": "loadOrders", "status": "completed", "rowCount": 4200, "durationSeconds": 12.5, "attempts": 1}
+```
+
+The point isn't the encoding, it's the fields. Job completions, failures, skips and the cycle summary all carry `job`, `status`, `rowCount` and `durationSeconds`, so a collector can alert on `status="failed"` or chart rows moved per job without anyone parsing a message string. Text remains the default, since a human reading a terminal is the more common case.
 
 
 ## How a data job moves rows

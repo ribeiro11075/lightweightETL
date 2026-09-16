@@ -36,6 +36,7 @@ class JobOutcome(NamedTuple):
     rowCount: int = 0
     watermark: Any = None
     error: Optional[str] = None
+    attempts: int = 1
     startedAt: float = 0.0
     finishedAt: float = 0.0
 

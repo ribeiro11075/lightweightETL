@@ -185,3 +185,32 @@ def test_jobs_shows_a_throttled_job_after_it_has_run(workspace, capsys):
     main(['jobs', '--quiet'])
 
     assert 'throttled' in capsys.readouterr().out
+
+
+def test_the_cli_expands_environment_variables_in_configuration(workspace, monkeypatch):
+    """Credentials belong in the environment, not in the file beside the jobs."""
+    monkeypatch.setenv('DEMO_DB_PATH', 'demo.db')
+    (workspace / 'configuration' / 'database.yaml').write_text('demo:\n  type: sqlite\n  database: ${DEMO_DB_PATH}\n')
+
+    assert main(['run', '--quiet']) == EXIT_SUCCESS
+    assert _targetRowCount(workspace) == 5
+
+
+def test_an_unset_variable_stops_the_run_before_anything_happens(workspace, monkeypatch):
+    monkeypatch.delenv('DEMO_DB_PATH', raising=False)
+    (workspace / 'configuration' / 'database.yaml').write_text('demo:\n  type: sqlite\n  database: ${DEMO_DB_PATH}\n')
+
+    assert main(['run', '--quiet']) == EXIT_BAD_CONFIGURATION
+    assert _targetRowCount(workspace) == 0
+
+
+def test_json_log_format_produces_parseable_records(workspace, capsys):
+    import json
+
+    assert main(['run', '--log-format', 'json']) == EXIT_SUCCESS
+
+    records = [json.loads(line) for line in capsys.readouterr().err.strip().split('\n') if line.startswith('{')]
+    completions = [record for record in records if record.get('status') == 'completed']
+
+    assert completions
+    assert all('job' in record and 'rowCount' in record for record in completions)

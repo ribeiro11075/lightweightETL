@@ -7,6 +7,7 @@ from .configuration import (
     DataJobConfig,
     DataJobsFile,
     InsertStrategy,
+    expandEnvironmentVariables,
     ScrambleJobConfig,
     ScrambleJobsFile,
     )
@@ -30,6 +31,7 @@ __all__ = [
     'DatabaseDialect',
     'DatabaseMemory',
     'DatabaseType',
+    'expandEnvironmentVariables',
     'DataJobConfig',
     'DataJobsFile',
     'DependencyGraph',

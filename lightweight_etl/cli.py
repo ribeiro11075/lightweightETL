@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import yaml
 
-from .configuration import BaseJobConfig, Configuration, ConfigurationError, DatabaseConnectionConfig, DataJobsFile, ScrambleJobsFile
+from .configuration import Configuration, ConfigurationError, DatabaseConnectionConfig, DataJobsFile, ScrambleJobsFile, expandEnvironmentVariables
 from .database import Database
 from .dependencyGraph import DependencyGraph
 from .log import LOGGER_NAME, Log
@@ -48,10 +48,17 @@ class UsageError(Exception):
 
 
 def _loadYaml(path: Path) -> Any:
+    """Load a YAML file, expanding ${NAME} from the environment.
+
+    Expansion happens here rather than in Configuration because reading the
+    environment is I/O, and this module is where this package does its I/O.
+    A library caller who loads their own YAML calls expandEnvironmentVariables
+    themselves -- see the README.
+    """
 
     try:
         with open(path) as file:
-            return yaml.load(file, Loader=yaml.FullLoader)
+            return expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader))
     except FileNotFoundError as error:
         raise UsageError('no such file: {}'.format(path)) from error
     except yaml.YAMLError as error:
@@ -84,7 +91,7 @@ def _configureLogging(arguments: argparse.Namespace) -> Log:
     """
 
     level = getattr(logging, arguments.log_level.upper())
-    log = Log(logFile=arguments.log, level=level) if arguments.log else Log(level=level)
+    log = Log(logFile=arguments.log, level=level, logFormat=arguments.log_format)
 
     if not arguments.quiet:
         log.addStreamHandler(stream=sys.stderr, level=level)
@@ -157,7 +164,9 @@ def _applyJobSelection(jobsFile: Any, arguments: argparse.Namespace, log: Log) -
 def _reportRun(result: RunResult, log: Log) -> int:
 
     for outcome in result.completed:
-        log.logging.info('{}: completed in {:.1f}s, {} row(s)'.format(outcome.job, outcome.durationSeconds, outcome.rowCount))
+        log.logging.info('{}: completed in {:.1f}s, {} row(s)'.format(outcome.job, outcome.durationSeconds, outcome.rowCount),
+                          extra={'job': outcome.job, 'status': outcome.status.value, 'rowCount': outcome.rowCount,
+                                 'durationSeconds': round(outcome.durationSeconds, 3), 'attempts': outcome.attempts})
 
     if result.succeeded:
         return EXIT_SUCCESS
@@ -176,7 +185,7 @@ def _commandRun(arguments: argparse.Namespace, log: Log) -> int:
     memoryPath = Path(arguments.memory) if arguments.memory else Path('memory.yaml')
     result = runDataJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration, logFile=arguments.log,
                           memory=FileMemory(memoryFile=memoryPath), runForever=arguments.forever,
-                          logLevel=getattr(logging, arguments.log_level.upper()))
+                          logLevel=getattr(logging, arguments.log_level.upper()), logFormat=arguments.log_format)
 
     return _reportRun(result, log)
 
@@ -190,7 +199,8 @@ def _commandScramble(arguments: argparse.Namespace, log: Log) -> int:
         return _dryRunScrambleJobs(jobsFile, databaseConfiguration, log)
 
     result = runScrambleJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration, logFile=arguments.log,
-                              runForever=arguments.forever, logLevel=getattr(logging, arguments.log_level.upper()))
+                              runForever=arguments.forever, logLevel=getattr(logging, arguments.log_level.upper()),
+                              logFormat=arguments.log_format)
 
     return _reportRun(result, log)
 
@@ -325,6 +335,8 @@ def _addCommonArguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--memory', help='path to the run-memory file (default: ./memory.yaml)')
     parser.add_argument('--log', help='also write logs to this file (logs always go to stderr unless --quiet)')
     parser.add_argument('--log-level', default='info', choices=['debug', 'info', 'warning', 'error'], help='default: info')
+    parser.add_argument('--log-format', default='text', choices=['text', 'json'],
+                        help='json emits one object per record, carrying job/status/rowCount as fields a log collector can filter and alert on')
     parser.add_argument('--quiet', action='store_true', help='do not log to stderr')
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from enum import Enum
 from typing import Annotated, Any, Dict, List, Mapping, Optional, Set, Type, TypeVar
@@ -51,16 +52,84 @@ class DatabaseType(str, Enum):
     MARIADB = 'mariadb'
 
 
+class ConfigurationError(Exception):
+    """Raised when user-supplied YAML configuration fails validation."""
+
+
 WATERMARK_PLACEHOLDER = re.compile(r'\{\{\s*watermark\s*\}\}')
+
+# ${NAME} or ${NAME:-default}. A doubled $$ escapes the whole construct, which
+# matters because a sourceQuery is arbitrary SQL -- PostgreSQL's dollar-quoting
+# ($$body$$) is untouched here since it is never followed by a brace.
+ENVIRONMENT_VARIABLE = re.compile(r'(\$?)\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}')
+
+
+def _expand(value: Any, missing: List[str]) -> Any:
+    """Recursive worker: collects unset names rather than raising on the first."""
+
+    if isinstance(value, dict):
+        return {key: _expand(item, missing) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand(item, missing) for item in value]
+    if not isinstance(value, str):
+        return value
+
+    def replace(match: Any) -> str:
+        escape, name, default = match.group(1), match.group(2), match.group(3)
+
+        if escape:
+            return match.group(0)[1:]
+        if name in os.environ:
+            return os.environ[name]
+        if default is not None:
+            return default
+
+        missing.append(name)
+
+        return ''
+
+    return ENVIRONMENT_VARIABLE.sub(replace, value)
+
+
+def expandEnvironmentVariables(value: Any) -> Any:
+    """Recursively replace ${NAME} in a loaded configuration with the environment.
+
+    This is what keeps credentials out of the YAML that sits next to your job
+    definitions, which is the first thing a security review objects to:
+
+        password: ${PROD_DB_PASSWORD}
+        port: ${PROD_DB_PORT:-5432}
+
+    An unset variable with no default raises ConfigurationError rather than
+    expanding to an empty string. A blank password that fails at connect time
+    with the database's own unhelpful error is a much worse outcome than
+    refusing to start, and an empty host would silently connect somewhere
+    unintended. Every unset name in the whole document is reported at once, the
+    way validation errors are here -- fixing them one run at a time is miserable.
+
+    Defaults exist for the values that are awkward without them: ports, hosts,
+    schema names. Don't give a secret a default; that just moves the credential
+    back into the file.
+
+    Escape a literal ${...} as $${...}. A sourceQuery is arbitrary SQL and may
+    legitimately contain the sequence. PostgreSQL's dollar-quoting ($$body$$) is
+    never followed by a brace, so it passes through untouched either way.
+    """
+
+    missing: List[str] = []
+    expanded = _expand(value, missing)
+
+    if missing:
+        raise ConfigurationError(
+            'configuration references environment variable(s) that are not set: {}. '
+            'Set them, or give a default with ${{NAME:-value}} (never for a secret).'.format(', '.join(sorted(set(missing)))))
+
+    return expanded
 
 
 class InsertStrategy(str, Enum):
     SWAP = 'swap'
     UPSERT = 'upsert'
-
-
-class ConfigurationError(Exception):
-    """Raised when user-supplied YAML configuration fails validation."""
 
 
 class DatabaseConnectionConfig(BaseModel):
@@ -116,6 +185,8 @@ class DataJobConfig(BaseJobConfig):
     chunkSize: int
     watermarkColumn: Optional[str] = None
     watermarkInitial: Optional[Any] = None
+    retries: int = 0
+    retryDelaySeconds: float = 5.0
     preTargetAdhocQueries: CleanedStringList = Field(default_factory=list)
     postTargetAdhocQueries: CleanedStringList = Field(default_factory=list)
 
@@ -124,6 +195,17 @@ class DataJobConfig(BaseJobConfig):
 
         if self.insertStrategy == InsertStrategy.SWAP and not self.targetTableStage:
             raise ValueError('targetTableStage is required when insertStrategy is swap')
+
+        return self
+
+
+    @model_validator(mode='after')
+    def _requireNonNegativeRetries(self) -> 'DataJobConfig':
+
+        if self.retries < 0:
+            raise ValueError('retries cannot be negative')
+        if self.retryDelaySeconds < 0:
+            raise ValueError('retryDelaySeconds cannot be negative')
 
         return self
 

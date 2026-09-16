@@ -17,7 +17,7 @@ from .scramble import Scramble
 from .dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 from .log import Log
 from .memory import MemoryBackend
-from .transform import Transformer, resolveTransformer, Transform
+from .transform import TransformError, Transformer, TransformResolutionError, resolveTransformer, Transform
 
 
 class _TerminationRequested(Exception):
@@ -276,9 +276,59 @@ def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: D
     return JobOutcome(job=job, status=JobStatus.COMPLETED, rowCount=rowCount, watermark=highWatermark)
 
 
+# Errors that a second attempt cannot fix. All three are raised by this package
+# itself and are deterministic: a transformer reference that doesn't resolve, a
+# column the source query never returns, a watermark column that isn't selected.
+# Retrying them just delays a failure by retries * retryDelaySeconds and buries
+# the real message under identical repeats. Everything else -- notably anything
+# a driver raises -- is retried, because transient and permanent database errors
+# cannot be told apart reliably across six drivers, and a needless retry costs
+# far less than a nightly load lost to one dropped connection.
+PERMANENT_ERRORS = (ConfigurationError, TransformError, TransformResolutionError)
+
+
+def _executeWithRetries(jobConfig: DataJobConfig, log: Log, job: str, attempt: Any) -> JobOutcome:
+    """Runs `attempt` up to 1 + jobConfig.retries times, backing off exponentially.
+
+    Retrying a whole data job is safe because both insert strategies converge on
+    a re-run: `swap` restages and re-swaps, and `upsert` re-applies rows that are
+    already there as a no-op. Scramble jobs deliberately have no retries -- a
+    failure there can leave the table truncated, and a second pass would find it
+    empty and report success having masked nothing.
+    """
+
+    lastError: Optional[BaseException] = None
+
+    for attemptNumber in range(1, jobConfig.retries + 2):
+
+        try:
+            outcome = attempt()
+            return outcome._replace(attempts=attemptNumber)
+
+        except PERMANENT_ERRORS as error:
+            raise
+
+        except Exception as error:
+            lastError = error
+            remaining = jobConfig.retries + 1 - attemptNumber
+
+            if not remaining:
+                break
+
+            delay = jobConfig.retryDelaySeconds * (2 ** (attemptNumber - 1))
+            log.logging.warning(
+                'Attempt {} of {} for {} failed ({}: {}); retrying in {:.1f}s'.format(
+                    attemptNumber, jobConfig.retries + 1, job, type(error).__name__, error, delay),
+                extra={'job': job, 'attempt': attemptNumber, 'retryDelaySeconds': delay})
+            time.sleep(delay)
+
+    assert lastError is not None
+    raise lastError
+
+
 def _dataJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJobs: Dict[str, DataJobConfig],
                     databaseConfiguration: Dict[str, DatabaseConnectionConfig], logFile: Optional[Path], memory: MemoryBackend,
-                    logLevel: int = logging.INFO) -> None:
+                    logLevel: int = logging.INFO, logFormat: str = 'text') -> None:
     """Runs data jobs pulled off readyQueue, via _executeDataJob, until the process is torn down.
 
     recordRun is deliberately placed where it is, on both axes:
@@ -319,7 +369,7 @@ def _dataJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJobs: D
     will come back for -- which is why this sits inside the success branch.
     """
 
-    log = Log(logFile=logFile, level=logLevel)
+    log = Log(logFile=logFile, level=logLevel, logFormat=logFormat)
 
     while True:
 
@@ -333,10 +383,13 @@ def _dataJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJobs: D
             if jobConfig.watermarkColumn:
                 watermark = memory.readWatermarks().get(job, jobConfig.watermarkInitial)
 
-            outcome = _executeDataJob(job, jobConfig, databaseConfiguration, log=log, watermark=watermark)
+            outcome = _executeWithRetries(
+                jobConfig, log, job,
+                lambda: _executeDataJob(job, jobConfig, databaseConfiguration, log=log, watermark=watermark))
 
         except Exception as error:
-            outcome = JobOutcome(job=job, status=JobStatus.FAILED, error='{}: {}'.format(type(error).__name__, error))
+            outcome = JobOutcome(job=job, status=JobStatus.FAILED, error='{}: {}'.format(type(error).__name__, error),
+                                  attempts=1 if isinstance(error, PERMANENT_ERRORS) else jobConfig.retries + 1)
             log.logging.error('Failed to complete {} due to error {}'.format(job, error), exc_info=error)
 
         if outcome.status == JobStatus.COMPLETED:
@@ -355,7 +408,8 @@ def _dataJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJobs: D
                 log.logging.error(
                     'Completed {} but could not record its run -- it will re-run before its refresh window is up'.format(job), exc_info=error)
 
-            log.logging.info('Completed {} ({} row(s))'.format(job, outcome.rowCount))
+            log.logging.info('Completed {} ({} row(s))'.format(job, outcome.rowCount),
+                              extra={'job': job, 'status': outcome.status.value, 'rowCount': outcome.rowCount, 'attempts': outcome.attempts})
 
         completedQueue.put(outcome._replace(startedAt=startedAt, finishedAt=time.time()))
 
@@ -371,13 +425,18 @@ def _logCycleSummary(log: Log, dependencyGraph: DependencyGraph) -> None:
     result = RunResult(outcomes=list(dependencyGraph.outcomes))
 
     for outcome in result.failed:
-        log.logging.error('{} failed after {:.1f}s: {}'.format(outcome.job, outcome.durationSeconds, outcome.error))
+        log.logging.error('{} failed after {:.1f}s: {}'.format(outcome.job, outcome.durationSeconds, outcome.error),
+                           extra={'job': outcome.job, 'status': outcome.status.value, 'error': outcome.error,
+                                  'attempts': outcome.attempts, 'durationSeconds': round(outcome.durationSeconds, 3)})
 
     for outcome in result.skipped:
-        log.logging.warning('{} skipped: {}'.format(outcome.job, outcome.error))
+        log.logging.warning('{} skipped: {}'.format(outcome.job, outcome.error),
+                             extra={'job': outcome.job, 'status': outcome.status.value, 'error': outcome.error})
 
     log.logging.info('Cycle finished: {} completed, {} failed, {} skipped, {} row(s) moved'.format(
-        len(result.completed), len(result.failed), len(result.skipped), result.rowCount))
+        len(result.completed), len(result.failed), len(result.skipped), result.rowCount),
+        extra={'event': 'cycleFinished', 'completed': len(result.completed), 'failed': len(result.failed),
+               'skipped': len(result.skipped), 'rowCount': result.rowCount})
 
 
 def _requireWatermarkCapableMemory(jobsFile: DataJobsFile, memory: MemoryBackend) -> None:
@@ -400,7 +459,8 @@ def _requireWatermarkCapableMemory(jobsFile: DataJobsFile, memory: MemoryBackend
 
 
 def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, DatabaseConnectionConfig], memory: MemoryBackend,
-                 logFile: Optional[Path] = None, runForever: bool = False, logLevel: int = logging.INFO) -> RunResult:
+                 logFile: Optional[Path] = None, runForever: bool = False, logLevel: int = logging.INFO,
+                 logFormat: str = 'text') -> RunResult:
     """Runs data jobs, honoring each job's `refresh` window and `predecessors`.
 
     The caller's only responsibility is configuration: the validated jobs/database
@@ -439,7 +499,7 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
     to every worker process's own Log, not just this function's.
     """
 
-    log = Log(logFile=logFile, level=logLevel)
+    log = Log(logFile=logFile, level=logLevel, logFormat=logFormat)
     log.logging.info('Starting data job runner with {} worker(s)'.format(jobsFile.workers))
 
     _requireWatermarkCapableMemory(jobsFile, memory)
@@ -459,7 +519,7 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
 
             pool = mp.Pool(jobsFile.workers, _dataJobWorker,
                             (dependencyGraph.readyQueue, dependencyGraph.completedQueue, dependencyGraph.activeJobs,
-                             databaseConfiguration, logFile, memory, logLevel))
+                             databaseConfiguration, logFile, memory, logLevel, logFormat))
             dependencyGraph.run()
 
             pool.close()
@@ -537,10 +597,11 @@ def _executeScrambleJob(job: str, jobConfig: ScrambleJobConfig, databaseConfigur
 
 
 def _scrambleJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJobs: Dict[str, ScrambleJobConfig],
-                        databaseConfiguration: Dict[str, DatabaseConnectionConfig], logFile: Optional[Path], logLevel: int = logging.INFO) -> None:
+                        databaseConfiguration: Dict[str, DatabaseConnectionConfig], logFile: Optional[Path],
+                        logLevel: int = logging.INFO, logFormat: str = 'text') -> None:
     """Runs scramble jobs pulled off readyQueue, via _executeScrambleJob, until the process is torn down."""
 
-    log = Log(logFile=logFile, level=logLevel)
+    log = Log(logFile=logFile, level=logLevel, logFormat=logFormat)
 
     while True:
 
@@ -550,7 +611,8 @@ def _scrambleJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJob
 
         try:
             outcome = _executeScrambleJob(job, activeJobs[job], databaseConfiguration, log=log)
-            log.logging.info('Completed {} ({} row(s))'.format(job, outcome.rowCount))
+            log.logging.info('Completed {} ({} row(s))'.format(job, outcome.rowCount),
+                              extra={'job': job, 'status': outcome.status.value, 'rowCount': outcome.rowCount, 'attempts': outcome.attempts})
 
         except Exception as error:
             outcome = JobOutcome(job=job, status=JobStatus.FAILED, error='{}: {}'.format(type(error).__name__, error))
@@ -560,7 +622,7 @@ def _scrambleJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJob
 
 
 def runScrambleJobs(jobsFile: ScrambleJobsFile, databaseConfiguration: Dict[str, DatabaseConnectionConfig], logFile: Optional[Path] = None,
-                     runForever: bool = False, logLevel: int = logging.INFO) -> RunResult:
+                     runForever: bool = False, logLevel: int = logging.INFO, logFormat: str = 'text') -> RunResult:
     """Runs scramble jobs, honoring `predecessors`.
 
     Same division of responsibility as runDataJobs: the caller supplies validated
@@ -573,7 +635,7 @@ def runScrambleJobs(jobsFile: ScrambleJobsFile, databaseConfiguration: Dict[str,
     DependencyGraph.run()'s own fixed 1-second poll. logLevel: see runDataJobs.
     """
 
-    log = Log(logFile=logFile, level=logLevel)
+    log = Log(logFile=logFile, level=logLevel, logFormat=logFormat)
     log.logging.info('Starting scramble job runner with {} worker(s)'.format(jobsFile.workers))
 
     pool: Optional[Pool] = None
@@ -590,7 +652,7 @@ def runScrambleJobs(jobsFile: ScrambleJobsFile, databaseConfiguration: Dict[str,
                 pool.join()
 
             pool = mp.Pool(jobsFile.workers, _scrambleJobWorker,
-                            (dependencyGraph.readyQueue, dependencyGraph.completedQueue, dependencyGraph.activeJobs, databaseConfiguration, logFile, logLevel))
+                            (dependencyGraph.readyQueue, dependencyGraph.completedQueue, dependencyGraph.activeJobs, databaseConfiguration, logFile, logLevel, logFormat))
             dependencyGraph.run()
 
             pool.close()
