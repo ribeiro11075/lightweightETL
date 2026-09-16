@@ -1,4 +1,4 @@
-from .configurationInterface import (
+from .configuration import (
     BaseJobConfig,
     Configuration,
     ConfigurationError,
@@ -7,32 +7,37 @@ from .configurationInterface import (
     DataJobConfig,
     DataJobsFile,
     InsertStrategy,
+    expandEnvironmentVariables,
     ScrambleJobConfig,
     ScrambleJobsFile,
     )
 from .databaseDialects import ColumnCategory, DatabaseDialect, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, SQLiteDialect
-from .databaseInterface import Database
-from .databaseScrambleInterface import Scramble
-from .dependencyGraphInterface import DependencyGraph, JobStatus
-from .logInterface import Log
-from .memoryInterface import FileMemory, MemoryBackend
-from .runner import runDataJobs, runScrambleJobs
-from .transformInterface import Transform, Transformer, TransformError, TransformResolutionError, resolveTransformer
+from .database import Database
+from .scramble import Scramble
+from .dependencyGraph import DependencyGraph, JobOutcome, JobStatus
+from .log import Log
+from .memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory, FileMemory, MemoryBackend
+from .runner import RunResult, runDataJobs, runScrambleJobs
+from .transform import Transform, Transformer, TransformError, TransformResolutionError, resolveTransformer
 
 __all__ = [
     'BaseJobConfig',
     'ColumnCategory',
     'Configuration',
     'ConfigurationError',
+    'DATABASE_MEMORY_SCHEMA',
     'Database',
     'DatabaseConnectionConfig',
     'DatabaseDialect',
+    'DatabaseMemory',
     'DatabaseType',
+    'expandEnvironmentVariables',
     'DataJobConfig',
     'DataJobsFile',
     'DependencyGraph',
     'FileMemory',
     'InsertStrategy',
+    'JobOutcome',
     'JobStatus',
     'Log',
     'MariaDBDialect',
@@ -41,6 +46,7 @@ __all__ = [
     'MySQLDialect',
     'OracleDialect',
     'PostgreSQLDialect',
+    'RunResult',
     'Scramble',
     'ScrambleJobConfig',
     'ScrambleJobsFile',

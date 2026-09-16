@@ -3,9 +3,9 @@ from __future__ import annotations
 import multiprocessing as mp
 import time
 from enum import Enum
-from typing import Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional
 
-from .configurationInterface import BaseJobConfig
+from .configuration import BaseJobConfig
 
 
 class JobStatus(str, Enum):
@@ -13,6 +13,37 @@ class JobStatus(str, Enum):
     IN_PROGRESS = 'in_progress'
     COMPLETED = 'completed'
     FAILED = 'failed'
+    SKIPPED = 'skipped'
+
+
+class JobOutcome(NamedTuple):
+    """What became of one job in one cycle.
+
+    This is what workers put on completedQueue, so it crosses a process
+    boundary and every field has to pickle. That's why `error` is a formatted
+    string rather than the exception: database drivers raise exception types
+    that don't reliably survive pickling, and losing the whole outcome to a
+    pickling error while reporting a failure would be a poor trade.
+
+    SKIPPED is distinct from FAILED on purpose. A job whose predecessor failed
+    never ran at all, and telling an operator it "failed" sends them looking for
+    an error it doesn't have. Both are still terminal non-success, so both count
+    against a run's overall success.
+    """
+
+    job: str
+    status: JobStatus
+    rowCount: int = 0
+    watermark: Any = None
+    error: Optional[str] = None
+    attempts: int = 1
+    startedAt: float = 0.0
+    finishedAt: float = 0.0
+
+    @property
+    def durationSeconds(self) -> float:
+
+        return max(0.0, self.finishedAt - self.startedAt)
 
 
 class DependencyGraph:
@@ -21,6 +52,7 @@ class DependencyGraph:
         self.inProgressJobs: List[str] = []
         self.completedJobs: List[str] = []
         self.failedJobs: List[str] = []
+        self.outcomes: List[JobOutcome] = []
         self.readyQueue: mp.Queue = mp.Queue()
         self.completedQueue: mp.Queue = mp.Queue()
         self.jobs = jobs
@@ -62,12 +94,23 @@ class DependencyGraph:
 
 
     def _emptyCompletedQueue(self) -> None:
+        """failedJobs collects every terminal non-success, SKIPPED included, because
+        that list is what _isJobReady and _predecessorFailCheck read to decide
+        whether a downstream job can start -- a job whose predecessor was itself
+        skipped must not run either. The distinction between the two is kept in
+        `outcomes`, which is what gets reported rather than scheduled on.
+        """
 
         while not self.completedQueue.empty():
-            completedStatus = self.completedQueue.get()
-            job = next(iter(completedStatus))
-            self.completedJobs.append(job) if completedStatus[job] == JobStatus.COMPLETED else self.failedJobs.append(job)
-            self.inProgressJobs.remove(job)
+            outcome = self.completedQueue.get()
+            self.outcomes.append(outcome)
+
+            if outcome.status == JobStatus.COMPLETED:
+                self.completedJobs.append(outcome.job)
+            else:
+                self.failedJobs.append(outcome.job)
+
+            self.inProgressJobs.remove(outcome.job)
 
 
     def _recalculateNotStartedJobs(self) -> None:
@@ -95,7 +138,11 @@ class DependencyGraph:
             for job in self.notStartedJobs:
 
                 if self._predecessorFailCheck(job=job):
+                    failedPredecessors = [predecessor for predecessor in self.activePredecessors[job] if predecessor in self.failedJobs]
                     self.failedJobs.append(job)
+                    self.outcomes.append(JobOutcome(
+                        job=job, status=JobStatus.SKIPPED,
+                        error='predecessor(s) did not complete: {}'.format(', '.join(failedPredecessors))))
 
                 elif self._isJobReady(job=job):
                     self.inProgressJobs.append(job)

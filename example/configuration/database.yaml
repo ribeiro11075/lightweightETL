@@ -1,6 +1,6 @@
 # Sample configuration -- these are placeholder values, not real credentials.
-# Replace with your own database aliases before running example/example_jobs.py
-# or example/example_scramble.py against real infrastructure.
+# Replace with your own database aliases before running `lightweight-etl run`
+# against real infrastructure.
 sourceDb:
   type: mysql
   user: exampleUser

@@ -23,11 +23,11 @@ import pytest
 
 pytest.importorskip('pymssql', reason='pymssql is not installed (pip install -e ".[mssql]")')
 
-from example.example_database_memory import DatabaseMemory
-from library.configurationInterface import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from library.databaseInterface import Database
-from library.memoryInterface import FileMemory
-from library.runner import runDataJobs
+from lightweight_etl.memory import DatabaseMemory
+from lightweight_etl.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from lightweight_etl.database import Database
+from lightweight_etl.memory import FileMemory
+from lightweight_etl.runner import runDataJobs
 
 pytestmark = pytest.mark.integration
 
@@ -64,9 +64,9 @@ def memoryTable(liveDatabase):
     tableName = 'memory_{}'.format(uuid.uuid4().hex[:8])
 
     # SQL Server has no bare DOUBLE type (mysql does) -- FLOAT is its ANSI-ish
-    # double-precision equivalent; example_database_memory.py's docstring already
+    # double-precision equivalent; DatabaseMemory's docstring already
     # flags "adjust types to your database" for exactly this kind of difference
-    liveDatabase.alter('CREATE TABLE {} (job VARCHAR(255) PRIMARY KEY, last_run FLOAT NOT NULL)'.format(tableName))
+    liveDatabase.alter('CREATE TABLE {} (job VARCHAR(255) PRIMARY KEY, last_run FLOAT, watermark_value VARCHAR(255), watermark_type VARCHAR(32))'.format(tableName))
 
     yield tableName
 
@@ -187,12 +187,12 @@ def test_run_data_jobs_end_to_end_against_a_real_server(liveDatabase, peopleTabl
     jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
     memoryPath = tmp_path / 'memory.yaml'
 
-    runDataJobs(jobsFile=jobsFile, databaseConfiguration={'db': CONNECTION_SETTINGS}, logDirectory=tmp_path / 'runner.log',
-                memory=FileMemory(memoryDirectory=memoryPath), runForever=False)
+    runDataJobs(jobsFile=jobsFile, databaseConfiguration={'db': CONNECTION_SETTINGS}, logFile=tmp_path / 'runner.log',
+                memory=FileMemory(memoryFile=memoryPath), runForever=False)
 
     rows = liveDatabase.query('SELECT id, name, amount FROM {} ORDER BY id'.format(peopleTable))
     assert rows == [(1, 'old', 1), (2, 'new', 2)]
-    assert 'job1' in FileMemory(memoryDirectory=memoryPath).read()
+    assert 'job1' in FileMemory(memoryFile=memoryPath).read()
 
 
 def test_database_memory_records_and_reads_back_a_run(memoryTable):
@@ -237,9 +237,58 @@ def test_run_data_jobs_with_database_backed_memory(liveDatabase, peopleTable, me
     jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
     memory = DatabaseMemory(connectionSettings=CONNECTION_SETTINGS, table=memoryTable)
 
-    runDataJobs(jobsFile=jobsFile, databaseConfiguration={'db': CONNECTION_SETTINGS}, logDirectory=tmp_path / 'runner.log',
+    runDataJobs(jobsFile=jobsFile, databaseConfiguration={'db': CONNECTION_SETTINGS}, logFile=tmp_path / 'runner.log',
                 memory=memory, runForever=False)
 
     rows = liveDatabase.query('SELECT id, name, amount FROM {} ORDER BY id'.format(peopleTable))
     assert rows == [(1, 'old', 1), (2, 'new', 2)]
     assert 'job1' in memory.read()
+
+
+def test_stream_returns_real_columns_and_bounded_chunks(liveDatabase, peopleTable):
+    """Database.stream against this dialect's real driver and cursor.
+
+    This is the check that matters most per-dialect, because streaming is the one
+    thing DatabaseDialect cannot fake: a plain fetchmany() bounds how many rows
+    Python builds objects for, but says nothing about how many the driver already
+    pulled off the socket. Only a real server proves streamingCursor() actually
+    got a non-buffering cursor -- psycopg2 needs a *named* (server-side) cursor,
+    and mysql.connector needs buffered=False, the inverse of what connect() uses.
+
+    The chunk sizes prove fetchmany is bounding the walk; the reassembled rows
+    prove nothing is dropped at a chunk boundary.
+    """
+    rows = [(index, 'name{}'.format(index), index * 10) for index in range(250)]
+    liveDatabase.insert(table=peopleTable, data=rows, chunkSize=100)
+
+    columns, chunks = liveDatabase.stream(query='SELECT id, name, amount FROM {} ORDER BY id'.format(peopleTable), chunkSize=100)
+    chunkList = list(chunks)
+
+    assert [column.lower() for column in columns] == ['id', 'name', 'amount']
+    assert [len(chunk) for chunk in chunkList] == [100, 100, 50]
+    assert [tuple(row) for chunk in chunkList for row in chunk] == rows
+
+
+def test_stream_of_an_empty_table_yields_no_chunks_but_still_reports_columns(liveDatabase, peopleTable):
+    """cursor.description has to be populated before any row is fetched -- the
+    reason stream() pulls its first chunk eagerly rather than describing off a
+    bare execute(), which psycopg2's server-side cursors in particular do not
+    reliably support.
+    """
+    columns, chunks = liveDatabase.stream(query='SELECT id, name, amount FROM {}'.format(peopleTable), chunkSize=100)
+
+    assert [column.lower() for column in columns] == ['id', 'name', 'amount']
+    assert list(chunks) == []
+
+
+def test_stream_closes_its_cursor_when_abandoned_part_way_through(liveDatabase, peopleTable):
+    """Abandoning the iterator must not leak the cursor -- on PostgreSQL that is
+    a server-side cursor otherwise held for the life of the connection.
+    """
+    liveDatabase.insert(table=peopleTable, data=[(index, 'n', 0) for index in range(250)], chunkSize=100)
+
+    _, chunks = liveDatabase.stream(query='SELECT id, name, amount FROM {}'.format(peopleTable), chunkSize=10)
+    next(chunks)
+    chunks.close()
+
+    assert liveDatabase.query('SELECT count(*) FROM {}'.format(peopleTable))[0][0] == 250

@@ -1,6 +1,6 @@
 import pytest
 
-from library.transformInterface import Transform, TransformError, TransformResolutionError, resolveTransformer
+from lightweight_etl.transform import Transform, TransformError, TransformResolutionError, resolveTransformer
 
 
 def test_transform_applies_an_arbitrary_callable():
@@ -68,7 +68,7 @@ def test_transform_wraps_a_failing_transformer_with_column_and_value_context():
 
 
 def test_resolve_transformer_finds_a_real_function():
-    """library itself ships no transforms module (that lives in example/, since
+    """lightweight_etl itself ships no transforms module (that lives in example/, since
     it's reference content, not library code) -- resolve a stdlib function instead
     to test the resolution mechanics without depending on example/'s existence.
     """

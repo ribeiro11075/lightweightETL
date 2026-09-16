@@ -1,4 +1,6 @@
-from library.databaseDialects import ColumnCategory, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, SQLiteDialect
+import pytest
+
+from lightweight_etl.databaseDialects import ColumnCategory, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, SQLiteDialect
 
 ALL_COLUMNS = ['id', 'name', 'amount']
 PRIMARY_KEY_COLUMNS = ['id']
@@ -233,3 +235,33 @@ def test_sqlite_swap_is_three_separate_statements():
         'ALTER TABLE people RENAME TO people_stage',
         'ALTER TABLE people_tmp RENAME TO people',
         ]
+
+
+@pytest.mark.parametrize('dialect', [
+    MySQLDialect(), MariaDBDialect(), PostgreSQLDialect(), SQLiteDialect(), OracleDialect(), MSSQLDialect(),
+    ])
+def test_upsert_of_a_key_only_table_is_valid_sql(dialect):
+    """Every column is part of the primary key, so there is nothing to update on
+    a conflict. An empty SET clause is a syntax error, and the INSERT-based
+    dialects used to emit a dangling `DO UPDATE SET` / `ON DUPLICATE KEY UPDATE`
+    and fail at the database (sqlite3: "incomplete input"). Oracle and MSSQL
+    already dropped WHEN MATCHED from their MERGE for this case.
+
+    Bridge tables and id-only lookup tables have exactly this shape.
+    """
+    query = dialect.upsertQuery(table='t', allColumns=['id'], primaryKeyColumns=['id'], nonPrimaryKeyColumns=[])
+
+    assert not query.rstrip().endswith(('SET', 'UPDATE'))
+    assert 'DO UPDATE SET ' not in query
+    assert 'ON DUPLICATE KEY UPDATE ' not in query
+
+
+@pytest.mark.parametrize('dialect', [
+    MySQLDialect(), MariaDBDialect(), PostgreSQLDialect(), SQLiteDialect(), OracleDialect(), MSSQLDialect(),
+    ])
+def test_upsert_from_stage_of_a_key_only_table_is_valid_sql(dialect):
+    query = dialect.upsertFromStageQuery(targetTable='t', stageTable='s', allColumns=['id'], primaryKeyColumns=['id'], nonPrimaryKeyColumns=[])
+
+    assert not query.rstrip().endswith(('SET', 'UPDATE'))
+    assert 'DO UPDATE SET ' not in query
+    assert 'ON DUPLICATE KEY UPDATE ' not in query

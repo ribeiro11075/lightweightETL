@@ -1,7 +1,7 @@
 import datetime
 
-from library.databaseDialects import ColumnCategory
-from library.databaseScrambleInterface import Scramble
+from lightweight_etl.databaseDialects import ColumnCategory
+from lightweight_etl.scramble import Scramble
 
 
 def test_hash_string_does_not_raise_type_error():

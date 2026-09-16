@@ -17,10 +17,10 @@ import pytest
 pytest.importorskip('mysql.connector', reason='mysql-connector-python is not installed (pip install -e ".[mysql]")')
 pytest.importorskip('psycopg2', reason='psycopg2 is not installed (pip install psycopg2-binary, or pip install -e ".[postgresql]")')
 
-from library.configurationInterface import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from library.databaseInterface import Database
-from library.memoryInterface import FileMemory
-from library.runner import runDataJobs
+from lightweight_etl.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from lightweight_etl.database import Database
+from lightweight_etl.memory import FileMemory
+from lightweight_etl.runner import runDataJobs
 
 pytestmark = pytest.mark.integration
 
@@ -88,7 +88,7 @@ def test_data_moves_from_mysql_to_postgresql_with_a_transform_applied(postgresql
             'job1': {
                 'active': True, 'sourceDatabase': 'mysql', 'targetDatabase': 'postgresql', 'insertStrategy': 'upsert',
                 'chunkSize': 100, 'targetTableFinal': targetTable,
-                'sourceQueryColumnTransforms': {'amount': ['example.example_transforms:currency']},
+                'sourceQueryColumnTransforms': {'amount': ['lightweight_etl.builtinTransforms:currency']},
                 'sourceQuery': 'select id, name, amount from {} order by id'.format(sourceTable),
                 },
             },
@@ -96,8 +96,8 @@ def test_data_moves_from_mysql_to_postgresql_with_a_transform_applied(postgresql
     jobsFile = Configuration.validateJobConfiguration(raw, DataJobsFile)
     databaseConfiguration = {'mysql': MYSQL_SETTINGS, 'postgresql': POSTGRESQL_SETTINGS}
 
-    runDataJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration, logDirectory=tmp_path / 'runner.log',
-                memory=FileMemory(memoryDirectory=tmp_path / 'memory.yaml'), runForever=False)
+    runDataJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration, logFile=tmp_path / 'runner.log',
+                memory=FileMemory(memoryFile=tmp_path / 'memory.yaml'), runForever=False)
 
     rows = postgresqlDatabase.query('SELECT id, name, amount FROM {} ORDER BY id'.format(targetTable))
     assert rows == [(1, 'alice', '$100.00'), (2, 'bob', '$200.00')]

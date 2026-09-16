@@ -1,14 +1,19 @@
-"""Transformer functions used by example_jobs.yaml's sourceQueryColumnTransforms.
+"""Transformer functions that ship with the package.
 
-Referenced from job config as "example.example_transforms:currency" and resolved
-at run time by library.resolveTransformer -- a library consumer's own
-Transformer functions can live anywhere importable, not just here.
+Referenced from a job's sourceQueryColumnTransforms the same way any other
+transformer is -- by import path -- so nothing here is privileged:
 
-A Transformer is any Callable[[Any], Any]: it receives one column's raw value
-from one row and returns the value to write in its place. Each is applied to
-every row's value for that column, in the order listed in
-sourceQueryColumnTransforms -- so `[a, b]` means "apply a, then apply b's result
-to a's result", not "apply both to the original value".
+    sourceQueryColumnTransforms:
+      amount:
+      - lightweight_etl.builtinTransforms:currency
+
+These are the handful that come up in nearly every load. resolveTransformer
+takes any importable "module.path:function_name", so your own module sits
+alongside these rather than replacing them; see example/ for one written
+outside the package.
+
+The name is plural and prefixed to keep it distinct from transform.py, which
+holds the machinery that *applies* transformers rather than any particular one.
 """
 from __future__ import annotations
 
@@ -62,8 +67,18 @@ def digitsOnly(value: Optional[str]) -> Optional[str]:
 
 
 def epochSecondsToDate(value: Optional[int]) -> Optional[datetime.date]:
+    """UTC, not the machine's local timezone.
 
-    return datetime.date.fromtimestamp(value) if value is not None else value
+    date.fromtimestamp() converts in local time, which would make the same job
+    produce different dates depending on which server it ran on -- epoch 0 is
+    1970-01-01 in UTC but 1969-12-31 anywhere west of it. A value loaded into a
+    warehouse must not depend on a worker's TZ setting.
+    """
+
+    if value is None:
+        return value
+
+    return datetime.datetime.fromtimestamp(value, tz=datetime.timezone.utc).date()
 
 
 def booleanToYN(value: Optional[bool]) -> Optional[str]:

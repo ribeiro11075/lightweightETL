@@ -2,8 +2,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from library.configurationInterface import DatabaseConnectionConfig, DatabaseType
-from library.databaseInterface import Database
+from lightweight_etl.configuration import DatabaseConnectionConfig, DatabaseType
+from lightweight_etl.database import Database
 
 
 def _mockedDatabase(dbType: DatabaseType) -> Database:
@@ -16,10 +16,11 @@ def _mockedDatabase(dbType: DatabaseType) -> Database:
     database = Database.__new__(Database)
     database.connectionSettings = settings
     database.type = dbType
-    from library.databaseInterface import DIALECTS
+    from lightweight_etl.database import DIALECTS
     database.dialect = DIALECTS[dbType]
     database.cursor = MagicMock()
     database.connection = MagicMock()
+    database.primaryKeyCache = {}
     database.getAllColumnNames = MagicMock(return_value=['id', 'name'])
     database.getPrimaryColumnNames = MagicMock(return_value=['id'])
 
@@ -182,3 +183,51 @@ def test_context_manager_closes_even_on_exception():
 
     database.cursor.close.assert_called_once()
     database.connection.close.assert_called_once()
+
+
+@pytest.mark.parametrize('rowCount,chunkSize,expectedBatchSizes', [
+    (100, 100, [100]),
+    (200, 100, [100, 100]),
+    (250, 100, [100, 100, 50]),
+    (1, 100, [1]),
+    (0, 100, []),
+    ])
+def test_insert_batches_without_issuing_an_empty_statement(rowCount, chunkSize, expectedBatchSizes):
+    """Regression check for the chunk walk running one slice past the end: when
+    rowCount was an exact multiple of chunkSize the old `index > numberRecords`
+    test admitted a final, always-empty executemany (100 rows at chunkSize 100
+    issued two calls, the second with []), which some drivers reject. An empty
+    `data` must issue no statement at all.
+    """
+    database = _mockedDatabase(DatabaseType.MYSQL)
+    data = [(index, 'name') for index in range(rowCount)]
+
+    database.insert(table='people', data=data, chunkSize=chunkSize)
+
+    batchSizes = [len(call.args[1]) for call in database.cursor.executemany.call_args_list]
+
+    assert batchSizes == expectedBatchSizes
+    assert database.connection.commit.call_count == len(expectedBatchSizes)
+
+
+def test_insert_covers_every_row_exactly_once_across_chunks():
+    """The batches must reassemble into the original data, in order -- a wrong
+    stride would still produce a plausible-looking batch count.
+    """
+    database = _mockedDatabase(DatabaseType.MYSQL)
+    data = [(index, 'name') for index in range(250)]
+
+    database.insert(table='people', data=data, chunkSize=100)
+
+    submitted = [row for call in database.cursor.executemany.call_args_list for row in call.args[1]]
+
+    assert submitted == data
+
+
+def test_upsert_of_an_empty_result_set_issues_no_statement():
+    database = _mockedDatabase(DatabaseType.MYSQL)
+
+    database.upsert(table='people', data=[], chunkSize=100)
+
+    assert database.cursor.executemany.call_count == 0
+    assert database.connection.commit.call_count == 0

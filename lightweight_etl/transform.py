@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 Transformer = Callable[[Any], Any]
 
@@ -33,7 +33,7 @@ def resolveTransformer(reference: str) -> Transformer:
     """Import a Transformer from a "module.path:function_name" reference.
 
     Lets a job configuration name a function defined anywhere importable --
-    example/example_transforms.py, or any module of the user's own -- without the caller
+    lightweight_etl/builtinTransforms.py, or any module of the user's own -- without the caller
     having to pre-register it in a lookup table.
     """
 
@@ -58,32 +58,63 @@ def resolveTransformer(reference: str) -> Transformer:
 
 
 class Transform:
+    """Applies per-column transformers to rows.
 
-    def __init__(self, data: List[Tuple[Any, ...]], columns: List[str], columnTransforms: Dict[str, List[Transformer]]) -> None:
-        self.data = data
+    Split into validate()/apply() so a streaming job can check its configuration
+    once, up front, and then transform an unbounded number of chunks without
+    re-checking anything. transform() is the whole-dataset convenience that does
+    both, and `data` is optional precisely so the streaming path can build one of
+    these from columns alone, before a single row has been fetched.
+    """
+
+    def __init__(self, columns: List[str], columnTransforms: Dict[str, List[Transformer]],
+                  data: Optional[List[Tuple[Any, ...]]] = None) -> None:
         self.columns = columns
         self.columnTransforms = columnTransforms
+        self.data = data if data is not None else []
+        self._transformsByIndex = [(index, self.columnTransforms.get(column, [])) for index, column in enumerate(self.columns)]
 
 
-    def transform(self) -> List[Tuple[Any, ...]]:
+    def validate(self) -> None:
+        """Raises TransformError if any transform names a column that isn't there.
+
+        Kept separate from apply() so it can run *before the first write*, which
+        is the guarantee that matters: a streaming job that validated per-chunk
+        would already have loaded rows into the target by the time it noticed a
+        misconfigured column name.
+        """
 
         unknownColumns = [column for column in self.columnTransforms if column not in self.columns]
+
         if unknownColumns:
             raise TransformError('sourceQueryColumnTransforms references column(s) not present in columns {}: {}'.format(self.columns, ', '.join(unknownColumns)))
 
-        if not len(self.data):
-            return self.data
 
-        rows = [list(row) for row in self.data]
+    def apply(self, data: List[Tuple[Any, ...]]) -> List[Tuple[Any, ...]]:
+        """Transforms one batch of rows. Assumes validate() has already run."""
 
-        for index, column in enumerate(self.columns):
-            for transformer in self.columnTransforms.get(column, []):
+        if not data:
+            return data
+
+        rows = [list(row) for row in data]
+
+        for index, transformers in self._transformsByIndex:
+            for transformer in transformers:
                 for row in rows:
                     value = row[index]
                     try:
                         row[index] = transformer(value)
                     except Exception as error:
                         transformerName = getattr(transformer, '__name__', repr(transformer))
-                        raise TransformError('transformer "{}" failed on column "{}" for value {!r}: {}'.format(transformerName, column, value, error)) from error
+                        raise TransformError('transformer "{}" failed on column "{}" for value {!r}: {}'.format(
+                            transformerName, self.columns[index], value, error)) from error
 
         return [tuple(row) for row in rows]
+
+
+    def transform(self) -> List[Tuple[Any, ...]]:
+        """Validate and transform the whole of `data` in one call."""
+
+        self.validate()
+
+        return self.apply(self.data)
