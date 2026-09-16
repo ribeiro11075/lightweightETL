@@ -10,6 +10,7 @@ not a package: nothing in the library imports from it, so it carries no
 __init__.py.
 """
 import importlib.util
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -34,10 +35,22 @@ def demo():
 
 @pytest.fixture(scope='module')
 def demoRun(demo, tmp_path_factory):
-    """Runs the demo once into a temporary directory, not the source tree."""
-    workingDirectory = tmp_path_factory.mktemp('incremental_demo')
+    """Runs the demo once into a temporary directory, not the source tree.
 
-    return demo.main(workingDirectory=workingDirectory), workingDirectory
+    The demo sets DEMO_DB_PATH itself -- it's how its database.yaml finds the
+    file -- so the previous value is restored afterwards rather than leaking a
+    temporary path into every test that runs later.
+    """
+    workingDirectory = tmp_path_factory.mktemp('incremental_demo')
+    previous = os.environ.get('DEMO_DB_PATH')
+
+    try:
+        yield demo.main(workingDirectory=workingDirectory), workingDirectory
+    finally:
+        if previous is None:
+            os.environ.pop('DEMO_DB_PATH', None)
+        else:
+            os.environ['DEMO_DB_PATH'] = previous
 
 
 def test_the_demo_runs_end_to_end(demoRun):
@@ -73,6 +86,15 @@ def test_the_edited_row_is_not_re_extracted(demoRun):
     assert rows[1] == 'first'
     assert rows[4] == 'fourth'
     assert len(rows) == 4
+
+
+def test_the_demo_loads_its_job_from_the_shipped_configuration(demo):
+    """The point of moving it out of an inline dict: the demo exercises the same
+    YAML-plus-environment path a real deployment does.
+    """
+    jobs = demo.loadConfiguration('jobs.yaml')
+
+    assert jobs['jobs']['loadOrders']['watermarkColumn'] == 'updatedAt'
 
 
 def test_the_demo_writes_only_inside_the_directory_it_is_given(demoRun):

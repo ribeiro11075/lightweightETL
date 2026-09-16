@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lightweight-etl"
 version = "0.1.0"
-description = "A lightweight python library to perform ETL (Extract, Transform, Load)"
+description = "Move data between databases, across engines, with streaming and incremental loads"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.9"
@@ -14,6 +14,11 @@ dependencies = [
     "pyyaml==6.0.3",
     "pydantic==2.13.5",
     ]
+
+[project.urls]
+Homepage = "https://github.com/ribeiro11075/lightweight-etl"
+Documentation = "https://github.com/ribeiro11075/lightweight-etl/tree/master/docs"
+Issues = "https://github.com/ribeiro11075/lightweight-etl/issues"
 
 [project.scripts]
 lightweight-etl = "lightweight_etl.cli:main"

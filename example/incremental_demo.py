@@ -1,56 +1,44 @@
-"""A self-contained, runnable demonstration of streaming + incremental loads.
+"""A runnable demonstration of streaming and incremental loads.
 
-Unlike a configured deployment, this needs no configuration, no credentials and no
-server: it builds a throwaway SQLite database under example/memory/, seeds it,
-and runs a real job through runDataJobs twice so you can watch the watermark
-move. Run it directly:
+    python example/incremental_demo.py
 
-    python example/example_incremental.py
+Needs no server and no credentials. It loads its job from
+example/configuration/demo/ through the same path the CLI uses -- YAML, then
+${NAME} expansion, then validation -- builds a throwaway SQLite database, and
+runs the job three times so you can watch the watermark move.
 
-The interesting moment is the second run. Between the two, one already-loaded
+The interesting moment is the second run. Between runs one already-loaded
 source row is edited *without* its updatedAt changing, and a new row is added.
 A full re-extract would pick both up; an incremental one can only see the new
 row, because the predicate now starts past the edited one. Row counts alone
-would not show the difference -- upsert is idempotent, so re-reading everything
-would produce an identical target.
+would show nothing, since upsert is idempotent -- the edited row is the tell.
 """
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
+
+import yaml
 
 exampleDirectory = Path(__file__).resolve().parent
 sys.path.append(str(exampleDirectory.parent))
 
-from lightweight_etl import Configuration, Database, DatabaseConnectionConfig, DatabaseType, DataJobsFile, FileMemory, runDataJobs
+from lightweight_etl import Configuration, Database, DataJobsFile, FileMemory, expandEnvironmentVariables, runDataJobs
 
 DEFAULT_WORKING_DIRECTORY = exampleDirectory / 'memory' / 'incremental_demo'
 
-JOB_CONFIGURATION = {
-    'workers': 1,
-    'jobs': {
-        'loadOrders': {
-            'active': True,
-            'sourceDatabase': 'demo',
-            'targetDatabase': 'demo',
-            # {{ watermark }} is bound as a parameter, not pasted in as text.
-            # A real deployment would subtract a lookback window here -- see
-            # "Why the lookback window" in the README.
-            'sourceQuery': 'SELECT id, name, updatedAt FROM ordersSource WHERE updatedAt > {{ watermark }} ORDER BY updatedAt',
-            'watermarkColumn': 'updatedAt',
-            'watermarkInitial': '1970-01-01T00:00:00',
-            'targetTableFinal': 'ordersTarget',
-            # upsert is required for an incremental job: swap would replace the
-            # whole target with only the rows that changed.
-            'insertStrategy': 'upsert',
-            # Small on purpose, so the 3 seed rows genuinely stream in 2 chunks.
-            'chunkSize': 2,
-            },
-        },
-    }
+DEMO_CONFIGURATION_DIRECTORY = exampleDirectory / 'configuration' / 'demo'
+
+
+def loadConfiguration(name: str) -> Any:
+    """Loads a demo YAML file the same way the CLI does, ${NAME} expansion included."""
+
+    with open(DEMO_CONFIGURATION_DIRECTORY / name) as file:
+        return expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader))
 
 
 def describe(database: Database, memory: FileMemory, heading: str) -> Optional[str]:
@@ -77,20 +65,24 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY) -> List[Optional[st
     at a temporary directory instead of writing into the source tree.
     """
 
-    databasePath = workingDirectory / 'demo.db'
     memoryPath = workingDirectory / 'memory.yaml'
     logPath = workingDirectory / 'incremental.log'
-    connectionSettings = DatabaseConnectionConfig(type=DatabaseType.SQLITE, database=str(databasePath))
 
     shutil.rmtree(workingDirectory, ignore_errors=True)
     workingDirectory.mkdir(parents=True, exist_ok=True)
 
+    # database.yaml reads its path from the environment, exactly the mechanism a
+    # real deployment uses for credentials.
+    os.environ['DEMO_DB_PATH'] = str(workingDirectory / 'demo.db')
+
+    databaseConfiguration = Configuration.validateDatabaseConfiguration(loadConfiguration('database.yaml'))
+    jobsFile = Configuration.validateJobConfiguration(loadConfiguration('jobs.yaml'), DataJobsFile)
+    Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databaseConfiguration))
+
     watermarks: List[Optional[str]] = []
     memory = FileMemory(memoryFile=memoryPath)
-    jobsFile = Configuration.validateJobConfiguration(JOB_CONFIGURATION, DataJobsFile)
-    Configuration.validateJobGraph(jobsFile.jobs, databaseAliases={'demo'})
 
-    with Database(connectionSettings=connectionSettings) as database:
+    with Database(connectionSettings=databaseConfiguration['demo']) as database:
 
         for table in ('ordersSource', 'ordersTarget'):
             database.alter('CREATE TABLE {} (id INT PRIMARY KEY, name VARCHAR(50), updatedAt TEXT)'.format(table))
@@ -101,7 +93,7 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY) -> List[Optional[st
             (3, 'third', '2026-01-03T00:00:00'),
             ], chunkSize=10)
 
-        runDataJobs(jobsFile=jobsFile, databaseConfiguration={'demo': connectionSettings},
+        runDataJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration,
                      logFile=logPath, memory=memory, logLevel=logging.DEBUG)
         watermarks.append(describe(database, memory, 'RUN 1 -- first run, so it extracts everything from watermarkInitial'))
 
@@ -110,11 +102,11 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY) -> List[Optional[st
         database.alter("UPDATE ordersSource SET name = 'edited-but-not-retouched' WHERE id = 1")
         database.insert(table='ordersSource', data=[(4, 'fourth', '2026-01-04T00:00:00')], chunkSize=10)
 
-        runDataJobs(jobsFile=jobsFile, databaseConfiguration={'demo': connectionSettings},
+        runDataJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration,
                      logFile=logPath, memory=memory, logLevel=logging.DEBUG)
         watermarks.append(describe(database, memory, 'RUN 2 -- only row 4 is past the watermark; row 1 keeps its old name'))
 
-        runDataJobs(jobsFile=jobsFile, databaseConfiguration={'demo': connectionSettings},
+        runDataJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration,
                      logFile=logPath, memory=memory, logLevel=logging.DEBUG)
         watermarks.append(describe(database, memory, 'RUN 3 -- nothing new, so nothing loads and the watermark stays put'))
 

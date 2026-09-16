@@ -53,7 +53,7 @@ def _loadYaml(path: Path) -> Any:
     Expansion happens here rather than in Configuration because reading the
     environment is I/O, and this module is where this package does its I/O.
     A library caller who loads their own YAML calls expandEnvironmentVariables
-    themselves -- see the README.
+    themselves -- see docs/library.md.
     """
 
     try:

@@ -1,0 +1,9 @@
+# The database incremental_demo.py runs against: a throwaway SQLite file.
+#
+# Its location comes from the environment, because the demo writes to a working
+# directory it chooses at run time (and the test that exercises the demo points
+# it at a temporary one). A default is fine here -- this is a path, not a
+# secret. Never default a password.
+demo:
+  type: sqlite
+  database: ${DEMO_DB_PATH:-demo.db}

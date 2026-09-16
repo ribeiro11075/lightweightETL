@@ -1,30 +1,35 @@
 # example/
 
-Two unrelated things, both documentation you can execute rather than prose you have to trust.
+Executable documentation — both parts are run by the test suite, so neither can drift from what the code accepts.
 
-## `incremental_demo.py` — watch it work
+## `incremental_demo.py`
 
 ```
 python example/incremental_demo.py
 ```
 
-Self-contained: no configuration, no credentials, no server. It builds a throwaway SQLite database under `memory/incremental_demo/`, runs a real job through `runDataJobs` three times, and prints the watermark moving.
+Watch streaming and incremental loads work, with no server and no credentials. It loads its job from `configuration/demo/` exactly as the CLI would — YAML, then `${NAME}` expansion, then validation — builds a throwaway SQLite database under `memory/`, and runs the job three times.
 
-The interesting moment is the second run. Between runs it edits an already-loaded row *without* touching its `updatedAt`, and adds a new one. A full re-extract would pick both up; an incremental one can only see the new row. Row counts alone would show nothing, since `upsert` is idempotent — so the edited row is the discriminator.
+The second run is the one to watch. Between runs, an already-loaded row is edited *without* its `updatedAt` changing, and a new row is added. A full re-extract would pick up both; an incremental one sees only the new row. Row counts alone wouldn't show the difference, since `upsert` is idempotent — the edited row is the tell.
 
-It is exercised by `tests/test_incremental_demo.py`, because a showcase that silently breaks on a refactor is worse than no showcase.
+Tested by `tests/test_incremental_demo.py`.
 
-## `configuration/` — start from this
+## `configuration/`
 
-A complete, valid set of the three files the CLI expects. Copy it and edit:
+A complete sample of the files the CLI reads. Copy the top-level files to start your own:
 
 ```
-cp -r example/configuration ./configuration
-lightweight-etl validate
+mkdir configuration
+cp example/configuration/*.yaml configuration/
 ```
 
-`--config DIR` looks for `database.yaml` plus `jobs.yaml` (or `scramble.yaml`) in one directory, so this is also the clearest statement of that convention.
+| File | |
+| --- | --- |
+| `database.yaml` | two database aliases, with credentials read from the environment |
+| `jobs.yaml` | data jobs, including an incremental one |
+| `scramble.yaml` | a masking job |
+| `demo/` | the SQLite configuration `incremental_demo.py` runs — a complete directory in its own right |
 
-Credentials are read from the environment with `${NAME}`, so these files hold *references* to secrets rather than secrets, and are safe to keep in version control. `tests/test_shipped_example_configuration.py` validates all three against the real models on every test run, so what's documented here cannot drift from what the code accepts.
+`demo/` follows the same `database.yaml` plus `jobs.yaml` layout that `--config DIR` expects. The glob above skips it, so it isn't copied into your own configuration.
 
-The demo does **not** use this configuration — it builds its own inline, so it can run with nothing installed and nothing configured.
+Validated by `tests/test_shipped_example_configuration.py`. See [docs/configuration.md](../docs/configuration.md) for every field.

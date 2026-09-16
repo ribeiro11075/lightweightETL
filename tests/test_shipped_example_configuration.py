@@ -2,7 +2,7 @@
 
 Running example/example_jobs.py used to validate it as a side effect; that
 script is gone now that the CLI is the supported entry point, so this takes over
-the job. It keeps the README's field reference honest -- a field renamed in
+the job. It keeps docs/configuration.md honest -- a field renamed in
 configuration.py without the sample being updated fails here rather than in
 somebody's first five minutes with the tool.
 """
@@ -94,3 +94,19 @@ def test_the_sample_refuses_to_load_when_its_secrets_are_absent(monkeypatch):
 
     with pytest.raises(ConfigurationError, match='SOURCE_DB_PASSWORD'):
         _load('database.yaml')
+
+
+def test_the_demo_configuration_validates_as_a_complete_config_directory():
+    """example/configuration/demo/ follows the same database.yaml-plus-jobs.yaml
+    layout that `--config DIR` expects, so it must validate as one.
+    """
+    demoDirectory = CONFIGURATION_DIRECTORY / 'demo'
+
+    with open(demoDirectory / 'database.yaml') as file:
+        databases = Configuration.validateDatabaseConfiguration(expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader)))
+    with open(demoDirectory / 'jobs.yaml') as file:
+        jobsFile = Configuration.validateJobConfiguration(expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader)), DataJobsFile)
+
+    Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databases))
+
+    assert jobsFile.jobs['loadOrders'].watermarkColumn == 'updatedAt'

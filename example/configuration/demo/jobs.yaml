@@ -1,0 +1,19 @@
+# The job incremental_demo.py runs three times, to show the watermark moving.
+workers: 1
+jobs:
+  loadOrders:
+    active: true
+    sourceDatabase: demo
+    targetDatabase: demo
+    # {{ watermark }} is bound as a parameter, not pasted in as text. A real
+    # deployment would subtract a lookback window here -- see "Why the lookback
+    # window" in docs/design.md.
+    sourceQuery: SELECT id, name, updatedAt FROM ordersSource WHERE updatedAt > {{ watermark }} ORDER BY updatedAt
+    watermarkColumn: updatedAt
+    watermarkInitial: '1970-01-01T00:00:00'
+    targetTableFinal: ordersTarget
+    # upsert is required for an incremental job: swap would replace the whole
+    # target with only the rows that changed.
+    insertStrategy: upsert
+    # Small on purpose, so the three seed rows genuinely stream in two chunks.
+    chunkSize: 2

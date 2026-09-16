@@ -181,7 +181,7 @@ def test_run_data_jobs_with_target_columns_reordered_from_the_tables_own_order(l
     """peopleTable's real column order is (id, name, amount); sourceQuery
     deliberately selects a different order. Without targetColumns, this would
     silently insert id's value into the name column and vice versa -- no error,
-    since both are real columns (see the README's targetColumns note). Setting
+    since both are real columns (see targetColumns in docs/configuration.md). Setting
     targetColumns to match the query's actual order is what keeps this correct.
     """
     raw = {
