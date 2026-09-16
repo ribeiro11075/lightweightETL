@@ -42,7 +42,8 @@ def test_run_scramble_jobs_completes_with_zero_active_jobs(tmp_path):
     raw = {'workers': 2, 'jobs': {'noop': {'active': False, 'database': 'x', 'table': 'y', 'randomSalt': 's'}}}
     jobsFile = Configuration.validateJobConfiguration(raw, ScrambleJobsFile)
 
-    runScrambleJobs(jobsFile=jobsFile, databaseConfiguration={}, logFile=tmp_path / 'runner.log', runForever=False)
+    with pytest.warns(DeprecationWarning, match='masking'):
+        runScrambleJobs(jobsFile=jobsFile, databaseConfiguration={}, logFile=tmp_path / 'runner.log', runForever=False)
 
 
 def test_run_data_jobs_completes_with_zero_active_jobs_when_not_forever(tmp_path):
@@ -812,9 +813,11 @@ def test_run_scramble_jobs_returns_a_result(tmp_path):
     raw = {'workers': 1, 'jobs': {'noop': {'active': False, 'database': 'x', 'table': 'y', 'randomSalt': 's'}}}
     jobsFile = Configuration.validateJobConfiguration(raw, ScrambleJobsFile)
 
-    result = runScrambleJobs(jobsFile=jobsFile, databaseConfiguration={}, logFile=tmp_path / 'runner.log', runForever=False)
+    with pytest.warns(DeprecationWarning):
+        result = runScrambleJobs(jobsFile=jobsFile, databaseConfiguration={}, logFile=tmp_path / 'runner.log', runForever=False)
 
     assert result.succeeded is True
+    assert 'deprecated' in (tmp_path / 'runner.log').read_text()
 
 
 def test_a_run_result_separates_completed_failed_and_skipped():

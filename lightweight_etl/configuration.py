@@ -5,7 +5,9 @@ import re
 from enum import Enum
 from typing import Annotated, Any, Dict, List, Mapping, Optional, Set, Type, TypeVar
 
-from pydantic import BaseModel, BeforeValidator, Field, ValidationError, model_validator
+from pydantic import BaseModel, BeforeValidator, Field, SecretStr, ValidationError, field_validator, model_validator
+
+from .masking import validateColumnPolicy, validateKey
 
 
 def _dropNoneListItems(value: Any) -> Any:
@@ -173,6 +175,58 @@ class BaseJobConfig(BaseModel):
     predecessors: CleanedStringList = Field(default_factory=list)
 
 
+class MaskingConfig(BaseModel):
+    """A job's masking policy -- see masking.py for what each part does.
+
+    `key` is a SecretStr so it can't reach a log line or a traceback through a
+    model's repr. `columns` and `defaultStrategy` are normalized here, so an
+    unknown strategy or a bad option fails `lightweight-etl validate` rather
+    than a run.
+    """
+
+    key: SecretStr
+    columns: Dict[str, Any]
+    defaultStrategy: Optional[Any] = None
+
+    @field_validator('key')
+    @classmethod
+    def _requireStrongKey(cls, key: SecretStr) -> SecretStr:
+
+        validateKey(key.get_secret_value())
+
+        return key
+
+
+    @field_validator('columns')
+    @classmethod
+    def _validateColumns(cls, columns: Dict[str, Any]) -> Dict[str, Any]:
+
+        normalized = {}
+        problems = []
+        folded: Dict[str, str] = {}
+
+        for column, policy in columns.items():
+            try:
+                normalized[column] = validateColumnPolicy(policy)
+            except ValueError as error:
+                problems.append('{}: {}'.format(column, error))
+            if column.upper() in folded:
+                problems.append('{}: differs only in case from {} -- column names match case-insensitively'.format(column, folded[column.upper()]))
+            folded[column.upper()] = column
+
+        if problems:
+            raise ValueError('; '.join(problems))
+
+        return normalized
+
+
+    @field_validator('defaultStrategy')
+    @classmethod
+    def _validateDefaultStrategy(cls, policy: Any) -> Any:
+
+        return None if policy is None else validateColumnPolicy(policy)
+
+
 class DataJobConfig(BaseJobConfig):
     sourceDatabase: str
     sourceQuery: str
@@ -187,6 +241,7 @@ class DataJobConfig(BaseJobConfig):
     watermarkInitial: Optional[Any] = None
     retries: int = 0
     retryDelaySeconds: float = 5.0
+    masking: Optional[MaskingConfig] = None
     preTargetAdhocQueries: CleanedStringList = Field(default_factory=list)
     postTargetAdhocQueries: CleanedStringList = Field(default_factory=list)
 
@@ -257,6 +312,8 @@ class DataJobConfig(BaseJobConfig):
 
 
 class ScrambleJobConfig(BaseJobConfig):
+    """Deprecated: in-place scrambling, superseded by a data job's `masking`."""
+
     database: str
     table: str
     defaultColumnValues: CleanedMapping = Field(default_factory=dict)

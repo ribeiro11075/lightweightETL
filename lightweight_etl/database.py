@@ -4,7 +4,7 @@ from types import TracebackType
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Type
 
 from .configuration import WATERMARK_PLACEHOLDER, DatabaseConnectionConfig, DatabaseType
-from .databaseDialects import DatabaseDialect, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, SQLiteDialect
+from .databaseDialects import ColumnDefinition, DatabaseDialect, ForeignKey, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, SQLiteDialect
 
 DIALECTS: Dict[DatabaseType, DatabaseDialect] = {
     DatabaseType.MYSQL: MySQLDialect(),
@@ -200,6 +200,49 @@ class Database:
             self.primaryKeyCache[table] = [row[0] for row in self.cursor.fetchall()]
 
         return self.primaryKeyCache[table]
+
+
+    def getForeignKeys(self) -> List[ForeignKey]:
+        """Every foreign key in the current schema -- what subsetting follows."""
+
+        return self.dialect.foreignKeys(self.cursor)
+
+
+    def getColumnDefinitions(self, table: str) -> List[ColumnDefinition]:
+        """Each column's catalog type, size and nullability -- what DDL needs."""
+
+        return self.dialect.columnDefinitions(self.cursor, table)
+
+
+    def getDefinedPrimaryKey(self, table: str) -> List[str]:
+        """The primary key exactly as declared, in key order.
+
+        getPrimaryColumnNames serves upserts and, on some dialects, includes
+        UNIQUE columns too; generated DDL needs only the real key.
+        """
+
+        return self.dialect.definedPrimaryKey(self.cursor, table)
+
+
+    def tableExists(self, table: str) -> bool:
+
+        return self.dialect.tableExists(self.cursor, table)
+
+
+    def sample(self, query: str, rows: int) -> Tuple[List[str], List[Tuple[Any, ...]]]:
+        """Column names and up to `rows` rows of `query`, without reading the rest.
+
+        Built on stream(), so it needs no dialect-specific LIMIT syntax: one
+        bounded chunk is fetched and the stream abandoned.
+        """
+
+        columns, chunks = self.stream(query=query, chunkSize=rows)
+        try:
+            firstChunk = next(chunks, [])
+        finally:
+            chunks.close()  # type: ignore[attr-defined]
+
+        return columns, list(firstChunk)
 
 
     def getNonPrimaryColumnNames(self, table: str) -> List[str]:

@@ -9,6 +9,7 @@ The behaviour behind the fields in [configuration.md](configuration.md), and the
 - [Retries](#retries)
 - [Structured logs](#structured-logs)
 - [Masking](#masking)
+- [Moving values between drivers](#moving-values-between-drivers)
 
 
 ## How a data job moves rows
@@ -29,7 +30,7 @@ Streaming is per-driver, because `fetchmany()` bounds nothing if the driver has 
 - **Invisible** for `swap`, and for `upsert` with a `targetTableStage` — both write to the stage table, and `targetTableFinal` is only touched in the last step.
 - **Visible** for a stage-less `upsert`, which writes partial results straight into the live target. Use a stage table for anything large.
 
-Masking jobs don't stream, and can't — see [masking](#masking).
+Masking is a stage of this same pipeline (transform, then mask, then load), so a masked job streams like any other. See [masking](#masking).
 
 
 ## Incremental loads
@@ -125,9 +126,9 @@ A data job with `retries: 3` gets up to four attempts. The delay starts at `retr
 
 Retrying a whole job is safe because both strategies converge on a re-run: `swap` restages and re-swaps, and `upsert` reapplies existing rows as a no-op.
 
-**What isn't retried:** configuration errors, transform errors and unresolvable transformer references. All three come from this package and fail the same way every time; retrying would only delay the failure and bury the message under repeats. Everything a database driver raises *is* retried — transient and permanent database errors can't be told apart reliably across six drivers, and a needless retry costs far less than losing a load to one dropped connection.
+**What isn't retried:** configuration errors, transform errors, unresolvable transformer references and masking errors. All of them come from this package and fail the same way every time; retrying would only delay the failure and bury the message under repeats. Everything a database driver raises *is* retried — transient and permanent database errors can't be told apart reliably across six drivers, and a needless retry costs far less than losing a load to one dropped connection.
 
-**Masking jobs have no retries.** A failure can leave the table truncated, and a second attempt would find it empty and report success having masked nothing.
+**Deprecated scramble jobs have no retries.** A failure can leave the table truncated, and a second attempt would find it empty and report success having masked nothing. Masked data jobs retry like any other data job.
 
 
 ## Structured logs
@@ -144,15 +145,25 @@ The fields are the point. Completions, failures, skips and each cycle's summary 
 
 ## Masking
 
-`lightweight-etl scramble` rewrites a table in place: it reads every row, truncates the table, and writes masked rows back. Unlike data jobs it **can't stream** — shuffling a column means holding all of its values — so its memory is bounded by the table.
+Masking is a stage of a data job, between transform and load, rather than a separate kind of job. That one decision does most of the work:
 
-What the current implementation does **not** provide:
+- **Unmasked rows never reach the target**, not even its stage table. Masking happens in the ETL process's memory, one chunk at a time.
+- **It streams.** Memory stays bounded by `chunkSize`, however large the table.
+- **It gets retries, watermarks, `--dry-run` and structured logs**, because data jobs already have them.
+- **Masking in place is a `swap`.** Rows load into a stage table, which is then swapped with the original, so a failed run leaves the original untouched.
 
-- **Referential consistency.** Masks are keyed on row position, not value, so the same value in two rows or two tables masks differently, and joins between masked tables break.
-- **Reproducibility.** Shuffles and regenerated numbers and dates are unseeded. Regenerated text is salted and repeatable, but depends on row order, which `select *` doesn't guarantee.
-- **Anonymization under shuffling.** A shuffle keeps the exact set of values, so every real email address is still in the table, just on another row.
-- **Format preservation.** Regenerated text is base64, capped at 28 characters, so a masked email no longer looks like one.
-- **Transactional safety.** The truncate and reinsert aren't one transaction, and most databases refuse to truncate a table that a foreign key references.
-- **Non-integer numbers.** `randomColumns` fails on a `Decimal` — which is how Oracle returns every `NUMBER` column — and on a float.
+Every mask is derived from `HMAC(key, domain, value)`, keyed on the value itself rather than on the row's position. The same value therefore masks the same way in every table and on every run, which keeps joins working and makes runs reproducible. Keys are masked with a keyed permutation (a Feistel network), which can't produce collisions.
 
-These are the gap between table scrambling and a masking product.
+A policy must list **every column the query returns**, or the job fails before writing anything. A new production column should stop the job, not flow into a non-production copy unmasked.
+
+[masking.md](masking.md) has the strategies, the key, the manifest, `discover`, `subset`, `schema`, `clear`, and how to migrate from the deprecated `scramble` command.
+
+
+## Moving values between drivers
+
+Copying between different databases means one driver's values have to be accepted by another. Two connection settings make that work, and both apply to every job:
+
+- **Oracle.** CLOB and BLOB columns are fetched as plain text and bytes rather than as LOB handles, which no other driver can load. The session's date formats are set to ISO 8601, so text such as `'2026-01-02 03:04:05'` loads into a `DATE` or `TIMESTAMP` column; that includes SQLite's dates and a `watermarkInitial` compared against a date column. This changes Oracle's implicit conversions between dates and text in both directions, so a `sourceQuery` that relied on the default `DD-MON-RR` format, or that calls `TO_CHAR` on a date without a format, now sees ISO text. Dates that arrive as datetime objects are unaffected.
+- **SQLite.** `Decimal` values, which other drivers return for `NUMERIC` columns, are stored as their exact text. Dates, timestamps and UUIDs are stored as ISO text, replacing Python's built-in converters, which are deprecated since 3.12.
+
+`tests/test_integration_schema.py` copies the same rows between every pair of the six databases to keep this true.

@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import base64
 import datetime
+import decimal
 import hashlib
 import random
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .databaseDialects import ColumnCategory
 
 
 class Scramble:
     """Rewrites a table's rows so they no longer carry the original values.
+
+    Deprecated in favour of a data job's `masking` section (masking.py), which
+    fixes everything listed at the end of this docstring. Kept for one release.
 
     Pure row/column logic with no knowledge of any database: it works from the
     already-extracted `data`/`columns` and a `columnCategories` map of which
@@ -28,7 +32,7 @@ class Scramble:
     Note the last line: a column the configuration never mentions is *shuffled*,
     not left alone. Only identifierColumns are preserved.
 
-    What this does not provide, and a masking product needs:
+    What this does not provide, and masking.py does:
 
     - Referential consistency. Masks are keyed on row position, not value, so
       the same value in two rows -- or in two tables -- masks differently, and
@@ -41,18 +45,18 @@ class Scramble:
       just on a different row.
     """
 
-    def __init__(self, job: str, data: List[Tuple[Any, ...]], columns: List[str], columnCategories: Dict[str, ColumnCategory] = {},
-                 defaultColumnValues: Dict[str, Any] = {}, identifierColumns: List[str] = [],
-                 scrambleColumns: List[str] = [], randomColumns: List[str] = [], allDataRandom: bool = False,
+    def __init__(self, job: str, data: List[Tuple[Any, ...]], columns: List[str], columnCategories: Optional[Dict[str, ColumnCategory]] = None,
+                 defaultColumnValues: Optional[Dict[str, Any]] = None, identifierColumns: Optional[List[str]] = None,
+                 scrambleColumns: Optional[List[str]] = None, randomColumns: Optional[List[str]] = None, allDataRandom: bool = False,
                  randomSalt: str = 'w3aK7ess') -> None:
         self.job = job
         self.data = data
         self.columns = columns
-        self.columnCategories = columnCategories
-        self.defaultColumnValues = defaultColumnValues
-        self.identifierColumns = identifierColumns
-        self.scrambleColumns = scrambleColumns
-        self.randomColumns = randomColumns
+        self.columnCategories = columnCategories or {}
+        self.defaultColumnValues = defaultColumnValues or {}
+        self.identifierColumns = identifierColumns or []
+        self.scrambleColumns = scrambleColumns or []
+        self.randomColumns = randomColumns or []
         self.allDataRandom = allDataRandom
         self.randomSalt = randomSalt
 
@@ -118,11 +122,12 @@ class Scramble:
 
 
     def _createRandomNumberColumn(self, column: str, data: Sequence[Any]) -> None:
-        """Replaces each value with a uniformly random integer in the column's range.
+        """Replaces each value with a uniformly random number in the column's range.
 
-        Integers only. random.randint rejects anything else, so this raises
-        TypeError for a Decimal -- which is how oracledb returns every NUMBER
-        column -- and for a float. Keeps the minimum and maximum, not the
+        Keeps the column's type: integers stay integers, floats floats -- how
+        oracledb returns a NUMBER with a scale -- and a Decimal, which is how
+        PostgreSQL, MySQL and SQL Server return NUMERIC, keeps the finest
+        precision present in the column. Keeps the minimum and maximum, not the
         distribution, and is unseeded.
         """
         dataFilteredNone = [x for x in data if x is not None]
@@ -134,11 +139,25 @@ class Scramble:
             if maxNumber == minNumber:
                 self.dataDict[column] = data
             else:
-                randomData = tuple(random.randint(minNumber, maxNumber) for _ in range(self.numberRecords))
-                self.dataDict[column] = randomData
+                self.dataDict[column] = tuple(self._randomNumber(minNumber, maxNumber, dataFilteredNone) for _ in range(self.numberRecords))
 
         else:
             self.dataDict[column] = data
+
+
+    @staticmethod
+    def _randomNumber(minNumber: Any, maxNumber: Any, values: Sequence[Any]) -> Any:
+
+        if all(isinstance(value, int) for value in values):
+            return random.randint(minNumber, maxNumber)
+
+        if any(isinstance(value, decimal.Decimal) for value in values):
+            exponent = min(min(0, int(decimal.Decimal(value).as_tuple().exponent)) for value in values)
+            low, high = decimal.Decimal(minNumber), decimal.Decimal(maxNumber)
+            drawn = low + (high - low) * decimal.Decimal(random.random())
+            return min(max(drawn.quantize(decimal.Decimal(1).scaleb(exponent), rounding=decimal.ROUND_FLOOR), low), high)
+
+        return random.uniform(float(minNumber), float(maxNumber))
 
 
     def _scrambleColumn(self, column: str, data: Sequence[Any]) -> None:

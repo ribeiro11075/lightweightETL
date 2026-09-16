@@ -1,0 +1,11 @@
+# The databases masking_demo.py runs against: two throwaway SQLite files, one
+# standing in for production and one for a staging copy.
+#
+# Paths come from the environment because the demo picks its working directory
+# at run time. A default is fine for a path -- never for a secret.
+prod:
+  type: sqlite
+  database: ${MASKING_DEMO_PROD_PATH:-prod.db}
+staging:
+  type: sqlite
+  database: ${MASKING_DEMO_STAGING_PATH:-staging.db}

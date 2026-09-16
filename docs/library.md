@@ -7,6 +7,7 @@ The package does no file I/O of its own: you load configuration however you like
 - [Running jobs](#running-jobs)
 - [Results](#results)
 - [Memory backends](#memory-backends)
+- [Masking, discovery and subsets](#masking-discovery-and-subsets)
 - [Streaming directly](#streaming-directly)
 
 
@@ -48,7 +49,7 @@ runScrambleJobs(jobsFile, databaseConfiguration,
 - **`runForever=False`** makes one pass and returns. `True` keeps running, honouring `refresh`, until `SIGINT` or `SIGTERM`.
 - **`logFile`** is optional. Without one, attach a stream yourself: `Log(level=...).addStreamHandler(sys.stderr)`.
 - **`logFormat='json'`** writes structured records — see [design.md](design.md#structured-logs).
-- `runScrambleJobs` takes no `memory`, since masking jobs have no refresh window or watermark to track.
+- `runScrambleJobs` is **deprecated**: it emits a `DeprecationWarning` and logs one. Mask in a data job instead; see [masking.md](masking.md#migrating-from-scrambleyaml). It takes no `memory`, since scramble jobs have no refresh window or watermark to track.
 
 Worker processes, the pool and the dependency graph are managed for you.
 
@@ -75,6 +76,9 @@ Both runners return a `RunResult`. It's returned, never written anywhere — tur
 | `error` | The failure, as `ExceptionType: message`; for a skipped job, what it was waiting on. |
 | `attempts` | How many tries it took. |
 | `durationSeconds` | Wall-clock time. |
+| `masking` | For a masked job that completed, the policy applied to each column, as plain dicts. |
+
+`RunResult.maskingManifest(jobsFile.jobs)` builds the [masking manifest](masking.md#the-manifest) for the run. It takes the job configurations because a skipped job has no outcome of its own to describe itself with.
 
 `error` is a string rather than the exception because outcomes cross a process boundary, and database drivers raise exceptions that don't reliably survive pickling.
 
@@ -119,6 +123,39 @@ Subclass `MemoryBackend`:
 The watermark pair isn't abstract, so a backend that predates incremental loads still works for every job that doesn't use them.
 
 **One constraint:** the same instance is pickled into every worker process. Hold settings — a path, connection details — rather than an open file or connection, and open what you need inside each method.
+
+
+## Masking, discovery and subsets
+
+The pieces behind `masking:`, `discover` and `subset` are all importable, and none of them does any I/O except through a `Database` you pass in.
+
+```python
+import os
+from lightweight_etl import Database, MaskingPlan, planSubset, proposeTable
+
+plan = MaskingPlan(key=os.environ['MASKING_KEY'], columns={'id': 'keep', 'email': 'email'})
+masking = plan.bind(['id', 'email'])      # raises MaskingError for an uncovered column
+masked = masking.apply([(1, 'ann@corp.com')])
+
+with Database(connectionSettings=databases['prod']) as database:
+    proposal = proposeTable(database, 'customers', sampleSize=500)
+    subset = planSubset(database.getForeignKeys(), root='customers', where="region = 'eu'")
+```
+
+| | |
+| --- | --- |
+| `MaskingPlan(key, columns, defaultStrategy=None)` | A validated policy. `bind(columns)` checks coverage and returns an object whose `apply(rows)` masks one chunk, and whose `manifest` lists what each column gets. `fingerprint` is the key's safe identifier. |
+| `STRATEGIES` | Strategy name → class. Each `Strategy` validates its own options in `validateOptions`. |
+| `keyFingerprint(key)` | The same fingerprint, for a key on its own. |
+| `buildMaskingManifest(outcomes, declared)` | The manifest from outcomes and each masked job's declared target and fingerprint. `RunResult.maskingManifest` wraps it. |
+| `Database.getForeignKeys()` | Every foreign key in the connection's current schema, as `ForeignKey(table, columns, referencedTable, referencedColumns, name)`. |
+| `Database.sample(query, rows)` | Column names and at most `rows` rows, without reading the rest. |
+| `proposeTable(database, table, sampleSize=1000)` | A `TableProposal` with a suggested policy and the reason for it, per column. |
+| `Database.getColumnDefinitions(table)`, `getDefinedPrimaryKey(table)`, `tableExists(table)` | The catalog facts `schema` builds DDL from. |
+| `relatedTables(foreignKeys, roots, followChildren=True)` | Every table a subset from `roots` would copy. |
+| `schema.readTable`, `schema.createStatements`, `schema.renderScript` | A table's shape, CREATE TABLE statements for a target dialect, and the script form. |
+| `schema.clearTables(database, tables)` | Empties tables children-first, in one transaction. |
+| `planSubset(foreignKeys, root, where, followChildren=True, ignore=())` | A `SubsetPlan`: tables in load order, a query for each, each table's parents, and the foreign keys ignored. Raises `SubsetError` on a cycle. |
 
 
 ## Streaming directly

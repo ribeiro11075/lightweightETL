@@ -19,7 +19,7 @@ CONFIGURATION_DIRECTORY = Path(__file__).resolve().parents[1] / 'example' / 'con
 # The sample reads credentials from the environment, so validating it means
 # supplying them the way a deployment would. This list doubles as a check that
 # the documented variable names don't drift away from the file.
-SAMPLE_SECRETS = {'SOURCE_DB_PASSWORD': 'sourceSecret', 'TARGET_DB_PASSWORD': 'targetSecret'}
+SAMPLE_SECRETS = {'SOURCE_DB_PASSWORD': 'sourceSecret', 'TARGET_DB_PASSWORD': 'targetSecret', 'MASKING_KEY': 'a-sample-masking-key'}
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +47,34 @@ def test_the_shipped_jobs_configuration_validates(databaseAliases):
     Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=databaseAliases)
 
     assert jobsFile.jobs
+
+
+def test_the_sample_masked_jobs_share_a_domain_and_read_their_key_from_the_environment(databaseAliases):
+    jobsFile = Configuration.validateJobConfiguration(_load('jobs.yaml'), DataJobsFile)
+    customers = jobsFile.jobs['loadCustomersMasked'].masking
+    orders = jobsFile.jobs['loadOrdersMasked'].masking
+
+    assert customers.columns['id']['domain'] == orders.columns['customerId']['domain']
+
+    raw = yaml.load(open(CONFIGURATION_DIRECTORY / 'jobs.yaml'), Loader=yaml.FullLoader)
+    keys = [job['masking']['key'] for job in raw['jobs'].values() if job.get('masking')]
+
+    assert keys
+    for key in keys:
+        assert key.startswith('${') and ':-' not in key, 'a masking key belongs in the environment, with no default: {}'.format(key)
+
+
+def test_the_masking_demo_configuration_validates_as_a_complete_config_directory():
+    maskingDirectory = CONFIGURATION_DIRECTORY / 'masking'
+
+    with open(maskingDirectory / 'database.yaml') as file:
+        databases = Configuration.validateDatabaseConfiguration(expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader)))
+    with open(maskingDirectory / 'jobs.yaml') as file:
+        jobsFile = Configuration.validateJobConfiguration(expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader)), DataJobsFile)
+
+    Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databases))
+
+    assert all(job.masking is not None for job in jobsFile.jobs.values())
 
 
 def test_the_shipped_scramble_configuration_validates():

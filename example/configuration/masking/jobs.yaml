@@ -1,0 +1,44 @@
+# The jobs masking_demo.py runs: production customers and orders, masked on
+# their way into staging.
+workers: 2
+jobs:
+  maskCustomers:
+    active: true
+    sourceDatabase: prod
+    sourceQuery: SELECT * FROM customers
+    targetDatabase: staging
+    targetTableFinal: customers
+    insertStrategy: upsert
+    chunkSize: 4
+    masking:
+      # Read from the environment, with no default. The demo sets a throwaway
+      # one; a real deployment gets it from its secret store.
+      key: ${MASKING_KEY}
+      # Every column SELECT * returns must be listed. The demo adds a column to
+      # production between runs to show what happens when one isn't.
+      columns:
+        # Shares the `customer` domain with orders.customer_id below, so the
+        # masked tables still join.
+        id: {strategy: key, domain: customer}
+        email: email
+        full_name: fakeName
+        phone: digits
+        birth_date: {strategy: dateShift, maxDays: 30}
+        region: keep
+        notes: 'null'
+  maskOrders:
+    active: true
+    predecessors:
+    - maskCustomers
+    sourceDatabase: prod
+    sourceQuery: SELECT * FROM orders
+    targetDatabase: staging
+    targetTableFinal: orders
+    insertStrategy: upsert
+    chunkSize: 4
+    masking:
+      key: ${MASKING_KEY}
+      columns:
+        id: keep
+        customer_id: {strategy: key, domain: customer}
+        amount: {strategy: number, variance: 0.1}

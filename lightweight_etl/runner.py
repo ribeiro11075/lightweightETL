@@ -5,9 +5,10 @@ import logging
 import multiprocessing as mp
 import signal
 import time
+import warnings
 from multiprocessing.pool import Pool
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, NamedTuple, Optional, Tuple
 
 from .configuration import ConfigurationError, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, InsertStrategy, ScrambleJobConfig, \
     ScrambleJobsFile
@@ -16,6 +17,7 @@ from .database import Database
 from .scramble import Scramble
 from .dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 from .log import Log
+from .masking import BoundMasking, MaskingError, MaskingPlan, buildMaskingManifest, keyFingerprint
 from .memory import MemoryBackend
 from .transform import TransformError, Transformer, TransformResolutionError, resolveTransformer, Transform
 
@@ -115,6 +117,54 @@ class RunResult(NamedTuple):
         return not self.failed and not self.skipped
 
 
+    def maskingManifest(self, jobs: Mapping[str, DataJobConfig]) -> Dict[str, Any]:
+        """The masking manifest for this run: see masking.buildMaskingManifest.
+
+        Takes the job configurations because a skipped job never produced
+        anything to describe itself with, yet still belongs in the record.
+        """
+
+        return buildMaskingManifest(self.outcomes, _declaredMasking(jobs))
+
+
+def _declaredMasking(jobs: Mapping[str, DataJobConfig]) -> Dict[str, Dict[str, Any]]:
+    """What each masked job's configuration says, for the manifest."""
+
+    return {
+        name: {
+            'sourceDatabase': job.sourceDatabase,
+            'targetDatabase': job.targetDatabase,
+            'targetTable': job.targetTableFinal,
+            'keyFingerprint': keyFingerprint(job.masking.key.get_secret_value()),
+            }
+        for name, job in jobs.items() if job.masking is not None
+        }
+
+
+def _bindMasking(job: str, jobConfig: DataJobConfig, columns: List[str], log: Optional[Log]) -> Optional[BoundMasking]:
+    """Binds the job's masking policy to the columns its query returned.
+
+    Raises MaskingError -- before anything is written -- if the policy doesn't
+    cover every column. See MaskingPlan for why that is the default.
+    """
+
+    if jobConfig.masking is None:
+        return None
+
+    plan = MaskingPlan(key=jobConfig.masking.key.get_secret_value(), columns=jobConfig.masking.columns,
+                        defaultStrategy=jobConfig.masking.defaultStrategy)
+    bound = plan.bind(columns)
+
+    if log:
+        log.logging.info('Masking {} column(s) under key {}'.format(len(columns), plan.fingerprint),
+                          extra={'job': job, 'keyFingerprint': plan.fingerprint})
+        for entry in bound.manifest:
+            log.logging.debug('Masking {} with {}{}'.format(
+                entry.column, entry.strategy, ' in domain {}'.format(entry.domain) if entry.domain else ''))
+
+    return bound
+
+
 def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: Dict[str, DatabaseConnectionConfig], log: Optional[Log] = None,
                      watermark: Any = None) -> JobOutcome:
     """Runs one data job to completion, raising on failure.
@@ -129,6 +179,13 @@ def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: D
     Transforms apply to sourceQuery's own result columns, not the target's, since
     they act on a value as extracted. Transform.validate() runs before the first
     write, so naming a column the query doesn't return fails with nothing loaded.
+
+    Masking runs after transforms, so a value is normalized (stripped, lower
+    cased) before it is keyed and masks consistently. Its policy is bound to the
+    returned columns before the first write too, so a column the policy doesn't
+    cover fails the job with nothing loaded -- unmasked rows never reach the
+    target, not even a stage table.
+
     Target columns come from targetColumns if set, otherwise from introspecting
     targetTableFinal, and are matched to the SELECT list by position.
 
@@ -180,6 +237,8 @@ def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: D
         if log and columnTransforms:
             log.logging.debug('Applying transforms to column(s): {}'.format(', '.join(columnTransforms)))
 
+        masking = _bindMasking(job, jobConfig, sourceQueryColumns, log)
+
         columns = jobConfig.targetColumns or targetDatabase.getAllColumnNames(table=jobConfig.targetTableFinal)
         if log:
             log.logging.debug('Resolved target columns for {}: {}'.format(jobConfig.targetTableFinal, columns))
@@ -213,6 +272,9 @@ def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: D
 
             rows = transform.apply(chunk)
 
+            if masking is not None:
+                rows = masking.apply(rows)
+
             if streamsDirectlyIntoTarget:
                 targetDatabase.upsert(table=loadTable, data=rows, chunkSize=jobConfig.chunkSize, columns=columns)
             else:
@@ -241,18 +303,23 @@ def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: D
                 log.logging.debug('Running postTargetAdhocQuery: {}'.format(postTargetAdhocQuery))
             targetDatabase.alter(postTargetAdhocQuery)
 
-    return JobOutcome(job=job, status=JobStatus.COMPLETED, rowCount=rowCount, watermark=highWatermark)
+    maskingApplied = None
+    if masking is not None:
+        maskingApplied = {'columns': [entry._asdict() for entry in masking.manifest]}
+
+    return JobOutcome(job=job, status=JobStatus.COMPLETED, rowCount=rowCount, watermark=highWatermark, masking=maskingApplied)
 
 
-# Errors that a second attempt cannot fix. All three are raised by this package
-# itself and are deterministic: a transformer reference that doesn't resolve, a
-# column the source query never returns, a watermark column that isn't selected.
+# Errors that a second attempt cannot fix. All are raised by this package itself
+# and are deterministic: a transformer reference that doesn't resolve, a column
+# the source query never returns, a watermark column that isn't selected, a
+# masking policy that doesn't cover a column.
 # Retrying them just delays a failure by retries * retryDelaySeconds and buries
 # the real message under identical repeats. Everything else -- notably anything
 # a driver raises -- is retried, because transient and permanent database errors
 # cannot be told apart reliably across six drivers, and a needless retry costs
 # far less than a nightly load lost to one dropped connection.
-PERMANENT_ERRORS = (ConfigurationError, TransformError, TransformResolutionError)
+PERMANENT_ERRORS = (ConfigurationError, TransformError, TransformResolutionError, MaskingError)
 
 
 def _executeWithRetries(jobConfig: DataJobConfig, log: Log, job: str, attempt: Any) -> JobOutcome:
@@ -576,14 +643,27 @@ def _scrambleJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJob
         completedQueue.put(outcome._replace(startedAt=startedAt, finishedAt=time.time()))
 
 
+SCRAMBLE_DEPRECATION = ('scramble jobs are deprecated and will be removed in the next release: '
+                        'use a data job with a `masking` section instead (see docs/masking.md)')
+
+
 def runScrambleJobs(jobsFile: ScrambleJobsFile, databaseConfiguration: Dict[str, DatabaseConnectionConfig], logFile: Optional[Path] = None,
                      runForever: bool = False, logLevel: int = logging.INFO, logFormat: str = 'text') -> RunResult:
-    """Runs scramble jobs, honoring `predecessors`.
+    """Runs scramble jobs, honoring `predecessors`. Deprecated.
+
+    Scrambling rewrites a table in place from a copy held in memory, and has
+    none of what masking needs: consistency across tables, reproducibility,
+    streaming or a transactional swap. A data job with a `masking` section does
+    all of that -- see docs/masking.md for the migration. This keeps working
+    for one release, with a warning.
 
     Same division of responsibility as runDataJobs, minus `memory`: scramble
     jobs have no `refresh` window or watermark to track, so there is no run
     state to persist between passes.
     """
+
+    warnings.warn(SCRAMBLE_DEPRECATION, DeprecationWarning, stacklevel=2)
+    Log(logFile=logFile, level=logLevel, logFormat=logFormat).logging.warning(SCRAMBLE_DEPRECATION)
 
     return _runJobs(jobsFile, 'scramble', _scrambleJobWorker,
                      (databaseConfiguration, logFile, logLevel, logFormat),

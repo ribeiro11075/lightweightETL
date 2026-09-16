@@ -1,6 +1,8 @@
+# DEPRECATED: scramble jobs are removed in the next release. Mask in a data
+# job instead -- see loadCustomersMasked in jobs.yaml, and the migration table
+# in docs/masking.md. `lightweight-etl discover` writes the replacement job.
+#
 # Sample configuration -- placeholder table/column names, not a real deployment.
-# Replace with your own job definitions; the database alias must match
-# configuration/environment/database.yaml.
 workers: 2
 jobs:
   scrambleTable1:

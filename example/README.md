@@ -1,6 +1,6 @@
 # example/
 
-Executable documentation — both parts are run by the test suite, so neither can drift from what the code accepts.
+Executable documentation. Every part is run by the test suite, so none of it can drift from what the code accepts.
 
 ## `incremental_demo.py`
 
@@ -14,6 +14,23 @@ The second run is the one to watch. Between runs, an already-loaded row is edite
 
 Tested by `tests/test_incremental_demo.py`.
 
+## `masking_demo.py`
+
+```
+python example/masking_demo.py
+```
+
+Watch masking, discovery and subsetting work, again with no server. It builds a throwaway "production" and "staging" pair of SQLite files, loads its jobs from `configuration/masking/`, and then:
+
+1. **Masks** customers and orders into staging. The two tables still join, because `customers.id` and `orders.customer_id` share the `customer` domain.
+2. **Adds an `ssn` column** to production, which the policy doesn't cover. The next run fails before writing anything, and staging is left as it was. New columns never leak by default.
+3. **Proposes a policy** for the changed table, as `lightweight-etl discover` does.
+4. **Plans a subset** of European customers and their orders, as `lightweight-etl subset` does.
+
+It uses a throwaway key unless `MASKING_KEY` is already set, and writes the masking manifest next to its databases.
+
+Tested by `tests/test_masking_demo.py`.
+
 ## `configuration/`
 
 A complete sample of the files the CLI reads. Copy the top-level files to start your own:
@@ -26,10 +43,13 @@ cp example/configuration/*.yaml configuration/
 | File | |
 | --- | --- |
 | `database.yaml` | two database aliases, with credentials read from the environment |
-| `jobs.yaml` | data jobs, including an incremental one |
-| `scramble.yaml` | a masking job |
-| `demo/` | the SQLite configuration `incremental_demo.py` runs — a complete directory in its own right |
+| `jobs.yaml` | data jobs, including an incremental one and two masked ones |
+| `scramble.yaml` | a deprecated scramble job, kept until the command is removed |
+| `demo/` | the SQLite configuration `incremental_demo.py` runs |
+| `masking/` | the SQLite configuration `masking_demo.py` runs |
 
-`demo/` follows the same `database.yaml` plus `jobs.yaml` layout that `--config DIR` expects. The glob above skips it, so it isn't copied into your own configuration.
+`demo/` and `masking/` each follow the same `database.yaml` plus `jobs.yaml` layout that `--config DIR` expects. The glob above skips them, so they aren't copied into your own configuration.
+
+The masked jobs read their key from `MASKING_KEY`, so set that along with the database passwords.
 
 Validated by `tests/test_shipped_example_configuration.py`. See [docs/configuration.md](../docs/configuration.md) for every field.

@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 
 from lightweight_etl.cli import _buildParser
-from lightweight_etl.configuration import DatabaseConnectionConfig, DataJobConfig, DataJobsFile, ScrambleJobConfig, ScrambleJobsFile
+from lightweight_etl.configuration import (Configuration, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, MaskingConfig, ScrambleJobConfig,
+                                           ScrambleJobsFile, expandEnvironmentVariables)
+from lightweight_etl.masking import STRATEGIES
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCUMENTS = [ROOT / 'README.md', ROOT / 'example' / 'README.md'] + sorted((ROOT / 'docs').glob('*.md'))
@@ -47,17 +49,42 @@ def test_every_internal_link_resolves(document, target, anchor):
             document.relative_to(ROOT), anchor, resolved.relative_to(ROOT))
 
 
-@pytest.mark.parametrize('model', [DatabaseConnectionConfig, DataJobConfig, ScrambleJobConfig, DataJobsFile, ScrambleJobsFile],
-                         ids=lambda model: model.__name__)
-def test_every_configuration_field_is_documented(model):
+MASKING_DOC = ROOT / 'docs' / 'masking.md'
+
+
+@pytest.mark.parametrize('model,document', [(DatabaseConnectionConfig, CONFIGURATION_DOC), (DataJobConfig, CONFIGURATION_DOC),
+                                            (ScrambleJobConfig, CONFIGURATION_DOC), (DataJobsFile, CONFIGURATION_DOC),
+                                            (ScrambleJobsFile, CONFIGURATION_DOC), (MaskingConfig, MASKING_DOC)],
+                         ids=lambda value: getattr(value, '__name__', None) or value.name)
+def test_every_configuration_field_is_documented(model, document):
     """A field added to a model without a line in the reference is the most
     common way a field reference goes stale, and the hardest to notice.
     """
-    reference = CONFIGURATION_DOC.read_text()
+    reference = document.read_text()
 
     undocumented = [name for name in model.model_fields if '`{}`'.format(name) not in reference]
 
-    assert not undocumented, '{} field(s) missing from docs/configuration.md: {}'.format(model.__name__, ', '.join(undocumented))
+    assert not undocumented, '{} field(s) missing from {}: {}'.format(model.__name__, document.name, ', '.join(undocumented))
+
+
+def test_every_masking_strategy_and_option_is_documented():
+    reference = MASKING_DOC.read_text()
+
+    for name, strategy in STRATEGIES.items():
+        assert '`{}`'.format(name) in reference, 'strategy {} is missing from docs/masking.md'.format(name)
+        for option in strategy.OPTIONS:
+            assert '`{}`'.format(option) in reference, 'option {} of {} is missing from docs/masking.md'.format(option, name)
+
+
+def test_the_masked_job_in_the_masking_guide_is_valid_configuration(monkeypatch):
+    import yaml
+
+    monkeypatch.setenv('MASKING_KEY', 'a-documentation-masking-key')
+    firstBlock = MASKING_DOC.read_text().split('```yaml\n', 1)[1].split('```', 1)[0]
+
+    jobsFile = Configuration.validateJobConfiguration({'workers': 1, 'jobs': expandEnvironmentVariables(yaml.safe_load(firstBlock))}, DataJobsFile)
+
+    assert jobsFile.jobs['maskCustomers'].masking.columns['notes'] == {'strategy': 'null'}
 
 
 def test_every_documented_subcommand_exists():

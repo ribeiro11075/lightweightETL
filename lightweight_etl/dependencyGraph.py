@@ -39,6 +39,9 @@ class JobOutcome(NamedTuple):
     attempts: int = 1
     startedAt: float = 0.0
     finishedAt: float = 0.0
+    # For a masked job that completed: the policy applied to each column, as
+    # plain dicts so it pickles. See masking.buildMaskingManifest.
+    masking: Optional[Dict[str, Any]] = None
 
     @property
     def durationSeconds(self) -> float:

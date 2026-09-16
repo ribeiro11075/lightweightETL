@@ -1,11 +1,74 @@
 from __future__ import annotations
 
+import re
 import uuid
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from .configuration import DatabaseConnectionConfig
+
+
+class ForeignKey(NamedTuple):
+    """One foreign-key constraint. Composite keys list their columns in order."""
+
+    table: str
+    columns: Tuple[str, ...]
+    referencedTable: str
+    referencedColumns: Tuple[str, ...]
+    name: str
+
+
+def _groupForeignKeys(rows: Sequence[Sequence[Any]]) -> List[ForeignKey]:
+    """Folds (table, column, referencedTable, referencedColumn, constraint) rows,
+    already ordered by position within each constraint, into ForeignKeys.
+    """
+
+    grouped: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    for table, column, referencedTable, referencedColumn, name in rows:
+        entry = grouped.setdefault((table, name), {'referencedTable': referencedTable, 'columns': [], 'referencedColumns': []})
+        entry['columns'].append(column)
+        entry['referencedColumns'].append(referencedColumn)
+
+    return [
+        ForeignKey(table=table, columns=tuple(entry['columns']), referencedTable=entry['referencedTable'],
+                   referencedColumns=tuple(entry['referencedColumns']), name=name)
+        for (table, name), entry in grouped.items()
+        ]
+
+
+class ColumnDefinition(NamedTuple):
+    """One column as the database's catalog describes it, for generating DDL.
+
+    `dataType` is the catalog's own type name (`character varying`, `VARCHAR2`,
+    `nvarchar`, ...); schema.py maps it to a portable type. `length` is in
+    characters, and is None for unbounded text or where it doesn't apply.
+    """
+
+    name: str
+    dataType: str
+    length: Optional[int]
+    precision: Optional[int]
+    scale: Optional[int]
+    nullable: bool
+
+
+def _columnDefinitions(rows: Sequence[Sequence[Any]]) -> List[ColumnDefinition]:
+    """Rows of (name, type, length, precision, scale, nullable) -> ColumnDefinitions.
+
+    Catalogs disagree on how they say "nullable" (YES, Y, 1) and sometimes
+    return numbers as Decimal, so both are normalized here.
+    """
+
+    def number(value: Any) -> Optional[int]:
+        return None if value is None else int(value)
+
+    return [
+        ColumnDefinition(name=name, dataType=str(dataType), length=number(length), precision=number(precision), scale=number(scale),
+                         nullable=str(nullable).upper() in ('YES', 'Y', '1', 'TRUE'))
+        for name, dataType, length, precision, scale, nullable in rows
+        ]
 
 
 class ColumnCategory(str, Enum):
@@ -107,6 +170,62 @@ class DatabaseDialect(ABC):
     def primaryKeyQuery(self, table: str) -> str:
         ...
 
+    def columnsQuery(self) -> str:
+        """One table's columns, in order, as rows of (name, type, length,
+        precision, scale, nullable). Binds the table name as its one parameter.
+        """
+
+        raise NotImplementedError('{} cannot describe columns'.format(type(self).__name__))
+
+    def definedPrimaryKeyQuery(self) -> str:
+        """One table's primary-key columns, in key order, binding the table name.
+
+        Stricter than primaryKeyQuery, which on some dialects also returns
+        UNIQUE columns: generated DDL must declare exactly the real key.
+        """
+
+        raise NotImplementedError('{} cannot describe primary keys'.format(type(self).__name__))
+
+    def tableExistsQuery(self) -> str:
+        """A count of tables with the bound name in the current schema."""
+
+        raise NotImplementedError('{} cannot check for tables'.format(type(self).__name__))
+
+    def columnDefinitions(self, cursor: Any, table: str) -> List[ColumnDefinition]:
+
+        cursor.execute(self.columnsQuery().format(*self.placeholders(1)), (table,))
+
+        return _columnDefinitions(cursor.fetchall())
+
+    def definedPrimaryKey(self, cursor: Any, table: str) -> List[str]:
+
+        cursor.execute(self.definedPrimaryKeyQuery().format(*self.placeholders(1)), (table,))
+
+        return [row[0] for row in cursor.fetchall()]
+
+    def tableExists(self, cursor: Any, table: str) -> bool:
+
+        cursor.execute(self.tableExistsQuery().format(*self.placeholders(1)), (table,))
+
+        return bool(cursor.fetchone()[0])
+
+    def foreignKeysQuery(self) -> str:
+        """Every foreign key in the connection's current schema, as rows of
+        (table, column, referencedTable, referencedColumn, constraintName),
+        ordered by table, constraint and position.
+        """
+
+        raise NotImplementedError('{} cannot list foreign keys'.format(type(self).__name__))
+
+    def foreignKeys(self, cursor: Any) -> List[ForeignKey]:
+        """Used to plan referentially complete subsets. Dialects that can't
+        express this as one query (SQLite) override this instead.
+        """
+
+        cursor.execute(self.foreignKeysQuery())
+
+        return _groupForeignKeys(cursor.fetchall())
+
     @abstractmethod
     def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
         ...
@@ -201,6 +320,31 @@ class MySQLDialect(DatabaseDialect):
     def primaryKeyQuery(self, table: str) -> str:
 
         return "SELECT k.COLUMN_NAME FROM information_schema.table_constraints t LEFT JOIN information_schema.key_column_usage k USING(constraint_name, table_schema, table_name) WHERE t.constraint_type='PRIMARY KEY' AND t.table_name='{}'".format(table)
+
+
+    def foreignKeysQuery(self) -> str:
+
+        return ("SELECT table_name, column_name, referenced_table_name, referenced_column_name, constraint_name "
+                "FROM information_schema.key_column_usage "
+                "WHERE table_schema = DATABASE() AND referenced_table_name IS NOT NULL "
+                "ORDER BY table_name, constraint_name, ordinal_position")
+
+
+    def columnsQuery(self) -> str:
+
+        return ("SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale, is_nullable "
+                "FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = {} ORDER BY ordinal_position")
+
+
+    def definedPrimaryKeyQuery(self) -> str:
+
+        return ("SELECT column_name FROM information_schema.key_column_usage "
+                "WHERE table_schema = DATABASE() AND table_name = {} AND constraint_name = 'PRIMARY' ORDER BY ordinal_position")
+
+
+    def tableExistsQuery(self) -> str:
+
+        return "SELECT count(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = {}"
 
 
     def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
@@ -304,6 +448,47 @@ class PostgreSQLDialect(DatabaseDialect):
         return "SELECT c.column_name FROM information_schema.key_column_usage AS c LEFT JOIN information_schema.table_constraints AS t ON t.constraint_name=c.constraint_name WHERE t.table_name='{}' AND t.constraint_type in ('PRIMARY KEY', 'UNIQUE')".format(table)
 
 
+    def foreignKeysQuery(self) -> str:
+        """From pg_catalog rather than information_schema, which can't pair a
+        composite key's columns with the columns they reference.
+        """
+
+        return ("SELECT cl.relname, att.attname, rcl.relname, ratt.attname, con.conname "
+                "FROM pg_constraint con "
+                "JOIN pg_class cl ON cl.oid = con.conrelid "
+                "JOIN pg_namespace ns ON ns.oid = cl.relnamespace "
+                "JOIN pg_class rcl ON rcl.oid = con.confrelid "
+                "CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(attnum, refattnum, position) "
+                "JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k.attnum "
+                "JOIN pg_attribute ratt ON ratt.attrelid = con.confrelid AND ratt.attnum = k.refattnum "
+                "WHERE con.contype = 'f' AND ns.nspname = current_schema() "
+                "ORDER BY cl.relname, con.conname, k.position")
+
+
+    # PostgreSQL folds unquoted names to lower case, so a table created as
+    # Customers is stored as customers; the lookups below fold the same way.
+
+    def columnsQuery(self) -> str:
+
+        return ("SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale, is_nullable "
+                "FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = lower({}) ORDER BY ordinal_position")
+
+
+    def definedPrimaryKeyQuery(self) -> str:
+
+        return ("SELECT att.attname FROM pg_index idx "
+                "JOIN pg_class cl ON cl.oid = idx.indrelid "
+                "JOIN pg_namespace ns ON ns.oid = cl.relnamespace "
+                "CROSS JOIN LATERAL unnest(idx.indkey) WITH ORDINALITY AS k(attnum, position) "
+                "JOIN pg_attribute att ON att.attrelid = cl.oid AND att.attnum = k.attnum "
+                "WHERE idx.indisprimary AND ns.nspname = current_schema() AND cl.relname = lower({}) ORDER BY k.position")
+
+
+    def tableExistsQuery(self) -> str:
+
+        return "SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = lower({})"
+
+
     def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
 
         """A table whose every column is part of the primary key has nothing to
@@ -347,11 +532,42 @@ class PostgreSQLDialect(DatabaseDialect):
         return ['ALTER TABLE {} RENAME TO {}; ALTER TABLE {} RENAME TO {}; ALTER TABLE {} RENAME TO {}'.format(stageTable, tempTable, targetTable, stageTable, tempTable, targetTable)]
 
 
+def _oracleLobsAsValues(cursor: Any, metadata: Any) -> Any:
+    """Fetch CLOB, NCLOB and BLOB columns as str and bytes, not LOB handles.
+
+    oracledb returns LOB locators by default, which no other driver can bind
+    and which are only readable while their connection is open -- neither
+    works for a value on its way to another database. Set per connection, as
+    an output type handler, rather than through oracledb's process-wide
+    defaults, so an application embedding this package keeps its own setting.
+    """
+
+    import oracledb
+
+    conversions = {
+        oracledb.DB_TYPE_CLOB: oracledb.DB_TYPE_LONG,
+        oracledb.DB_TYPE_NCLOB: oracledb.DB_TYPE_LONG_NVARCHAR,
+        oracledb.DB_TYPE_BLOB: oracledb.DB_TYPE_LONG_RAW,
+        }
+    conversion = conversions.get(metadata.type_code)
+
+    return cursor.var(conversion, arraysize=cursor.arraysize) if conversion is not None else None
+
+
 class OracleDialect(DatabaseDialect):
 
     _NUMBER_TYPE_NAMES = {'DB_TYPE_NUMBER', 'DB_TYPE_BINARY_INTEGER', 'DB_TYPE_BINARY_FLOAT', 'DB_TYPE_BINARY_DOUBLE'}
     _DATE_TYPE_NAMES = {'DB_TYPE_DATE', 'DB_TYPE_TIMESTAMP', 'DB_TYPE_TIMESTAMP_TZ', 'DB_TYPE_TIMESTAMP_LTZ'}
     _TEXT_TYPE_NAMES = {'DB_TYPE_VARCHAR', 'DB_TYPE_CHAR', 'DB_TYPE_NVARCHAR', 'DB_TYPE_NCHAR', 'DB_TYPE_CLOB', 'DB_TYPE_NCLOB', 'DB_TYPE_LONG'}
+
+    # ISO 8601 for every implicit conversion between text and a date. Oracle's
+    # default (DD-MON-RR) can't read the ISO text other databases hand over --
+    # SQLite stores dates that way -- or a watermarkInitial written as
+    # '1970-01-01 00:00:00'. Values that arrive as datetime objects are
+    # unaffected; this only changes how text is read and written.
+    SESSION_FORMATS = ("ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS' "
+                       "NLS_TIMESTAMP_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF' "
+                       "NLS_TIMESTAMP_TZ_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF TZH:TZM'")
 
     def connect(self, settings: DatabaseConnectionConfig) -> Tuple[Any, Any]:
 
@@ -359,7 +575,9 @@ class OracleDialect(DatabaseDialect):
 
         connection = oracledb.connect(user=settings.user, password=settings.password, host=settings.host, port=settings.port,
                                        service_name=settings.serviceName, sid=settings.sid)
+        connection.outputtypehandler = _oracleLobsAsValues
         cursor = connection.cursor()
+        cursor.execute(self.SESSION_FORMATS)
 
         return connection, cursor
 
@@ -411,6 +629,36 @@ class OracleDialect(DatabaseDialect):
         return ("SELECT cols.column_name FROM all_constraints cons JOIN all_cons_columns cols "
                 "ON cons.constraint_name = cols.constraint_name AND cons.owner = cols.owner "
                 "WHERE cons.constraint_type IN ('P', 'U') AND UPPER(cols.table_name) = UPPER('{}')").format(table)
+
+
+    def foreignKeysQuery(self) -> str:
+
+        return ("SELECT c.table_name, cc.column_name, rc.table_name, rcc.column_name, c.constraint_name "
+                "FROM user_constraints c "
+                "JOIN user_cons_columns cc ON cc.constraint_name = c.constraint_name "
+                "JOIN user_constraints rc ON rc.constraint_name = c.r_constraint_name "
+                "JOIN user_cons_columns rcc ON rcc.constraint_name = rc.constraint_name AND rcc.position = cc.position "
+                "WHERE c.constraint_type = 'R' "
+                "ORDER BY c.table_name, c.constraint_name, cc.position")
+
+
+    def columnsQuery(self) -> str:
+        """CHAR_LENGTH rather than DATA_LENGTH, which is in bytes."""
+
+        return ("SELECT column_name, data_type, CASE WHEN char_length > 0 THEN char_length END, data_precision, data_scale, nullable "
+                "FROM user_tab_columns WHERE table_name = UPPER({}) ORDER BY column_id")
+
+
+    def definedPrimaryKeyQuery(self) -> str:
+
+        return ("SELECT cols.column_name FROM user_constraints cons "
+                "JOIN user_cons_columns cols ON cols.constraint_name = cons.constraint_name "
+                "WHERE cons.constraint_type = 'P' AND cons.table_name = UPPER({}) ORDER BY cols.position")
+
+
+    def tableExistsQuery(self) -> str:
+
+        return "SELECT count(*) FROM user_tables WHERE table_name = UPPER({})"
 
 
     def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
@@ -477,6 +725,38 @@ class MSSQLDialect(DatabaseDialect):
                 "WHERE t.constraint_type = 'PRIMARY KEY' AND t.table_name = '{}'").format(table)
 
 
+    def foreignKeysQuery(self) -> str:
+
+        return ("SELECT tp.name, cp.name, tr.name, cr.name, fk.name "
+                "FROM sys.foreign_keys fk "
+                "JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id "
+                "JOIN sys.tables tp ON tp.object_id = fkc.parent_object_id "
+                "JOIN sys.columns cp ON cp.object_id = fkc.parent_object_id AND cp.column_id = fkc.parent_column_id "
+                "JOIN sys.tables tr ON tr.object_id = fkc.referenced_object_id "
+                "JOIN sys.columns cr ON cr.object_id = fkc.referenced_object_id AND cr.column_id = fkc.referenced_column_id "
+                "WHERE tp.schema_id = SCHEMA_ID() "
+                "ORDER BY tp.name, fk.name, fkc.constraint_column_id")
+
+
+    def columnsQuery(self) -> str:
+        """character_maximum_length is -1 for (MAX), which schema.py reads as unbounded."""
+
+        return ("SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale, is_nullable "
+                "FROM information_schema.columns WHERE table_schema = SCHEMA_NAME() AND table_name = {} ORDER BY ordinal_position")
+
+
+    def definedPrimaryKeyQuery(self) -> str:
+
+        return ("SELECT k.column_name FROM information_schema.table_constraints t "
+                "JOIN information_schema.key_column_usage k ON k.constraint_name = t.constraint_name AND k.table_schema = t.table_schema "
+                "WHERE t.constraint_type = 'PRIMARY KEY' AND t.table_schema = SCHEMA_NAME() AND t.table_name = {} ORDER BY k.ordinal_position")
+
+
+    def tableExistsQuery(self) -> str:
+
+        return "SELECT count(*) FROM information_schema.tables WHERE table_schema = SCHEMA_NAME() AND table_name = {}"
+
+
     def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
 
         bindColumns = ', '.join(self.placeholders(len(allColumns)))
@@ -518,6 +798,29 @@ class MariaDBDialect(MySQLDialect):
     """
 
 
+def _registerSqliteAdapters(sqlite3: Any) -> None:
+    """Teach sqlite3 the value types other drivers hand back.
+
+    sqlite3 refuses a Decimal outright -- which PostgreSQL, MySQL and SQL
+    Server return for every NUMERIC column -- and its built-in date and
+    timestamp adapters are deprecated since Python 3.12. Everything is stored
+    as the text SQLite's own date functions read, and a Decimal as its exact
+    text, which a NUMERIC column then stores as a number.
+
+    register_adapter is process-wide, which is fine: these are the conversions
+    any caller of sqlite3 would want, and registering twice is harmless.
+    """
+
+    import datetime
+    import decimal
+
+    sqlite3.register_adapter(decimal.Decimal, str)
+    sqlite3.register_adapter(datetime.date, lambda value: value.isoformat())
+    sqlite3.register_adapter(datetime.datetime, lambda value: value.isoformat(sep=' '))
+    sqlite3.register_adapter(datetime.time, lambda value: value.isoformat())
+    sqlite3.register_adapter(uuid.UUID, str)
+
+
 class SQLiteDialect(DatabaseDialect):
     """settings.database is a filesystem path (or ":memory:") -- SQLite is an
     embedded, file-based database with no server, so user/password/host/port are
@@ -532,6 +835,8 @@ class SQLiteDialect(DatabaseDialect):
     def connect(self, settings: DatabaseConnectionConfig) -> Tuple[Any, Any]:
 
         import sqlite3
+
+        _registerSqliteAdapters(sqlite3)
 
         # WAL, because this library reads and writes the same SQLite file from
         # two places at once. In SQLite's default rollback-journal mode a reader
@@ -578,6 +883,73 @@ class SQLiteDialect(DatabaseDialect):
         """
 
         return "SELECT name FROM pragma_table_info('{}') WHERE pk > 0 ORDER BY pk".format(table)
+
+
+    def columnDefinitions(self, cursor: Any, table: str) -> List[ColumnDefinition]:
+        """SQLite keeps only the declared type text, e.g. `VARCHAR(50)` or
+        `DECIMAL(10,2)`; the length, precision and scale are parsed out of it.
+        """
+
+        cursor.execute('SELECT name, type, "notnull", pk FROM pragma_table_info(?) ORDER BY cid', (table,))
+        definitions = []
+
+        for name, declared, notNull, primaryKey in cursor.fetchall():
+            match = re.match(r'^\s*([A-Za-z ]+?)\s*(?:\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\))?\s*$', declared or '')
+            dataType = match.group(1) if match else (declared or '')
+            first = int(match.group(2)) if match and match.group(2) else None
+            second = int(match.group(3)) if match and match.group(3) else None
+            numeric = any(word in dataType.upper() for word in ('DEC', 'NUM'))
+            definitions.append(ColumnDefinition(
+                name=name, dataType=dataType, length=None if numeric else first, precision=first if numeric else None,
+                scale=second if numeric else None, nullable=not notNull and not primaryKey))
+
+        return definitions
+
+
+    def definedPrimaryKey(self, cursor: Any, table: str) -> List[str]:
+
+        cursor.execute('SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk', (table,))
+
+        return [row[0] for row in cursor.fetchall()]
+
+
+    def tableExists(self, cursor: Any, table: str) -> bool:
+
+        cursor.execute("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND lower(name) = lower(?)", (table,))
+
+        return bool(cursor.fetchone()[0])
+
+
+    def foreignKeys(self, cursor: Any) -> List[ForeignKey]:
+        """SQLite keeps foreign keys per table, behind a pragma, so this lists
+        the tables and asks each. A reference that omits its columns means the
+        referenced table's primary key, which is resolved here.
+        """
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        tables = [row[0] for row in cursor.fetchall()]
+        rows = []
+
+        for table in tables:
+            cursor.execute('SELECT id, "table", "from", "to" FROM pragma_foreign_key_list(?) ORDER BY id, seq', (table,))
+            references = cursor.fetchall()
+
+            primaryKeys: Dict[str, List[str]] = {}
+            positions: Dict[int, int] = {}
+
+            for constraintId, referencedTable, column, referencedColumn in references:
+                position = positions.get(constraintId, 0)
+                positions[constraintId] = position + 1
+
+                if referencedColumn is None:
+                    if referencedTable not in primaryKeys:
+                        cursor.execute(self.primaryKeyQuery(referencedTable))
+                        primaryKeys[referencedTable] = [row[0] for row in cursor.fetchall()]
+                    referencedColumn = primaryKeys[referencedTable][position]
+
+                rows.append((table, column, referencedTable, referencedColumn, '{}_fk{}'.format(table, constraintId)))
+
+        return _groupForeignKeys(rows)
 
 
     def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:

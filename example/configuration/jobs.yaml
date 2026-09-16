@@ -80,3 +80,50 @@ jobs:
     chunkSize: 5000
     preTargetAdhocQueries:
     postTargetAdhocQueries:
+  # A masked job: rows are masked between the extract and the load, so the
+  # target never sees a real value. See docs/masking.md.
+  #
+  # Every column sourceQuery returns must be listed -- `keep` for any that need
+  # no masking -- or the job fails before writing anything. That's what stops a
+  # column added to production later from reaching this copy unmasked.
+  #
+  # customerId shares the `customer` domain with loadCustomersMasked's id, so
+  # the two still join after masking. The key comes from the environment and
+  # has no default: rotating it changes every mask.
+  loadOrdersMasked:
+    active: true
+    predecessors:
+    - loadCustomersMasked
+    sourceDatabase: sourceDb
+    sourceQuery: select id, customerId, amount, shippingPhone, notes from orders
+    targetDatabase: targetDb
+    targetTableFinal: ordersMasked
+    insertStrategy: upsert
+    chunkSize: 5000
+    masking:
+      key: ${MASKING_KEY}
+      columns:
+        id: keep
+        customerId: {strategy: key, domain: customer}
+        amount: {strategy: number, variance: 0.1}
+        shippingPhone: digits
+        notes: 'null'
+  loadCustomersMasked:
+    active: true
+    sourceDatabase: sourceDb
+    sourceQuery: select id, email, fullName, birthDate from customers
+    sourceQueryColumnTransforms:
+      email:
+      - lightweight_etl.builtinTransforms:strip
+      - lightweight_etl.builtinTransforms:lower
+    targetDatabase: targetDb
+    targetTableFinal: customersMasked
+    insertStrategy: upsert
+    chunkSize: 5000
+    masking:
+      key: ${MASKING_KEY}
+      columns:
+        id: {strategy: key, domain: customer}
+        email: email
+        fullName: fakeName
+        birthDate: {strategy: dateShift, maxDays: 30}

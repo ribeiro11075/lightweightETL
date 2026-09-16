@@ -14,7 +14,8 @@ mypy
 
 - Unit tests against mocked cursors, verifying the SQL each dialect builds and the control flow around it.
 - **Real SQLite**, end to end — `tests/test_integration_sqlite.py` runs real streaming and incremental loads through real worker processes. It isn't marked `integration`, since SQLite ships with Python and needs no service.
-- The CLI, driven through `main()` against a real SQLite database, including its exit codes.
+- The CLI, driven through `main()` against a real SQLite database, including its exit codes, and `discover` and `subset` output that is then run.
+- Masking end to end through real worker processes (`tests/test_masking_end_to_end.py`), and the masking strategies' properties (`tests/test_masking.py`): determinism, consistency within a domain, one-to-one keys, and preserved types.
 - The shipped examples: `example/configuration/` is validated against the real models, and `example/incremental_demo.py` is run end to end. Neither can drift from what the code accepts.
 
 `tests/conftest.py` stubs `oracledb` and `psycopg2` only when they aren't installed, so the default run needs no native client libraries.
@@ -22,7 +23,7 @@ mypy
 
 ## Integration tests
 
-Six files run the same operations against real servers: `tests/test_integration_{mysql,postgresql,oracle,mssql,mariadb}.py`, plus `test_integration_cross_database.py`, which extracts from MySQL, applies a transform, and loads into PostgreSQL in one job.
+Six files run the same operations against real servers: `tests/test_integration_{mysql,postgresql,oracle,mssql,mariadb}.py`, plus `test_integration_cross_database.py`, which extracts from MySQL, applies a transform, and loads into PostgreSQL in one job. `test_integration_masking.py` runs against all five servers: foreign-key discovery (composite keys included), subset queries, and masked jobs over each driver's own numeric and date types. `test_integration_schema.py` runs `schema` and a copy for every pair of the six databases, 36 in all, plus `clear` under live foreign keys.
 
 They cover schema introspection, chunked inserts, both upsert paths, swap, truncate, streaming (including abandoning a stream part-way), the full `runDataJobs` path through a real process pool, and `DatabaseMemory`.
 
