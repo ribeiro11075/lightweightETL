@@ -7,7 +7,7 @@ import signal
 import time
 from multiprocessing.pool import Pool
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, NamedTuple, Optional
+from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Tuple
 
 from .configuration import ConfigurationError, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, InsertStrategy, ScrambleJobConfig, \
     ScrambleJobsFile
@@ -18,10 +18,6 @@ from .dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 from .log import Log
 from .memory import MemoryBackend
 from .transform import TransformError, Transformer, TransformResolutionError, resolveTransformer, Transform
-
-
-class _TerminationRequested(Exception):
-    """Raised inside the runner when SIGINT/SIGTERM arrives, to unwind normally."""
 
 
 @contextlib.contextmanager
@@ -123,54 +119,26 @@ def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: D
                      watermark: Any = None) -> JobOutcome:
     """Runs one data job to completion, raising on failure.
 
-    Extract, transform and load are streamed: rows are pulled from the source a
-    chunk at a time and written to the target as they arrive, so peak memory is
-    bounded by jobConfig.chunkSize rather than by the size of the result set.
-    chunkSize is therefore the memory dial, not just the insert batch size.
+    Rows are pulled, transformed and written a chunk at a time, so peak memory is
+    bounded by chunkSize rather than by the result set. Extract and load
+    interleave, so a source failing part-way leaves the rows already yielded
+    written. That is invisible for `swap` and stage-backed `upsert`, which only
+    touch targetTableFinal in their last step; a stage-less `upsert` writes
+    partial results into the live target, so prefer a stage table for large loads.
 
-    Each sourceQueryColumnTransforms entry is a "module.path:function_name" reference,
-    resolved via resolveTransformer rather than a fixed lookup table. One source and one
-    target Database connection are opened for the job and reused for every step, rather
-    than a fresh connection per query. The swap branch asserts targetTableStage is set
-    because DataJobConfig's validator guarantees that whenever insertStrategy is swap.
+    Transforms apply to sourceQuery's own result columns, not the target's, since
+    they act on a value as extracted. Transform.validate() runs before the first
+    write, so naming a column the query doesn't return fails with nothing loaded.
+    Target columns come from targetColumns if set, otherwise from introspecting
+    targetTableFinal, and are matched to the SELECT list by position.
 
-    Transforms run against sourceQuery's own result columns (reported by
-    Database.stream alongside the rows -- whatever that query actually selected,
-    explicit list or `select *` alike), *not* the target table: a transform
-    operates on a value as extracted from the source, before it's mapped onto any
-    target column name. Transform.validate() runs once, before the first write,
-    so a transform naming a column the query doesn't return still fails before
-    anything lands in the target.
+    preTargetAdhocQueries run before any write, the stage load included, so they
+    can prepare the stage table -- drop an index, clear a partition.
 
-    columns (the target side) is resolved separately -- from targetColumns if the job
-    configured it, otherwise by introspecting targetTableFinal -- and used for every
-    insert/upsert call's column list, rather than each step re-introspecting the table
-    independently. sourceQuery's SELECT list is assumed to match columns positionally;
-    if targetColumns is unset, that means matching targetTableFinal's own column order
-    exactly.
-
-    preTargetAdhocQueries run before *any* write to the target, including the stage
-    load. They previously ran after it, which made the name a lie and broke the one
-    thing the hook is for: a pre-query that prepares the stage table (dropping an
-    index to speed the load, disabling a constraint, clearing a partition) landed
-    after the rows it was supposed to prepare for. This matches _executeScrambleJob,
-    where pre-queries have always run first.
-
-    When jobConfig.watermarkColumn is set, `watermark` is bound into
-    sourceQuery's {{ watermark }} placeholder and the job extracts only the rows
-    beyond it. The returned watermark is the highest value that column reached,
-    taken from the *raw* source rows rather than the transformed ones: a
-    transform may reformat the column (a number into a currency string, say),
-    and what goes back into the next run's predicate has to be something the
-    source can still compare against its own column.
-
-    One consequence of streaming worth knowing: extract and load now interleave,
-    so a source that fails part-way through leaves the rows it already yielded
-    written, where buffering the whole extract first meant a mid-extract failure
-    wrote nothing. That is invisible for `swap` and for stage-backed `upsert` --
-    both land in the stage table, leaving targetTableFinal untouched until the
-    final atomic-ish step -- but a stage-less `upsert` writes partial results
-    directly into the live target. Prefer a targetTableStage for anything large.
+    With watermarkColumn set, `watermark` is bound into the {{ watermark }}
+    placeholder, and the outcome carries that column's highest value. It is read
+    from the raw rows, not the transformed ones: a transform may reformat the
+    column, and the next run's predicate needs a value the source can compare.
     """
 
     columnTransforms: Dict[str, List[Transformer]] = {
@@ -329,44 +297,23 @@ def _executeWithRetries(jobConfig: DataJobConfig, log: Log, job: str, attempt: A
 def _dataJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJobs: Dict[str, DataJobConfig],
                     databaseConfiguration: Dict[str, DatabaseConnectionConfig], logFile: Optional[Path], memory: MemoryBackend,
                     logLevel: int = logging.INFO, logFormat: str = 'text') -> None:
-    """Runs data jobs pulled off readyQueue, via _executeDataJob, until the process is torn down.
+    """Runs data jobs pulled off readyQueue until the process is torn down.
 
-    recordRun is deliberately placed where it is, on both axes:
+    On success each step commits before the next:
 
-    *Only on success.* It used to run unconditionally, so a job that raised was
-    still stamped as having just run -- and a `refresh` window then suppressed it
-    for that many minutes. A job failing every time would go quiet for an hour
-    rather than retrying on the next cycle, which is the opposite of what a
-    refresh window is for. A failed job now records nothing, so it is eligible
-    again immediately.
+        load committed -> recordWatermark -> recordRun -> completedQueue
 
-    *Before signalling completion.* completedQueue is what DependencyGraph.run()
-    watches to decide the cycle is over, and runDataJobs terminates the pool as
-    soon as it returns. Recording after the put opened a window where a worker
-    could be killed between the two, losing the run stamp for a job that really
-    did complete. Writing to memory first means the stamp is durable by the time
-    anything can act on the completion.
+    so every point this can die at falls backwards, into re-reading rows already
+    loaded -- harmless, because a watermark requires upsert. Recording precedes
+    signalling because the pool is terminated the moment the cycle sees every job
+    finish.
 
-    A memory backend that fails to record is logged and otherwise tolerated: the
-    data did land, so the job is honestly COMPLETED, and the only consequence of
-    the missing stamp is that the job re-runs sooner than its refresh window asks.
-    Failing the job outright would be a worse lie than the one it replaces.
+    Nothing is recorded for a failed job. A stamped failure would suppress its
+    retry for the whole refresh window, and an advanced watermark would skip rows
+    permanently, which is the one unrecoverable direction.
 
-    The watermark follows the same rule for the same reason, and its ordering is
-    what makes an incremental job crash-safe. Every step commits before the one
-    after it, so every point this can die at is recoverable in the same
-    direction -- backwards, into re-reading rows that were already loaded:
-
-      load committed -> recordWatermark -> recordRun -> completedQueue
-
-    Dying before recordWatermark leaves the old watermark, so the next run
-    re-extracts rows it already loaded. Dying between recordWatermark and
-    recordRun advances the watermark (correct -- the data did land) and re-runs
-    sooner than the refresh window asked. Neither loses a row, and both are
-    harmless precisely because watermarkColumn requires insertStrategy: upsert:
-    re-loading a row that is already there is a no-op. A watermark advanced on a
-    *failed* job would be the one unrecoverable direction, skipping rows nothing
-    will come back for -- which is why this sits inside the success branch.
+    A memory backend that fails to record is logged and tolerated: the data
+    landed, so the job is honestly COMPLETED, and the cost is an earlier re-run.
     """
 
     log = Log(logFile=logFile, level=logLevel, logFormat=logFormat)
@@ -417,9 +364,9 @@ def _dataJobWorker(readyQueue: mp.Queue, completedQueue: mp.Queue, activeJobs: D
 def _logCycleSummary(log: Log, dependencyGraph: DependencyGraph) -> None:
     """One line per terminal non-success, plus totals.
 
-    A skipped job previously left no trace at all -- it never reached a worker,
-    so nothing logged it, and an operator looking for why a table was stale
-    found silence. It's named here, along with what it was waiting on.
+    A skipped job never reaches a worker, so this is the only place it gets
+    reported -- named along with what it was waiting on, since a stale table
+    with no log line is the hardest failure to diagnose.
     """
 
     result = RunResult(outcomes=list(dependencyGraph.outcomes))
@@ -458,51 +405,26 @@ def _requireWatermarkCapableMemory(jobsFile: DataJobsFile, memory: MemoryBackend
             'Implement readWatermarks/recordWatermark on it, or use FileMemory.'.format(type(memory).__name__, ', '.join(incrementalJobs)))
 
 
-def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, DatabaseConnectionConfig], memory: MemoryBackend,
-                 logFile: Optional[Path] = None, runForever: bool = False, logLevel: int = logging.INFO,
-                 logFormat: str = 'text') -> RunResult:
-    """Runs data jobs, honoring each job's `refresh` window and `predecessors`.
+def _runJobs(jobsFile: Any, label: str, workerFunction: Any, workerArguments: Tuple[Any, ...], logFile: Optional[Path],
+              runForever: bool, logLevel: int, logFormat: str, memory: Optional[MemoryBackend] = None) -> RunResult:
+    """The cycle loop both public runners share.
 
-    The caller's only responsibility is configuration: the validated jobs/database
-    config, where logs should live, a MemoryBackend for run-history (FileMemory by
-    default -- see memory.py; write your own to persist it elsewhere, e.g.
-    a database), and whether this is a one-time pass (runForever=False, the
-    default) or should keep running (runForever=True).
+    Data jobs and scramble jobs differ in exactly five things -- the config type,
+    one word in a log line, whether a MemoryBackend gates them, the worker
+    function, and its arguments -- and in nothing about how a cycle is actually
+    driven. Keeping two copies of that loop meant every change to it had to be
+    made twice: the SIGINT/SIGTERM handling, threading logFormat through, and
+    the cycle summary were each applied once and nearly missed in the other.
 
-    Single-shot is the default because it composes with whatever already schedules
-    work in your deployment -- cron, a systemd timer, a Kubernetes CronJob, an
-    Airflow task -- rather than competing with it. Those give you alerting,
-    retries, backfill and calendar-aware schedules that `refresh` cannot express;
-    `refresh` is a throttle, not a schedule. It still applies across separate
-    invocations, because it is evaluated against MemoryBackend.read(), which is
-    durable: running every five minutes from cron with `refresh: 60` correctly
-    skips eleven runs out of twelve. And a run that returns hands back a RunResult,
-    which runForever=True never can.
-
-    Use runForever=True when you need freshness below cron's one-minute floor, or
-    where there is no scheduler to hook into at all. Worker processes and their pool are managed entirely
-    here: each cycle's pool is terminated and joined before the next one starts,
-    rather than left running, so workers don't pile up as OS processes across
-    cycles. The same `memory` instance is handed to every worker process (pickled
-    and reconstructed per process, per MemoryBackend's contract).
-
-    jobsFile.cycleSleepSeconds controls how long this sleeps between cycles once
-    every active job in one has completed or failed (only reached when
-    runForever=True, since runForever=False breaks out of the loop beforehand) --
-    unrelated to DependencyGraph.run()'s own fixed 1-second poll, which is an
-    inner loop that waits for jobs *within* a single cycle to finish, not the gap
-    between cycles.
-
-    logLevel defaults to logging.INFO (job start/completion, row counts, major
-    steps); pass logging.DEBUG for the finer-grained detail this and _executeDataJob
-    also emit (resolved columns, adhoc query text, per-step SQL) -- passed through
-    to every worker process's own Log, not just this function's.
+    Each cycle's pool is terminated and joined before the next one starts, so
+    workers don't accumulate as OS processes. jobsFile.cycleSleepSeconds is the
+    gap between cycles (only reached when runForever=True) -- unrelated to
+    DependencyGraph.run()'s own fixed 1-second poll, which waits for jobs
+    *within* a cycle.
     """
 
     log = Log(logFile=logFile, level=logLevel, logFormat=logFormat)
-    log.logging.info('Starting data job runner with {} worker(s)'.format(jobsFile.workers))
-
-    _requireWatermarkCapableMemory(jobsFile, memory)
+    log.logging.info('Starting {} job runner with {} worker(s)'.format(label, jobsFile.workers))
 
     pool: Optional[Pool] = None
 
@@ -510,16 +432,15 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
 
         while True:
 
-            dependencyGraph = DependencyGraph(jobs=jobsFile.jobs, memory=memory.read())
+            dependencyGraph = DependencyGraph(jobs=jobsFile.jobs, memory=memory.read() if memory else None)
             log.logging.info('Starting cycle with {} active job(s)'.format(len(dependencyGraph.activeJobs)))
 
             if pool is not None:
                 pool.terminate()
                 pool.join()
 
-            pool = mp.Pool(jobsFile.workers, _dataJobWorker,
-                            (dependencyGraph.readyQueue, dependencyGraph.completedQueue, dependencyGraph.activeJobs,
-                             databaseConfiguration, logFile, memory, logLevel, logFormat))
+            pool = mp.Pool(jobsFile.workers, workerFunction,
+                            (dependencyGraph.readyQueue, dependencyGraph.completedQueue, dependencyGraph.activeJobs) + workerArguments)
             dependencyGraph.run()
 
             pool.close()
@@ -532,9 +453,43 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
 
             time.sleep(jobsFile.cycleSleepSeconds)
 
-        log.logging.info('Finished data job runner')
+        log.logging.info('Finished {} job runner'.format(label))
 
     return RunResult(outcomes=list(dependencyGraph.outcomes))
+
+
+def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, DatabaseConnectionConfig], memory: MemoryBackend,
+                 logFile: Optional[Path] = None, runForever: bool = False, logLevel: int = logging.INFO,
+                 logFormat: str = 'text') -> RunResult:
+    """Runs data jobs, honoring each job's `refresh` window and `predecessors`.
+
+    The caller supplies validated configuration, a MemoryBackend for run state,
+    optionally somewhere to log, and whether this is a single pass
+    (runForever=False, the default) or stays resident (runForever=True).
+
+    Single-shot is the default because it composes with whatever already
+    schedules work in your deployment -- cron, a systemd timer, a Kubernetes
+    CronJob, an Airflow task -- rather than competing with it. Those offer
+    alerting, backfill and calendar-aware schedules that `refresh` cannot
+    express; `refresh` is a throttle, not a schedule. It still applies across
+    separate invocations, since it is evaluated against MemoryBackend.read(),
+    which is durable: running every five minutes with `refresh: 60` correctly
+    skips eleven runs out of twelve. And a run that returns hands back a
+    RunResult, which runForever=True never can.
+
+    Use runForever=True for freshness below cron's one-minute floor, or where
+    there is no scheduler to hook into.
+
+    The same `memory` instance is handed to every worker process, pickled and
+    reconstructed per process, per MemoryBackend's contract. logLevel and
+    logFormat are passed through to each worker's own Log, not just this one's.
+    """
+
+    _requireWatermarkCapableMemory(jobsFile, memory)
+
+    return _runJobs(jobsFile, 'data', _dataJobWorker,
+                     (databaseConfiguration, logFile, memory, logLevel, logFormat),
+                     logFile=logFile, runForever=runForever, logLevel=logLevel, logFormat=logFormat, memory=memory)
 
 
 def _executeScrambleJob(job: str, jobConfig: ScrambleJobConfig, databaseConfiguration: Dict[str, DatabaseConnectionConfig], log: Optional[Log] = None) -> JobOutcome:
@@ -625,46 +580,11 @@ def runScrambleJobs(jobsFile: ScrambleJobsFile, databaseConfiguration: Dict[str,
                      runForever: bool = False, logLevel: int = logging.INFO, logFormat: str = 'text') -> RunResult:
     """Runs scramble jobs, honoring `predecessors`.
 
-    Same division of responsibility as runDataJobs: the caller supplies validated
-    configuration, a log location, and whether this is a one-time pass
-    (runForever=False, the default -- a masking run is usually one-shot) or should
-    keep running (runForever=True). Workers and their pool are managed here.
-
-    jobsFile.cycleSleepSeconds controls how long this sleeps between cycles --
-    see runDataJobs's docstring for why that's independent of
-    DependencyGraph.run()'s own fixed 1-second poll. logLevel: see runDataJobs.
+    Same division of responsibility as runDataJobs, minus `memory`: scramble
+    jobs have no `refresh` window or watermark to track, so there is no run
+    state to persist between passes.
     """
 
-    log = Log(logFile=logFile, level=logLevel, logFormat=logFormat)
-    log.logging.info('Starting scramble job runner with {} worker(s)'.format(jobsFile.workers))
-
-    pool: Optional[Pool] = None
-
-    with _terminationHandling(log) as termination:
-
-        while True:
-
-            dependencyGraph = DependencyGraph(jobs=jobsFile.jobs)
-            log.logging.info('Starting cycle with {} active job(s)'.format(len(dependencyGraph.activeJobs)))
-
-            if pool is not None:
-                pool.terminate()
-                pool.join()
-
-            pool = mp.Pool(jobsFile.workers, _scrambleJobWorker,
-                            (dependencyGraph.readyQueue, dependencyGraph.completedQueue, dependencyGraph.activeJobs, databaseConfiguration, logFile, logLevel, logFormat))
-            dependencyGraph.run()
-
-            pool.close()
-            _logCycleSummary(log, dependencyGraph)
-
-            if not runForever or termination['terminating']:
-                pool.terminate()
-                pool.join()
-                break
-
-            time.sleep(jobsFile.cycleSleepSeconds)
-
-        log.logging.info('Finished scramble job runner')
-
-    return RunResult(outcomes=list(dependencyGraph.outcomes))
+    return _runJobs(jobsFile, 'scramble', _scrambleJobWorker,
+                     (databaseConfiguration, logFile, logLevel, logFormat),
+                     logFile=logFile, runForever=runForever, logLevel=logLevel, logFormat=logFormat)

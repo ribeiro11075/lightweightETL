@@ -56,39 +56,21 @@ class JsonFormatter(logging.Formatter):
 class Log:
 
     def __init__(self, logFile: Optional[Path] = None, level: int = logging.INFO, logFormat: str = 'text') -> None:
-        """level defaults to INFO (job start/completion, row counts, major steps);
-        pass logging.DEBUG for the finer-grained detail runner.py and
-        scramble.py also emit (resolved columns, adhoc query text,
-        per-step SQL) without changing anything at the call sites.
+        """Configures the package's own named logger.
 
-        Two things this deliberately does not do, both of which it used to:
+        The logger is named, with propagate=False, so this package's records stay
+        in its own handlers and a host application's logging is left alone.
+        Configuring the root logger instead would capture everyone's records.
 
-        (1) It doesn't configure the root logger. `logging.getLogger()` with no
-        name *is* the root logger, so every handler added here was attached to the
-        logger every other library in the process also logs through -- the host
-        application's own log records were silently duplicated into this file, and
-        a caller who had configured logging themselves had their setup quietly
-        extended. A named logger with propagate=False keeps this package's records
-        in this package's file, and everyone else's out of it.
+        Handlers are deduplicated on the resolved file path, because the logger is
+        process-wide: the runner and each worker build a Log for the same file,
+        and a forked worker inherits its parent's handler. Re-instantiating for an
+        existing destination updates its level and leaves its format alone.
 
-        (2) It doesn't stack a second handler for a file it's already writing to.
-        Every instantiation used to add another FileHandler, so N instances meant
-        every record written N times: runDataJobs builds one Log and each worker
-        process builds its own, which under a `fork` start method inherits the
-        parent's handler and then added a duplicate of it. Handlers are matched on
-        the resolved path of the file they write, so re-instantiating for the same
-        destination reuses the open handler (and just updates its level) instead.
-
-        logFile is optional so a caller that wants records on a stream
-        instead -- the CLI, where logs have to reach stdout/stderr to be
-        collected in a container at all -- can configure the logger without
-        first naming a file it doesn't want.
-
-        logFormat is 'text' (a line per record, for a person) or 'json' (an
-        object per record, for a collector). It applies to handlers this
-        instance installs; re-instantiating for a destination that already has a
-        handler updates its level but leaves its format alone, since the first
-        caller chose it deliberately.
+        logFile is optional so a caller that wants a stream -- the CLI, since a
+        container only collects stdout/stderr -- needn't name a file. logFormat is
+        'text' for a person or 'json' for a collector. At DEBUG, the runner adds
+        resolved columns, adhoc SQL and per-chunk progress.
         """
 
         formatter: logging.Formatter = JsonFormatter() if logFormat == 'json' else logging.Formatter(fmt=TEXT_FORMAT, datefmt=DATE_FORMAT)

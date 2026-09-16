@@ -505,8 +505,8 @@ class MSSQLDialect(DatabaseDialect):
     # codes are its own DBAPITypeObject constants (pymssql.NUMBER, .STRING, ...),
     # not reliably distinguishable without importing pymssql itself (unlike
     # Oracle's DB_TYPE_* objects, which expose a stable, driver-import-free `.name`
-    # string). Falls back to the base class's None -- Scramble shuffles rather than
-    # regenerates for every MSSQL column today, same as before this refactor.
+    # string). Falls back to the base class's None, so Scramble shuffles rather
+    # than regenerates every MSSQL column.
 
 
 class MariaDBDialect(MySQLDialect):
