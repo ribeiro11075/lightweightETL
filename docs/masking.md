@@ -109,7 +109,7 @@ The output has the same shape as the input:
 - It keeps shapes the way `key` does: integers keep sign and digit count, text keeps its length and every character outside `charset`. With `alphanumeric`, letters and digits share one alphabet, so a letter may become a digit; `key` keeps each character's class.
 - The masking key is turned into an AES key per domain, and the domain goes into FF1's tweak.
 - **FF1 needs at least a million possible values**: six digits, five hex characters or four alphanumerics. Shorter values are masked with `key`'s permutation instead, and still never collide with longer ones, since lengths are kept. **`strict: true`** fails the job on a shorter value instead, for policies that require FF1 for every value; the error gives the minimum length, never the value. `audit` notes each `fpe` column without `strict`.
-- It is slower than `key`: roughly 20,000 distinct values a second per worker. Repeated values are remembered, as described under [speed](#speed).
+- It is slower than `key`: roughly 25,000 distinct values a second per worker. Repeated values are remembered, as described under [speed](#speed).
 
 Only encryption is implemented. Nothing in the package can reverse a mask.
 

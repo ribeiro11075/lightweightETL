@@ -55,13 +55,19 @@ class FF1:
 
 
     def _prf(self, data: bytes) -> bytes:
-        """CBC-MAC with a zero IV: the last block of CBC encryption."""
+        """CBC-MAC with a zero IV: the last block of CBC encryption.
 
-        state = bytes(16)
+        The chaining XOR runs on integers rather than over zipped bytes: one
+        machine-word operation per block instead of sixteen interpreted ones,
+        which more than halves this function, and it is called ten times a value.
+        """
+
+        state = 0
         for offset in range(0, len(data), 16):
-            state = self._block(bytes(a ^ b for a, b in zip(state, data[offset:offset + 16])))
+            block = state ^ int.from_bytes(data[offset:offset + 16], 'big')
+            state = int.from_bytes(self._block(block.to_bytes(16, 'big')), 'big')
 
-        return state
+        return state.to_bytes(16, 'big')
 
 
     def _number(self, numerals: Sequence[int]) -> int:
@@ -107,8 +113,9 @@ class FF1:
             r = self._prf(p + q)                                                 # 6.ii
             s = r                                                                # 6.iii
             j = 1
+            block = int.from_bytes(r, 'big')
             while len(s) < d:
-                s += self._block(bytes(x ^ y for x, y in zip(r, j.to_bytes(16, 'big'))))
+                s += self._block((block ^ j).to_bytes(16, 'big'))
                 j += 1
             y = int.from_bytes(s[:d], 'big')                                     # 6.iv
             m = u if i % 2 == 0 else v                                           # 6.v

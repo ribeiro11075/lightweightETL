@@ -60,6 +60,9 @@ MAXIMUM_KEY_LENGTH = 256
 # 8; 10 is the conservative end, at a cost measured in microseconds per value.
 FEISTEL_ROUNDS = 10
 
+# SHA-256's compression block, which is what HMAC pads its key out to.
+HMAC_BLOCK_SIZE = 64
+
 
 class MaskingError(Exception):
     """A policy that can't be applied: a column it doesn't cover, or a value of
@@ -117,11 +120,30 @@ class KeyedHash:
 
     def __init__(self, key: str, domain: str) -> None:
         self._subkey = hmac.digest(key.encode('utf-8'), b'domain\x00' + domain.encode('utf-8'), 'sha256')
+        # HMAC re-keys on every call, spending two SHA-256 compressions on the
+        # padded key before it sees a byte of the message. Both pads depend only
+        # on the subkey, so their states are built once here and copied per
+        # value -- the same digest, about a third less time, which `key` and
+        # `fpe` feel most, at tens of HMACs a value.
+        #
+        # The subkey is a SHA-256 digest, so it is always shorter than the
+        # 64-byte block and is zero-padded rather than hashed first. Asserted
+        # rather than branched on: a subkey that ever grew past a block would
+        # otherwise be padded wrong here and silently mask everything anew.
+        assert len(self._subkey) == 32
+        paddedKey = self._subkey.ljust(HMAC_BLOCK_SIZE, b'\x00')
+        self._inner = hashlib.sha256(bytes(byte ^ 0x36 for byte in paddedKey))
+        self._outer = hashlib.sha256(bytes(byte ^ 0x5c for byte in paddedKey))
 
 
     def digest(self, message: bytes, purpose: bytes = b'') -> bytes:
 
-        return hmac.digest(self._subkey, purpose + b'\x00' + message, 'sha256')
+        inner = self._inner.copy()
+        inner.update(purpose + b'\x00' + message)
+        outer = self._outer.copy()
+        outer.update(inner.digest())
+
+        return outer.digest()
 
 
     def expand(self, message: bytes, length: int, purpose: bytes = b'') -> bytes:

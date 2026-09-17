@@ -6,6 +6,7 @@ for numbers -- so these tests state the property and check it over many values.
 """
 import datetime
 import decimal
+import hmac
 import re
 import unicodedata
 import uuid
@@ -75,6 +76,33 @@ def test_permute_handles_domains_wider_than_one_digest():
 
     assert len(outputs) == 200
     assert all(0 <= output < size for output in outputs)
+
+
+@pytest.mark.parametrize('message', [b'', b'a', b'\x00', b'x' * 63, b'x' * 64, b'x' * 65, b'\xff' * 1000])
+@pytest.mark.parametrize('purpose', [b'', b'integer', b'#\x00\x00\x00\x01'])
+def test_digest_is_hmac_sha256_over_the_documented_message(message, purpose):
+    """security.md promises digest(m, p) = HMAC-SHA256(subkey, p || 0x00 || m).
+
+    KeyedHash keeps the two pad states rather than re-keying per call, so this
+    checks the shortcut against the library's one-shot HMAC. Every mask in the
+    package comes from here: a digest that drifted from HMAC would silently
+    change every masked value, which reads downstream as a changed key.
+    """
+
+    keyedHash = KeyedHash(KEY, 'digest')
+    subkey = hmac.digest(KEY.encode('utf-8'), b'domain\x00' + b'digest', 'sha256')
+
+    assert keyedHash.digest(message, purpose) == hmac.digest(subkey, purpose + b'\x00' + message, 'sha256')
+
+
+def test_digest_matches_recorded_values():
+    """A known answer, so that changing both the shortcut and the comparison
+    above at once still fails. These are the masks a deployment already holds.
+    """
+
+    keyedHash = KeyedHash('a-test-key-that-is-long-enough', 'recorded')
+
+    assert keyedHash.digest(b'').hex() == '9338fbaa8004b74d220a3d9949fba47b9fe660625f7fa6f7511d97fd4bcc6e53'
 
 
 def test_the_key_fingerprint_is_stable_and_does_not_reveal_the_key():
