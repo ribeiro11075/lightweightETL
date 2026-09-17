@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import multiprocessing as mp
 import signal
 import time
-from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
-from concurrent.futures.process import BrokenProcessPool
+from multiprocessing.connection import wait as waitForAny
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Mapping, NamedTuple, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Mapping, NamedTuple, Optional
 
 from .configuration import ConfigurationError, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, InsertStrategy
 from .database import Database
@@ -20,8 +20,17 @@ from .transform import TransformError, Transformer, TransformResolutionError, re
 logger = logging.getLogger(LOGGER_NAME)
 
 # How often the run loop wakes while jobs are running, to notice SIGINT/SIGTERM.
-# Job completions wake it immediately; this only bounds how late a signal is seen.
+# Job completions and timeouts wake it on time; this only bounds how late a
+# signal is seen.
 SIGNAL_POLL_SECONDS = 1.0
+
+# Jobs run in processes started this way on every platform. `fork` -- Linux's
+# default before Python 3.14 -- copies a parent that is running a log listener
+# thread, which can deadlock the child on a lock that thread held.
+PROCESS_CONTEXT = mp.get_context('spawn')
+
+# How long a timed-out job gets to exit after SIGTERM before it is killed.
+TERMINATE_GRACE_SECONDS = 5.0
 
 
 @contextlib.contextmanager
@@ -378,6 +387,12 @@ def _runDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: Dict[
                 logger.error('Completed {} but could not record its watermark -- the next run will re-extract from {!r}'.format(job, watermark),
                              exc_info=error)
 
+        if jobConfig.masking is not None:
+            try:
+                memory.recordKeyFingerprint(job, keyFingerprint(jobConfig.masking.key.get_secret_value()))
+            except Exception as error:
+                logger.error('Completed {} but could not record its masking key fingerprint'.format(job), exc_info=error)
+
         try:
             memory.recordRun(job=job)
         except Exception as error:
@@ -390,12 +405,12 @@ def _runDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: Dict[
 
 
 def _initializeWorker(logQueue: Any, logLevel: int) -> None:
-    """Runs once in each worker process.
+    """Runs first in each job's process.
 
     Ctrl-C reaches every process in the terminal's group, so without this a
-    worker would die with KeyboardInterrupt mid-job. The parent decides how to
-    stop instead: it lets running jobs finish. SIGTERM keeps its default, so a
-    worker can still be killed on its own.
+    job would die with KeyboardInterrupt part-way. The parent decides how to
+    stop instead: it lets running jobs finish. SIGTERM keeps its default, which
+    is how the parent stops a job that has run out of time.
     """
 
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -446,89 +461,186 @@ def _requireWatermarkCapableMemory(jobsFile: DataJobsFile, memory: MemoryBackend
             'Implement readWatermarks/recordWatermark on it, or use FileMemory.'.format(type(memory).__name__, ', '.join(incrementalJobs)))
 
 
-class _Workers:
-    """The process pool jobs run in, replaced if a worker dies.
+def _jobProcess(outcomes: Any, logQueue: Any, logLevel: int, job: str, jobConfig: DataJobConfig,
+                databaseConfiguration: Dict[str, DatabaseConnectionConfig], memory: MemoryBackend) -> None:
+    """The whole life of one job's process: run the job, send back its outcome."""
 
-    A worker killed mid-job -- by the kernel's OOM killer, a segfault in a
-    driver, a stray `kill` -- breaks a ProcessPoolExecutor: every job running
-    in it fails with BrokenProcessPool. That is reported as those jobs'
-    failure, and the next job gets a fresh pool, so one crash can neither hang
-    the run nor take the rest of the cycle with it.
+    _initializeWorker(logQueue, logLevel)
+    outcomes.send(_runDataJob(job, jobConfig, databaseConfiguration, memory))
+    outcomes.close()
+
+
+def _requireUnchangedMaskingKeys(jobsFile: DataJobsFile, memory: MemoryBackend, acceptKeyChange: bool) -> None:
+    """Refuses to run an upsert job whose masking key changed since it last completed.
+
+    Its target keeps the rows it already has, masked under the old key, and
+    new rows would be masked under the new one: the same customer would get two
+    different masked ids, and joins between old and new rows would silently
+    stop matching. A swap job replaces its whole target, so a new key is
+    harmless there. A key change is deliberate, so the fix is to acknowledge
+    it -- after emptying the targets, or knowingly.
     """
 
-    def __init__(self, count: int, logQueue: Any, logLevel: int) -> None:
-        self.count = count
-        self.logQueue = logQueue
-        self.logLevel = logLevel
-        self._executor: Optional[ProcessPoolExecutor] = None
+    recorded = memory.readKeyFingerprints()
+    changed = []
 
-
-    def submit(self, function: Callable[..., JobOutcome], *arguments: Any) -> 'Future[JobOutcome]':
-
-        if self._executor is None:
-            self._executor = ProcessPoolExecutor(max_workers=self.count, initializer=_initializeWorker, initargs=(self.logQueue, self.logLevel))
-
-        return self._executor.submit(function, *arguments)
-
-
-    def discardBroken(self) -> None:
-
-        if self._executor is not None:
-            self._executor.shutdown(wait=False)
-            self._executor = None
-
-
-    def close(self) -> None:
-
-        if self._executor is not None:
-            self._executor.shutdown(wait=True)
-            self._executor = None
-
-
-def _runCycle(dependencyGraph: DependencyGraph, workers: _Workers, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
-              memory: MemoryBackend, termination: Dict[str, bool]) -> None:
-    """Runs one cycle's jobs to completion, each as soon as its predecessors finish."""
-
-    running: Dict['Future[JobOutcome]', Tuple[str, float]] = {}
-
-    while not dependencyGraph.finished:
-
-        if termination['terminating']:
-            dependencyGraph.skipNotStarted('the run was stopped by a signal before this job started')
-        else:
-            for job in dependencyGraph.takeReady():
-                future = workers.submit(_runDataJob, job, dependencyGraph.activeJobs[job], databaseConfiguration, memory)
-                running[future] = (job, time.time())
-
-        if not running:
-            # Nothing running and nothing ready means every job is decided --
-            # DependencyGraph refuses the cycles that could make this false.
-            assert dependencyGraph.finished, 'jobs remain, yet none is running or ready'
+    for name, job in sorted(jobsFile.jobs.items()):
+        if not job.active or job.masking is None or job.insertStrategy != InsertStrategy.UPSERT:
             continue
+        previous = recorded.get(name)
+        current = keyFingerprint(job.masking.key.get_secret_value())
+        if previous is not None and previous != current:
+            changed.append('{} (was {}, now {})'.format(name, previous, current))
 
-        done, _ = wait(running, timeout=SIGNAL_POLL_SECONDS, return_when=FIRST_COMPLETED)
+    if not changed:
+        return
 
-        for future in done:
-            job, startedAt = running.pop(future)
+    if acceptKeyChange:
+        logger.warning('Masking key changed for {}; continuing, as acknowledged'.format(', '.join(changed)))
+        return
 
+    raise ConfigurationError(
+        'the masking key changed since the last run of upsert job(s) {}. Their targets still hold rows masked under the old key, '
+        'which would no longer match rows masked under the new one. Empty those targets first (lightweight-etl clear, which also '
+        'forgets the old key), or acknowledge the change with --accept-key-change'.format(', '.join(changed)))
+
+
+class _JobProcess:
+    """One job, running in a process of its own.
+
+    A process per job rather than a slot in a shared pool, so each job can be
+    ended on its own: one past its timeoutSeconds is stopped, and one whose
+    process dies -- killed for memory, crashed in a driver -- fails without
+    taking any other job with it. Starting a process costs a fraction of a
+    second, which is noise beside a database load.
+
+    The outcome comes back over a pipe whose sending end only the child holds,
+    so a child that dies without sending shows up as end-of-file.
+    """
+
+    def __init__(self, job: str, jobConfig: DataJobConfig, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
+                 memory: MemoryBackend, logQueue: Any, logLevel: int) -> None:
+        self.job = job
+        self.startedAt = time.time()
+        self.deadline = self.startedAt + jobConfig.timeoutSeconds if jobConfig.timeoutSeconds else None
+
+        self._outcomes, sendingEnd = PROCESS_CONTEXT.Pipe(duplex=False)
+        self.process = PROCESS_CONTEXT.Process(
+            target=_jobProcess, name='lightweight-etl {}'.format(job), daemon=True,
+            args=(sendingEnd, logQueue, logLevel, job, jobConfig, databaseConfiguration, memory))
+        self.process.start()
+        sendingEnd.close()
+
+
+    @property
+    def waitables(self) -> List[Any]:
+
+        return [self._outcomes, self.process.sentinel]
+
+
+    def poll(self, now: float) -> Optional[JobOutcome]:
+        """The job's outcome once it is over -- finished, died or timed out --
+        and None while it is still running.
+        """
+
+        if self._outcomes.poll():
             try:
-                outcome = future.result()
-            except BrokenProcessPool:
-                workers.discardBroken()
-                outcome = JobOutcome(job=job, status=JobStatus.FAILED, startedAt=startedAt, finishedAt=time.time(),
-                                     error='WorkerDied: a worker process exited abruptly (killed, out of memory, or crashed) while this job was running')
-                logger.error('{}: {}'.format(job, outcome.error))
-            except Exception as error:
-                outcome = JobOutcome(job=job, status=JobStatus.FAILED, startedAt=startedAt, finishedAt=time.time(),
-                                     error='{}: {}'.format(type(error).__name__, error))
-                logger.error('{} could not be run: {}'.format(job, outcome.error), exc_info=error)
+                outcome: JobOutcome = self._outcomes.recv()
+            except EOFError:
+                return self._died()
+            self.process.join()
+            return outcome
 
-            dependencyGraph.finish(outcome)
+        if not self.process.is_alive():
+            return self._died()
+
+        if self.deadline is not None and now >= self.deadline:
+            self.stop()
+            timeoutSeconds = self.deadline - self.startedAt
+            logger.error('{} exceeded timeoutSeconds ({:g}) and was stopped'.format(self.job, timeoutSeconds),
+                         extra={'job': self.job, 'status': JobStatus.FAILED.value})
+            return self._failed('Timeout: stopped after exceeding timeoutSeconds ({:g})'.format(timeoutSeconds))
+
+        return None
+
+
+    def stop(self) -> None:
+        """SIGTERM, then SIGKILL if it hasn't exited within the grace period.
+
+        Its database connections close with it, so each server rolls back
+        whatever the job had not committed.
+        """
+
+        self.process.terminate()
+        self.process.join(TERMINATE_GRACE_SECONDS)
+
+        if self.process.is_alive():
+            self.process.kill()
+            self.process.join()
+
+
+    def _died(self) -> JobOutcome:
+
+        self.process.join()
+        logger.error('{}: its process exited with code {} before reporting an outcome'.format(self.job, self.process.exitcode),
+                     extra={'job': self.job, 'status': JobStatus.FAILED.value})
+
+        return self._failed('WorkerDied: the job\'s process exited abruptly (code {}) -- killed, out of memory, or crashed'.format(
+            self.process.exitcode))
+
+
+    def _failed(self, error: str) -> JobOutcome:
+
+        return JobOutcome(job=self.job, status=JobStatus.FAILED, error=error, startedAt=self.startedAt, finishedAt=time.time())
+
+
+def _runCycle(dependencyGraph: DependencyGraph, workers: int, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
+              memory: MemoryBackend, termination: Dict[str, bool], logQueue: Any, logLevel: int) -> None:
+    """Runs one cycle's jobs to completion, each as soon as its predecessors
+    finish and one of the `workers` slots is free.
+    """
+
+    running: List[_JobProcess] = []
+
+    try:
+        while not dependencyGraph.finished:
+
+            if termination['terminating']:
+                dependencyGraph.skipNotStarted('the run was stopped by a signal before this job started')
+            else:
+                for job in dependencyGraph.takeReady(limit=workers - len(running)):
+                    running.append(_JobProcess(job, dependencyGraph.activeJobs[job], databaseConfiguration, memory, logQueue, logLevel))  # type: ignore[arg-type]
+
+            if not running:
+                # Nothing running and nothing startable means every job is
+                # decided -- DependencyGraph refuses the cycles that could make
+                # this false.
+                assert dependencyGraph.finished, 'jobs remain, yet none is running or ready'
+                continue
+
+            timeout = SIGNAL_POLL_SECONDS
+            deadlines = [process.deadline for process in running if process.deadline is not None]
+            if deadlines:
+                timeout = max(0.0, min(timeout, min(deadlines) - time.time()))
+
+            waitForAny([waitable for process in running for waitable in process.waitables], timeout=timeout)
+
+            now = time.time()
+            for process in list(running):
+                outcome = process.poll(now)
+                if outcome is not None:
+                    running.remove(process)
+                    dependencyGraph.finish(outcome)
+    finally:
+        # Only reached with jobs still running if something above raised.
+        for process in running:
+            process.stop()
 
 
 def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, DatabaseConnectionConfig], memory: MemoryBackend,
                 logFile: Optional[Path] = None, runForever: bool = False, logLevel: int = logging.INFO,
-                logFormat: str = 'text') -> RunResult:
+                logFormat: str = 'text', acceptKeyChange: bool = False,
+                onCycle: Optional[Callable[['RunResult'], None]] = None) -> RunResult:
     """Runs data jobs, honoring each job's `refresh` window and `predecessors`.
 
     The caller supplies validated configuration, a MemoryBackend for run state,
@@ -547,19 +659,29 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
     Use runForever=True for freshness below cron's one-minute floor, or where
     there is no scheduler to hook into. It runs until SIGINT or SIGTERM.
 
-    Jobs run in worker processes, so `memory` is pickled and reconstructed in
-    each, per MemoryBackend's contract, and so is everything a job's
-    configuration references. Worker log records are sent back to this
-    process and written by its handlers -- the ones Log sets up from logFile
-    and logFormat, plus any the caller added -- so they share one format and
-    one set of destinations.
+    `onCycle` is called with each cycle's RunResult as the cycle ends -- the
+    place to keep history, publish metrics or notify, which a run that never
+    returns couldn't otherwise do. An exception from it is logged, not raised:
+    reporting must not stop the loads.
 
-    Worker processes are started with multiprocessing's default method, which
-    re-imports the calling script on macOS and Windows (and on Linux from
-    Python 3.14): call this from under `if __name__ == '__main__':`.
+    A masked upsert job whose key changed since it last completed stops the run
+    before anything starts, unless acceptKeyChange; see
+    _requireUnchangedMaskingKeys.
+
+    Each job runs in a process of its own, at most jobsFile.workers at once,
+    so `memory` is pickled and reconstructed in each, per MemoryBackend's
+    contract, and so is everything a job's configuration references. Their log
+    records are sent back to this process and written by its handlers -- the
+    ones Log sets up from logFile and logFormat, plus any the caller added --
+    so they share one format and one set of destinations.
+
+    Those processes are started with multiprocessing's `spawn` method, which
+    imports the calling script afresh: call this from under
+    `if __name__ == '__main__':`.
     """
 
     _requireWatermarkCapableMemory(jobsFile, memory)
+    _requireUnchangedMaskingKeys(jobsFile, memory, acceptKeyChange)
 
     if jobsFile.workers < 1:
         raise ConfigurationError('workers must be at least 1, got {}'.format(jobsFile.workers))
@@ -567,24 +689,25 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
     Log(logFile=logFile, level=logLevel, logFormat=logFormat)
     logger.info('Starting data job runner with {} worker(s)'.format(jobsFile.workers))
 
-    with _terminationHandling() as termination, receiveForwardedRecords() as logQueue:
+    with _terminationHandling() as termination, receiveForwardedRecords(PROCESS_CONTEXT) as logQueue:
 
-        workers = _Workers(jobsFile.workers, logQueue, logLevel)
+        while True:
+            dependencyGraph = DependencyGraph(jobs=jobsFile.jobs, memory=memory.read())
+            logger.info('Starting cycle with {} active job(s)'.format(len(dependencyGraph.activeJobs)))
 
-        try:
-            while True:
-                dependencyGraph = DependencyGraph(jobs=jobsFile.jobs, memory=memory.read())
-                logger.info('Starting cycle with {} active job(s)'.format(len(dependencyGraph.activeJobs)))
+            _runCycle(dependencyGraph, jobsFile.workers, databaseConfiguration, memory, termination, logQueue, logLevel)
+            _logCycleSummary(dependencyGraph)
 
-                _runCycle(dependencyGraph, workers, databaseConfiguration, memory, termination)
-                _logCycleSummary(dependencyGraph)
+            if onCycle is not None:
+                try:
+                    onCycle(RunResult(outcomes=list(dependencyGraph.outcomes), interrupted=termination['terminating']))
+                except Exception as error:
+                    logger.error('Reporting on the cycle failed: {}: {}'.format(type(error).__name__, error), exc_info=error)
 
-                if not runForever or termination['terminating']:
-                    break
+            if not runForever or termination['terminating']:
+                break
 
-                time.sleep(jobsFile.cycleSleepSeconds)
-        finally:
-            workers.close()
+            time.sleep(jobsFile.cycleSleepSeconds)
 
         logger.info('Finished data job runner')
 

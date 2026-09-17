@@ -166,3 +166,38 @@ def test_swap_works_with_schema_qualified_names(server, otherSchema):
     assert _rows(database, stage) == [(1,)]
     assert database.tableExists(final)
     assert not database.tableExists('{}.{}_tmp'.format(otherSchema, final.rpartition('.')[2]))
+
+
+def test_database_history_and_key_fingerprints_work_on_every_server(server):
+    """The history table's types, and fingerprint rows in the memory table,
+    have to be accepted -- and read back -- by every dialect.
+    """
+    from lightweight_etl.dependencyGraph import JobOutcome, JobStatus
+    from lightweight_etl.memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory
+    from lightweight_etl.reporting import DATABASE_HISTORY_SCHEMA, DatabaseHistory
+    from lightweight_etl.runner import RunResult
+
+    serverName, database, table = server
+    historyTable = table(DATABASE_HISTORY_SCHEMA.split('lightweight_etl_history', 1)[1])
+    memoryTable = table(DATABASE_MEMORY_SCHEMA.split('lightweight_etl_memory', 1)[1])
+    settings = database.connectionSettings
+
+    history = DatabaseHistory(settings, table=historyTable)
+    history.append(RunResult(outcomes=[JobOutcome(job='a', status=JobStatus.FAILED, error='x' * 3000, startedAt=1.0e9, finishedAt=1.0e9 + 2.5),
+                                       JobOutcome(job='b', status=JobStatus.SKIPPED)]), 'run-1')
+    records = history.read(limit=5)
+
+    assert {record['job'] for record in records} == {'a', 'b'}
+    failed = next(record for record in records if record['job'] == 'a')
+    assert failed['durationSeconds'] == 2.5 and len(failed['error']) == 2000
+    assert type(failed['rowCount']) is int and type(failed['attempts']) is int
+    assert [record['job'] for record in history.read(job='b')] == ['b']
+
+    memory = DatabaseMemory(settings, table=memoryTable)
+    memory.recordRun('a')
+    memory.recordWatermark('a', 5)
+    memory.recordKeyFingerprint('a', 'abc123')
+
+    assert memory.readKeyFingerprints() == {'a': 'abc123'}
+    assert memory.readWatermarks() == {'a': 5}
+    assert set(memory.read()) == {'a'}

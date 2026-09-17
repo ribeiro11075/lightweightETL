@@ -113,3 +113,46 @@ def test_resolve_transformer_raises_for_missing_attribute():
 def test_resolve_transformer_raises_for_non_callable_attribute():
     with pytest.raises(TransformResolutionError):
         resolveTransformer('os.path:sep')
+
+
+def test_a_reference_can_carry_literal_arguments():
+    transformer = resolveTransformer("os.path:join('b', 'c')")
+
+    assert transformer('a') == 'a/b/c'
+    assert transformer.__name__ == "join('b', 'c')"
+
+
+def test_arguments_may_be_keywords_and_collections():
+    transformer = resolveTransformer("lightweight_etl.builtinTransforms:regexReplace(pattern='[aeiou]', replacement='')")
+
+    assert transformer('banana') == 'bnn'
+
+
+@pytest.mark.parametrize('reference', [
+    'os.path:basename(__import__("os").system("true"))',
+    'os.path:basename(open)',
+    "os.path:basename(*['x'])",
+    'os.path:basename(**{})',
+    'os.path:basename(1) + x(2',
+    'os.path:basename(',
+    ])
+def test_arguments_that_are_not_plain_literals_are_refused(reference):
+    """A configuration file must not be a way to run code."""
+    with pytest.raises(TransformResolutionError):
+        resolveTransformer(reference)
+
+
+def test_arguments_that_do_not_fit_the_function_are_refused_up_front():
+    with pytest.raises(TransformResolutionError, match='too many positional arguments'):
+        resolveTransformer('lightweight_etl.builtinTransforms:upper(1)')
+
+    with pytest.raises(TransformResolutionError, match="unexpected keyword argument 'width'"):
+        resolveTransformer('lightweight_etl.builtinTransforms:truncate(width=3)')
+
+
+def test_a_failing_transformer_with_arguments_is_named_with_them():
+    transformer = resolveTransformer('lightweight_etl.builtinTransforms:truncate(-1)')
+    transform = Transform(data=[('abc',)], columns=['name'], columnTransforms={'name': [transformer]})
+
+    with pytest.raises(TransformError, match=r'transformer "truncate\(-1\)" failed on column "name"'):
+        transform.transform()

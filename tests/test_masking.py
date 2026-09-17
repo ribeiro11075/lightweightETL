@@ -6,6 +6,7 @@ for numbers -- so these tests state the property and check it over many values.
 """
 import datetime
 import decimal
+import re
 import uuid
 
 import pytest
@@ -547,3 +548,181 @@ def test_the_manifest_records_completed_failed_and_skipped_masked_jobs():
     assert manifest['jobs'][0]['columns'] == applied['columns']
     assert manifest['jobs'][1]['columns'] == []
     assert KEY not in str(manifest)
+
+
+def _manifest():
+    return {'generatedAt': '2026-09-16T00:00:00+00:00', 'jobs': [{'job': 'maskCustomers', 'status': 'completed', 'rowCount': 3,
+                                                                 'columns': [{'column': 'email', 'strategy': 'email'}]}]}
+
+
+def test_a_sealed_manifest_verifies_until_it_is_changed():
+    import json
+    from lightweight_etl.masking import sealManifest, verifyManifest
+
+    sealed = json.loads(json.dumps(sealManifest(_manifest()), indent=4))
+
+    assert verifyManifest(sealed) == (True, False, False, None)
+
+    sealed['jobs'][0]['rowCount'] = 4
+    assert verifyManifest(sealed).digestValid is False
+
+
+def test_a_signed_manifest_verifies_only_with_its_key():
+    from lightweight_etl.masking import keyFingerprint, sealManifest, verifyManifest
+
+    key = 'a-manifest-signing-key'
+    sealed = sealManifest(_manifest(), signingKey=key)
+
+    assert sealed['integrity']['signingKeyFingerprint'] == keyFingerprint(key)
+    assert verifyManifest(sealed, signingKey=key) == (True, True, True, keyFingerprint(key))
+    assert verifyManifest(sealed, signingKey='another-signing-key').signatureValid is False
+    assert verifyManifest(sealed).signatureValid is False
+
+
+def test_a_forged_signature_does_not_verify():
+    """Anyone can recompute a digest after editing; only the key can re-sign."""
+    import hashlib
+    from lightweight_etl.masking import _canonicalManifest, sealManifest, verifyManifest
+
+    key = 'a-manifest-signing-key'
+    sealed = sealManifest(_manifest(), signingKey=key)
+    sealed['jobs'][0]['status'] = 'failed'
+    sealed['integrity']['digest'] = hashlib.sha256(_canonicalManifest(sealed)).hexdigest()
+
+    verification = verifyManifest(sealed, signingKey=key)
+
+    assert verification.digestValid is True
+    assert verification.signatureValid is False
+
+
+def test_a_manifest_without_an_integrity_section_cannot_be_verified():
+    from lightweight_etl.masking import verifyManifest
+
+    with pytest.raises(ValueError, match='no integrity section'):
+        verifyManifest(_manifest())
+
+
+def test_a_signing_key_must_be_long_enough():
+    from lightweight_etl.masking import sealManifest
+
+    with pytest.raises(ValueError, match='at least 16'):
+        sealManifest(_manifest(), signingKey='short')
+
+
+GOLDEN_KEY = 'a-golden-value-masking-key'
+FAKE_STRATEGIES = ['fakeFirstName', 'fakeLastName', 'fakeName', 'fakeCity', 'fakeCompany', 'fakeStreetAddress']
+
+
+def test_fake_values_without_a_locale_are_unchanged_by_locale_support():
+    """Captured before locales existed. A mask that changes between versions
+    breaks every copy already loaded with it.
+    """
+    bound = MaskingPlan(GOLDEN_KEY, {name: name for name in FAKE_STRATEGIES}).bind(FAKE_STRATEGIES)
+
+    assert bound.apply([('ann@example.test',) * 6]) == [('Elena', 'Singh', 'Quinn Becker', 'Elmstead', 'Acorn Holdings', '1137 Spring Avenue')]
+
+
+@pytest.mark.parametrize('locale', ['de_DE', 'fr_FR', 'es_ES', 'pt_BR', 'it_IT', 'nl_NL', 'en_US', 'en_GB'])
+def test_a_locale_draws_from_its_own_lists(locale):
+    from lightweight_etl.masking import LOCALES
+
+    policy = {name: {'strategy': name, 'locale': locale} for name in FAKE_STRATEGIES}
+    bound = MaskingPlan(GOLDEN_KEY, policy).bind(FAKE_STRATEGIES)
+    lists = LOCALES[locale]
+
+    for value in ('ann@example.test', 'bo@example.test', 42):
+        first, last, full, city, company, address = bound.apply([(value,) * 6])[0]
+        assert first in lists.firstNames and last in lists.lastNames and city in lists.cities
+        assert any(full == '{} {}'.format(a, b) for a in lists.firstNames for b in lists.lastNames)
+        assert any(company.endswith(' ' + suffix) for suffix in lists.companySuffixes)
+        assert any(street in address for street in lists.streets) and any(character.isdigit() for character in address)
+
+
+def test_locale_address_layouts_differ():
+    policy = {'de': {'strategy': 'fakeStreetAddress', 'locale': 'de_DE'}, 'fr': {'strategy': 'fakeStreetAddress', 'locale': 'fr_FR'}}
+    german, french = MaskingPlan(GOLDEN_KEY, policy).bind(['de', 'fr']).apply([('x', 'x')])[0]
+
+    assert german.split()[-1].isdigit()
+    assert french.split()[0].isdigit()
+
+
+def test_an_unknown_locale_is_refused():
+    with pytest.raises(ValueError, match='locale: must be one of'):
+        validateColumnPolicy({'strategy': 'fakeName', 'locale': 'xx_XX'})
+
+
+def _fpe(policy, values):
+    pytest.importorskip('cryptography')
+    return [row[0] for row in MaskingPlan(GOLDEN_KEY, {'c': policy}).bind(['c']).apply([(value,) for value in values])]
+
+
+def test_fpe_is_one_to_one_and_keeps_an_integers_digit_count():
+    values = list(range(999_000, 1_001_000)) + list(range(-1_000_500, -999_500))
+    masked = _fpe('fpe', values)
+
+    assert len(set(masked)) == len(values)
+    assert all(len(str(abs(a))) == len(str(abs(b))) and (a < 0) == (b < 0) for a, b in zip(values, masked))
+
+
+def test_fpe_masks_values_too_short_for_ff1_one_to_one_too():
+    values = list(range(-999, 1000))
+    masked = _fpe('fpe', values)
+
+    assert len(set(masked)) == len(values)
+    assert all(len(str(abs(a))) == len(str(abs(b))) for a, b in zip(values, masked))
+
+
+def test_fpe_keeps_a_texts_shape():
+    phone, code, token = _fpe({'strategy': 'fpe', 'charset': 'digits'}, ['+1 (555) 010-9999']) + _fpe('fpe', ['AB-12cd9']) + \
+        _fpe({'strategy': 'fpe', 'charset': 'hex'}, ['DEADBEEF-00'])
+
+    assert re.fullmatch(r'\+\d \(\d{3}\) \d{3}-\d{4}', phone) and phone != '+1 (555) 010-9999'
+    assert re.fullmatch(r'[0-9A-Za-z]{2}-[0-9A-Za-z]{5}', code) and code != 'AB-12cd9'
+    assert re.fullmatch(r'[0-9A-F]{8}-[0-9A-F]{2}', token)
+
+
+def test_fpe_keeps_a_uuid_a_uuid():
+    value = uuid.UUID('12345678-1234-5678-1234-567812345678')
+    (masked,) = _fpe('fpe', [value])
+
+    assert isinstance(masked, uuid.UUID) and masked != value
+
+
+def test_fpe_is_deterministic_and_depends_on_the_domain():
+    pytest.importorskip('cryptography')
+    plan = MaskingPlan(GOLDEN_KEY, {'a': {'strategy': 'fpe', 'domain': 'customer'}, 'b': {'strategy': 'fpe', 'domain': 'customer'},
+                                    'c': {'strategy': 'fpe', 'domain': 'order'}})
+    a, b, c = plan.bind(['a', 'b', 'c']).apply([(1234567, 1234567, 1234567)])[0]
+
+    assert a == b != c
+
+
+@pytest.mark.parametrize('value', [True, 1.5, decimal.Decimal('1.5'), datetime.date(2026, 1, 1)])
+def test_fpe_refuses_what_it_cannot_shape(value):
+    with pytest.raises(MaskingError, match='fpe'):
+        _fpe('fpe', [value])
+
+
+def test_a_custom_strategy_is_named_by_module_and_class():
+    bound = MaskingPlan(GOLDEN_KEY, {'name': {'strategy': 'tests.customStrategies:Initials', 'separator': '-'}}).bind(['name'])
+
+    (masked,) = bound.apply([('Ann Lee',)])[0]
+
+    assert re.fullmatch(r'A-L-[0-9a-f]{4}', masked)
+    assert bound.manifest[0].strategy == 'tests.customStrategies:Initials'
+    assert bound.manifest[0].domain == 'name'
+
+
+@pytest.mark.parametrize('reference,message', [
+    ('tests.customStrategies:Missing', 'could not be imported'),
+    ('tests.noSuchModule:Initials', 'could not be imported'),
+    ('tests.customStrategies:NotAStrategy', 'is not a subclass'),
+    ])
+def test_a_bad_custom_strategy_reference_is_refused(reference, message):
+    with pytest.raises(ValueError, match=message):
+        validateColumnPolicy(reference)
+
+
+def test_a_custom_strategy_checks_its_own_options():
+    with pytest.raises(ValueError, match='strategy "tests.customStrategies:Initials" does not take option'):
+        validateColumnPolicy({'strategy': 'tests.customStrategies:Initials', 'colour': 'red'})

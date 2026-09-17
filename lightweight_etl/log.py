@@ -107,16 +107,19 @@ class _ToPackageLogger(logging.Handler):
 
 
 @contextlib.contextmanager
-def receiveForwardedRecords() -> Iterator[Any]:
+def receiveForwardedRecords(context: Any = mp) -> Iterator[Any]:
     """A queue for workers to log to, drained into this process's handlers.
 
     So a worker's records get the same destinations, format and levels as the
     parent's own -- a file, stderr, JSON, --quiet -- whatever the caller set up,
     without each worker having to be told. Leaving the block waits for every
     record already queued, so start and stop it around the workers' lifetime.
+
+    `context` is the multiprocessing context the workers are started with; a
+    queue only crosses into processes of the context that made it.
     """
 
-    queue: Any = mp.Queue()
+    queue: Any = context.Queue()
     listener = logging.handlers.QueueListener(queue, _ToPackageLogger())
     listener.start()
 

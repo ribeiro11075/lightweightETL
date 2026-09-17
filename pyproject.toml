@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Move data between databases, across engines, with streaming and incremental loads"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [{ name = "David Ribeiro" }]
 dependencies = [
     "pyyaml==6.0.3",
@@ -34,7 +34,9 @@ mariadb = ["mysql-connector-python==26.7.0"]
 # sqlite3 is Python's standard library -- no extra to install at all, this exists
 # only so `lightweight-etl[all]` and the pattern below stay uniform
 sqlite = []
-all = ["lightweight-etl[mysql,postgresql,oracle,mssql,mariadb,sqlite]"]
+# The fpe masking strategy's AES; oracledb already depends on it
+fpe = ["cryptography==50.0.1"]
+all = ["lightweight-etl[mysql,postgresql,oracle,mssql,mariadb,sqlite,fpe]"]
 dev = ["pytest==9.1.1", "mypy==2.3.1", "types-PyYAML==6.0.12.20260815"]
 
 [tool.setuptools]
@@ -48,9 +50,8 @@ markers = [
     ]
 
 [tool.mypy]
-# mypy 2.x's minimum checkable target is 3.10; the package itself still
-# supports and declares requires-python >=3.9 above -- nothing in the code
-# actually uses 3.10+-only syntax, this is purely mypy's own tooling floor
+# The oldest Python the package supports (requires-python above), so mypy
+# flags anything newer
 python_version = "3.10"
 files = ["lightweight_etl"]
 ignore_missing_imports = true

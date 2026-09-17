@@ -5,8 +5,6 @@ import signal
 import sqlite3
 import threading
 import time
-from concurrent.futures import Future
-from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Dict, List, Tuple
 
 import pytest
@@ -15,7 +13,7 @@ from lightweight_etl.configuration import Configuration, ConfigurationError, Dat
     InsertStrategy
 from lightweight_etl.dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 from lightweight_etl.memory import FileMemory, MemoryBackend
-from lightweight_etl.runner import RunResult, _initializeWorker, _runCycle, _runDataJob, _terminationHandling, _executeDataJob, runDataJobs
+from lightweight_etl.runner import RunResult, _initializeWorker, _jobProcess, _runCycle, _runDataJob, _terminationHandling, _executeDataJob, runDataJobs
 from lightweight_etl.transform import TransformError
 
 
@@ -26,6 +24,7 @@ def test_worker_functions_are_picklable():
     """
     pickle.dumps(_runDataJob)
     pickle.dumps(_initializeWorker)
+    pickle.dumps(_jobProcess)
 
 
 def test_run_data_jobs_completes_with_zero_active_jobs_when_not_forever(tmp_path):
@@ -982,6 +981,9 @@ def _sqliteJob(databasePath: Any, **overrides: Any) -> Dict[str, Any]:
 def sqliteDatabase(tmp_path):
     path = tmp_path / 'lite.db'
     connection = sqlite3.connect(path)
+    # WAL up front: jobs starting together would otherwise race to switch the
+    # file's journal mode, which SQLite refuses without waiting.
+    connection.execute('PRAGMA journal_mode=WAL')
     connection.executescript('create table source (id integer primary key, name text);'
                              "insert into source values (1, 'Ann'), (2, 'Bo');"
                              'create table target (id integer primary key, name text);')
@@ -1011,57 +1013,65 @@ def test_a_worker_that_dies_fails_its_job_instead_of_hanging_the_run(tmp_path, s
     assert not thread.is_alive(), 'the run is still waiting on a worker that died'
     statuses = {outcome.job: outcome.status for outcome in results[0].outcomes}
     assert statuses == {'crashes': JobStatus.FAILED, 'dependent': JobStatus.SKIPPED}
-    assert 'worker process exited abruptly' in results[0].failed[0].error
+    assert 'process exited abruptly' in results[0].failed[0].error
 
 
-class _FakeWorkers:
-    """Stands in for the process pool: completes jobs at once, except that
-    'crashes' breaks the pool, as a dead worker does.
+def _runJobs(jobs: Dict[str, Any], databases: Dict[str, Any], tmp_path: Any, workers: int = 1) -> RunResult:
+    jobsFile = Configuration.validateJobConfiguration({'workers': workers, 'jobs': jobs}, DataJobsFile)
+
+    return runDataJobs(jobsFile=jobsFile, databaseConfiguration=databases, memory=FileMemory(tmp_path / 'memory.yaml'))
+
+
+def test_a_dead_worker_takes_no_other_job_with_it(tmp_path, sqliteDatabase):
+    """Each job has its own process, so a crash fails only the job it was
+    running -- not one running beside it, and not one that starts later.
     """
+    result = _runJobs({
+        'crashes': _sqliteJob(sqliteDatabase, sourceQueryColumnTransforms={'name': ['tests.crashingTransforms:exitAbruptly']}),
+        'alongside': _sqliteJob(sqliteDatabase, sourceQueryColumnTransforms={'name': ['tests.crashingTransforms:slowly']}),
+        'later': _sqliteJob(sqliteDatabase, predecessors=['alongside']),
+        }, sqliteDatabase, tmp_path, workers=2)
 
-    def __init__(self) -> None:
-        self.submitted: List[str] = []
-        self.discarded = 0
-
-    def submit(self, function: Any, job: str, *arguments: Any) -> 'Future[JobOutcome]':
-        self.submitted.append(job)
-        future: 'Future[JobOutcome]' = Future()
-        if job == 'crashes':
-            future.set_exception(BrokenProcessPool('a worker died'))
-        else:
-            future.set_result(JobOutcome(job=job, status=JobStatus.COMPLETED))
-        return future
-
-    def discardBroken(self) -> None:
-        self.discarded += 1
+    statuses = {outcome.job: outcome.status for outcome in result.outcomes}
+    assert statuses == {'crashes': JobStatus.FAILED, 'alongside': JobStatus.COMPLETED, 'later': JobStatus.COMPLETED}
 
 
-def _graph(**predecessors: List[str]) -> DependencyGraph:
-    return DependencyGraph({name: _dataJobConfig(predecessors=names) for name, names in predecessors.items()})
+def test_a_job_past_its_timeout_is_stopped_and_fails(tmp_path, sqliteDatabase):
+    """A hung query would otherwise hold a run -- and a container's shutdown --
+    for as long as the database lets it.
+    """
+    startedAt = time.time()
+
+    result = _runJobs({
+        'hangs': _sqliteJob(sqliteDatabase, timeoutSeconds=1, sourceQueryColumnTransforms={'name': ['tests.crashingTransforms:hang']}),
+        'dependent': _sqliteJob(sqliteDatabase, predecessors=['hangs']),
+        'unrelated': _sqliteJob(sqliteDatabase, timeoutSeconds=60),
+        }, sqliteDatabase, tmp_path, workers=2)
+
+    statuses = {outcome.job: outcome.status for outcome in result.outcomes}
+    assert statuses == {'hangs': JobStatus.FAILED, 'dependent': JobStatus.SKIPPED, 'unrelated': JobStatus.COMPLETED}
+    assert result.failed[0].error == 'Timeout: stopped after exceeding timeoutSeconds (1)'
+    assert time.time() - startedAt < 30
 
 
-def test_jobs_started_after_a_worker_dies_run_in_a_fresh_pool():
-    graph = _graph(crashes=[], fine=[], later=['fine'])
-    workers = _FakeWorkers()
+def test_no_more_than_workers_jobs_run_at_once(tmp_path, sqliteDatabase):
+    result = _runJobs({name: _sqliteJob(sqliteDatabase, sourceQueryColumnTransforms={'name': ['tests.crashingTransforms:slowly']})
+                       for name in ('a', 'b', 'c')}, sqliteDatabase, tmp_path, workers=2)
 
-    _runCycle(graph, workers, {}, _TimelineMemory([]), {'terminating': False})  # type: ignore[arg-type]
-
-    statuses = {outcome.job: outcome.status for outcome in graph.outcomes}
-    assert statuses == {'crashes': JobStatus.FAILED, 'fine': JobStatus.COMPLETED, 'later': JobStatus.COMPLETED}
-    assert workers.discarded == 1
-    assert workers.submitted == ['crashes', 'fine', 'later']
+    spans = sorted((outcome.startedAt, outcome.finishedAt) for outcome in result.outcomes)
+    assert result.succeeded
+    assert all(sum(1 for start, end in spans if start <= moment < end) <= 2 for moment, _ in spans)
+    assert spans[2][0] >= min(spans[0][1], spans[1][1]) - 0.05
 
 
 def test_a_signal_stops_new_jobs_from_starting_and_reports_them_skipped():
     """After SIGTERM a container has seconds left: jobs already running are
     allowed to finish, but nothing new is started.
     """
-    graph = _graph(first=[], second=['first'])
-    workers = _FakeWorkers()
+    graph = DependencyGraph({'first': _dataJobConfig(), 'second': _dataJobConfig(predecessors=['first'])})
 
-    _runCycle(graph, workers, {}, _TimelineMemory([]), {'terminating': True})  # type: ignore[arg-type]
+    _runCycle(graph, 1, {}, _TimelineMemory([]), {'terminating': True}, logQueue=None, logLevel=0)
 
-    assert workers.submitted == []
     assert {outcome.job: outcome.status for outcome in graph.outcomes} == {'first': JobStatus.SKIPPED, 'second': JobStatus.SKIPPED}
     assert 'stopped by a signal' in graph.outcomes[0].error
 
@@ -1088,3 +1098,65 @@ def test_worker_log_records_reach_the_parents_handlers_in_its_format(tmp_path, s
     assert any(record.get('job') == 'copies' and record.get('status') == 'completed' for record in records)
     failure = next(record for record in records if record['message'].startswith('Failed to complete fails'))
     assert 'no such table' in failure['exception']
+
+
+def _maskedSqliteJob(databases, key='an-original-masking-key', **overrides):
+    return _sqliteJob(databases, masking={'key': key, 'columns': {'id': 'key', 'name': 'fakeName'}}, **overrides)
+
+
+def test_a_masked_job_records_the_key_it_completed_under(tmp_path, sqliteDatabase):
+    from lightweight_etl.masking import keyFingerprint
+
+    _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
+
+    assert FileMemory(tmp_path / 'memory.yaml').readKeyFingerprints() == {'masked': keyFingerprint('an-original-masking-key')}
+
+
+def test_a_changed_key_stops_an_upsert_job_before_anything_runs(tmp_path, sqliteDatabase):
+    """Old rows masked under the old key and new ones under the new key would
+    no longer match -- silently, which is why it has to be acknowledged.
+    """
+    _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
+
+    with pytest.raises(ConfigurationError, match='masking key changed since the last run of upsert job'):
+        _runJobs({'masked': _maskedSqliteJob(sqliteDatabase, key='a-rotated-masking-key')}, sqliteDatabase, tmp_path)
+
+
+def test_a_changed_key_is_accepted_when_acknowledged_and_then_recorded(tmp_path, sqliteDatabase):
+    from lightweight_etl.masking import keyFingerprint
+
+    _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
+    jobsFile = Configuration.validateJobConfiguration(
+        {'workers': 1, 'jobs': {'masked': _maskedSqliteJob(sqliteDatabase, key='a-rotated-masking-key')}}, DataJobsFile)
+
+    result = runDataJobs(jobsFile=jobsFile, databaseConfiguration=sqliteDatabase, memory=FileMemory(tmp_path / 'memory.yaml'),
+                         acceptKeyChange=True)
+
+    assert result.succeeded
+    assert FileMemory(tmp_path / 'memory.yaml').readKeyFingerprints() == {'masked': keyFingerprint('a-rotated-masking-key')}
+
+
+def test_a_changed_key_does_not_stop_a_swap_job(tmp_path, sqliteDatabase):
+    """A swap replaces its whole target, so nothing masked under the old key is left."""
+    connection = sqlite3.connect(sqliteDatabase['lite'].database)
+    connection.execute('create table target_stage (id integer primary key, name text)')
+    connection.close()
+
+    for key in ('an-original-masking-key', 'a-rotated-masking-key'):
+        result = _runJobs({'masked': _maskedSqliteJob(sqliteDatabase, key=key, insertStrategy='swap', targetTableStage='target_stage')},
+                          sqliteDatabase, tmp_path)
+        assert result.succeeded
+
+
+def test_each_cycle_is_reported_to_on_cycle_and_its_failures_are_contained(tmp_path, sqliteDatabase):
+    jobsFile = Configuration.validateJobConfiguration({'workers': 1, 'jobs': {'copies': _sqliteJob(sqliteDatabase)}}, DataJobsFile)
+    seen: List[RunResult] = []
+
+    def report(result: RunResult) -> None:
+        seen.append(result)
+        raise RuntimeError('the metrics host is down')
+
+    result = runDataJobs(jobsFile=jobsFile, databaseConfiguration=sqliteDatabase, memory=FileMemory(tmp_path / 'memory.yaml'), onCycle=report)
+
+    assert result.succeeded
+    assert [[outcome.job for outcome in cycle.outcomes] for cycle in seen] == [['copies']]

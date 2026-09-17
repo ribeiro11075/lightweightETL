@@ -93,3 +93,90 @@ def test_a_whole_database_configuration_can_be_kept_out_of_the_file(monkeypatch)
 
     assert configuration['prod'].plainPassword() == 'hunter2'
     assert configuration['prod'].port == 5432
+
+
+def test_a_file_reference_reads_the_file_without_its_trailing_newline(tmp_path):
+    """How Docker and Kubernetes mount secrets, and how the Vault agent writes them."""
+    secret = tmp_path / 'db-password'
+    secret.write_text('s3cret\n')
+
+    assert expandEnvironmentVariables({'password': '${file:' + str(secret) + '}'}) == {'password': 's3cret'}
+
+
+def test_an_unreadable_file_is_reported_with_the_missing_variables(tmp_path, monkeypatch):
+    monkeypatch.delenv('DEMO_MISSING', raising=False)
+    missing = tmp_path / 'nope'
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        expandEnvironmentVariables({'a': '${file:' + str(missing) + '}', 'b': '${DEMO_MISSING}'})
+
+    assert 'file {}'.format(missing) in str(excinfo.value)
+    assert '$DEMO_MISSING' in str(excinfo.value)
+
+
+def test_a_file_reference_can_be_escaped(tmp_path):
+    assert expandEnvironmentVariables('$${file:/etc/passwd}') == '${file:/etc/passwd}'
+
+
+def _connection(**overrides):
+    from lightweight_etl.configuration import DatabaseConnectionConfig
+
+    fields = dict(type='postgresql', user='u', database='d', host='h')
+    fields.update(overrides)
+    return DatabaseConnectionConfig(**fields)
+
+
+def test_a_password_command_supplies_the_password_at_connect_time(tmp_path):
+    import sys
+
+    settings = _connection(passwordCommand=[sys.executable, '-c', 'print("token-123")'])
+
+    assert settings.password is None
+    assert settings.plainPassword() == 'token-123'
+
+
+def test_a_password_command_may_be_one_string(tmp_path):
+    import shlex
+    import sys
+
+    settings = _connection(passwordCommand='{} -c "print(\'tok en\')"'.format(shlex.quote(sys.executable)))
+
+    assert settings.plainPassword() == 'tok en'
+
+
+@pytest.mark.parametrize('script,message', [
+    ('import sys; sys.stderr.write("denied"); sys.exit(3)', 'exited with status 3: denied'),
+    ('pass', 'printed nothing'),
+    ])
+def test_a_failing_password_command_raises_without_revealing_output(script, message):
+    import sys
+    from lightweight_etl.configuration import PasswordCommandError
+
+    with pytest.raises(PasswordCommandError, match=message):
+        _connection(passwordCommand=[sys.executable, '-c', script]).plainPassword()
+
+
+def test_a_missing_password_command_raises_a_retryable_error():
+    from lightweight_etl.configuration import PasswordCommandError
+
+    with pytest.raises(PasswordCommandError, match='could not run'):
+        _connection(passwordCommand=['/no/such/command']).plainPassword()
+
+
+def test_password_and_password_command_are_exclusive():
+    with pytest.raises(ValueError, match='not both'):
+        _connection(password='p', passwordCommand=['true'])
+
+
+def test_a_network_database_needs_a_password_or_a_command():
+    with pytest.raises(ValueError, match='a password or passwordCommand'):
+        _connection()
+
+
+def test_checking_options_never_runs_the_password_command():
+    from lightweight_etl.database import DIALECTS
+    from lightweight_etl.configuration import DatabaseType
+
+    settings = _connection(passwordCommand=['/no/such/command'], options={'sslmode': 'require'})
+
+    assert DIALECTS[DatabaseType.POSTGRESQL].connectArguments(settings, resolvePassword=False)['sslmode'] == 'require'

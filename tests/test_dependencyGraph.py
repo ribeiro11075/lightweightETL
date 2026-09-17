@@ -195,3 +195,22 @@ def test_the_dependency_is_enforced_again_once_both_are_due():
     assert set(graph.activeJobs) == {'slowPredecessor', 'fastDependent'}
     assert graph.activePredecessors['fastDependent'] == ['slowPredecessor']
     assert graph.takeReady() == ['slowPredecessor']
+
+
+def test_take_ready_starts_no_more_than_the_limit():
+    graph = DependencyGraph(jobs={'a': _job(), 'b': _job(), 'c': _job()})
+
+    assert graph.takeReady(limit=2) == ['a', 'b']
+    assert graph.takeReady(limit=0) == []
+
+    graph.finish(JobOutcome(job='a', status=JobStatus.COMPLETED))
+    assert graph.takeReady(limit=1) == ['c']
+
+
+def test_skips_cascade_even_when_no_job_may_start():
+    graph = DependencyGraph(jobs={'a': _job(), 'b': _job(predecessors=['a']), 'c': _job(predecessors=['b'])})
+    graph.takeReady()
+    graph.finish(JobOutcome(job='a', status=JobStatus.FAILED))
+
+    assert graph.takeReady(limit=0) == []
+    assert graph.finished

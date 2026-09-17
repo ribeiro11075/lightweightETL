@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
 import importlib
+import inspect
+import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 Transformer = Callable[[Any], Any]
@@ -35,18 +38,79 @@ class TransformError(Exception):
     """
 
 
+# function_name, optionally followed by an argument list: truncate(50)
+_CALL = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\((.*)\))?\s*$', re.DOTALL)
+
+
+def _parseArguments(reference: str, text: str) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
+    """The literal arguments in `truncate(50, suffix='...')`.
+
+    Parsed as Python syntax, but only literals are accepted -- numbers,
+    strings, True, False, None, and tuples or lists of those -- so a
+    configuration file can't run code this way.
+    """
+
+    try:
+        call = ast.parse('f({})'.format(text), mode='eval').body
+        if not isinstance(call, ast.Call):
+            raise ValueError('not a single argument list')
+        arguments = tuple(ast.literal_eval(node) for node in call.args)
+        keywords = {keyword.arg: ast.literal_eval(keyword.value) for keyword in call.keywords if keyword.arg is not None}
+        if len(keywords) != len(call.keywords) or any(isinstance(node, ast.Starred) for node in call.args):
+            raise ValueError('unpacking is not allowed')
+    except (SyntaxError, ValueError) as error:
+        raise TransformResolutionError(f'transformer reference "{reference}": arguments must be literal values ({error})') from None
+
+    return arguments, keywords
+
+
+def _checkSignature(function: Transformer, reference: str, arguments: Tuple[Any, ...], keywords: Dict[str, Any]) -> None:
+    """Fails now, so `validate` catches it, if the column value plus these
+    arguments can't be passed -- rather than on the first row of a run.
+    """
+
+    try:
+        signature = inspect.signature(function)
+    except (TypeError, ValueError):
+        return  # a builtin without an inspectable signature; the call itself will say
+
+    try:
+        signature.bind(None, *arguments, **keywords)
+    except TypeError as error:
+        raise TransformResolutionError(f'transformer reference "{reference}": {error}') from None
+
+
+def _withArguments(function: Transformer, reference: str, arguments: Tuple[Any, ...], keywords: Dict[str, Any]) -> Transformer:
+    """`function` with its extra arguments fixed, still taking one value."""
+
+    def transformer(value: Any) -> Any:
+        return function(value, *arguments, **keywords)
+
+    transformer.__name__ = reference.partition(':')[2].strip()
+
+    return transformer
+
+
 def resolveTransformer(reference: str) -> Transformer:
     """Import a Transformer from a "module.path:function_name" reference.
 
     Lets a job configuration name a function defined anywhere importable --
     lightweight_etl/builtinTransforms.py, or any module of the user's own -- without the caller
     having to pre-register it in a lookup table.
+
+    Arguments after the column value go in parentheses, as literals:
+    "lightweight_etl.builtinTransforms:truncate(50)" calls truncate(value, 50).
     """
 
-    modulePath, separator, attributeName = reference.partition(':')
+    modulePath, separator, call = reference.partition(':')
 
     if not separator:
         raise TransformResolutionError(f'transformer reference "{reference}" must be in the form "module.path:function_name"')
+
+    match = _CALL.match(call)
+    if match is None:
+        raise TransformResolutionError(f'transformer reference "{reference}": "{call}" is not a function name, with or without (arguments)')
+    attributeName, argumentText = match.group(1), match.group(2)
 
     try:
         module = importlib.import_module(modulePath)
@@ -60,7 +124,13 @@ def resolveTransformer(reference: str) -> Transformer:
     if not callable(transformer):
         raise TransformResolutionError(f'transformer reference "{reference}": "{attributeName}" is not callable')
 
-    return transformer
+    arguments, keywords = _parseArguments(reference, argumentText) if argumentText is not None else ((), {})
+    _checkSignature(transformer, reference, arguments, keywords)
+
+    if argumentText is None:
+        return transformer
+
+    return _withArguments(transformer, reference, arguments, keywords)
 
 
 class Transform:

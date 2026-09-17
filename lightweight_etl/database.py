@@ -205,6 +205,19 @@ class Database:
         return self.dialect.columnDefinitions(self.cursor, table)
 
 
+    def isEncrypted(self) -> Optional[bool]:
+        """Whether the server reports this connection as encrypted; None if it
+        can't say, including when this login isn't allowed to ask.
+        """
+
+        try:
+            return self.dialect.isEncrypted(self.cursor)
+        except Exception:
+            # A failed statement aborts PostgreSQL's transaction until rolled back.
+            self.connection.rollback()
+            return None
+
+
     def tableExists(self, table: str) -> bool:
 
         return self.dialect.tableExists(self.cursor, table)
@@ -272,40 +285,60 @@ class Database:
         return allColumns, primaryColumns, nonPrimaryColumns
 
 
-    def _chunkInsert(self, data: List[Tuple[Any, ...]], chunkSize: int, query: str) -> None:
-        """Commits once per chunk, so a chunkSize-sized batch is the unit of work
-        that survives a mid-job failure.
-
-        range() bounds the walk at len(data) rather than testing an index inside
-        the loop -- the previous `index > numberRecords` test let one extra,
-        always-empty slice through whenever len(data) was an exact multiple of
-        chunkSize (100 rows at chunkSize 100 issued two executemany calls, the
-        second with []), which some drivers reject outright. An empty `data` is
-        now an empty range, so it issues no statement at all.
+    @staticmethod
+    def _batches(data: List[Tuple[Any, ...]], chunkSize: int) -> Iterator[List[Tuple[Any, ...]]]:
+        """chunkSize-sized slices, and none at all for empty data -- some
+        drivers reject an executemany with no rows.
         """
 
         for index in range(0, len(data), chunkSize):
-            self.cursor.executemany(query, data[index:index + chunkSize])
-            self.connection.commit()
+            yield data[index:index + chunkSize]
 
 
     def insert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100, columns: Optional[List[str]] = None) -> None:
         """columns defaults to introspecting the table (its full column list, in
         the table's own order); pass an explicit list to insert into a specific
         subset/order instead -- data's tuples must be in that same order.
+
+        Each batch goes through the dialect's bulk path where it has one
+        (PostgreSQL's COPY), and through executemany otherwise. A batch is
+        committed on its own, so it is the unit of work that survives a
+        mid-job failure.
         """
 
         resolvedColumns = columns if columns is not None else self.getAllColumnNames(table=table)
-        columnVariables = self.dialect.placeholders(len(resolvedColumns))
-        query = 'INSERT INTO {} ({}) VALUES ({})'.format(table, ', '.join(resolvedColumns), ', '.join(columnVariables))
-        self._chunkInsert(data=data, chunkSize=chunkSize, query=query)
+        query = 'INSERT INTO {} ({}) VALUES ({})'.format(table, ', '.join(resolvedColumns), ', '.join(self.dialect.placeholders(len(resolvedColumns))))
+
+        for batch in self._batches(data, chunkSize):
+            if not self.dialect.bulkInsert(self.cursor, table, resolvedColumns, batch):
+                self.cursor.executemany(query, batch)
+            self.connection.commit()
 
 
     def upsert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100, columns: Optional[List[str]] = None) -> None:
+        """Like insert(), with the bulk path loading a temporary table that is
+        then merged in one statement.
+
+        One statement can't update the same row twice, where executemany just
+        applies each row in turn -- so a batch's rows are first collapsed to the
+        last one per key, which is what applying them in turn leaves behind.
+        """
 
         allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=table, columns=columns)
         query = self.dialect.upsertQuery(table=table, allColumns=allColumns, primaryKeyColumns=primaryKeyColumns, nonPrimaryKeyColumns=nonPrimaryKeyColumns)
-        self._chunkInsert(data=data, chunkSize=chunkSize, query=query)
+
+        normalizedColumns = [column.upper() for column in allColumns]
+        keyIndexes = [normalizedColumns.index(column.upper()) for column in primaryKeyColumns if column.upper() in normalizedColumns]
+        canCollapse = len(keyIndexes) == len(primaryKeyColumns)
+
+        for batch in self._batches(data, chunkSize):
+            loaded = False
+            if canCollapse:
+                lastPerKey = list({tuple(row[index] for index in keyIndexes): row for row in batch}.values())
+                loaded = self.dialect.bulkUpsert(self.cursor, table, allColumns, primaryKeyColumns, nonPrimaryKeyColumns, lastPerKey)
+            if not loaded:
+                self.cursor.executemany(query, batch)
+            self.connection.commit()
 
 
     def upsertFromStage(self, targetTable: str, stageTable: str, columns: Optional[List[str]] = None) -> None:

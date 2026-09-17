@@ -260,3 +260,39 @@ def test_placeholder_spacing_is_forgiving(placeholder):
     raw = _watermarkJob(sourceQuery='select id, updated_at from orders where updated_at > {}'.format(placeholder))
 
     Configuration.validateJobConfiguration(raw, DataJobsFile)
+
+
+@pytest.mark.parametrize('databaseType', ['postgresql', 'oracle'])
+def test_current_schema_is_accepted_where_a_session_can_switch_schema(databaseType):
+    settings = DatabaseConnectionConfig(type=databaseType, user='u', password='p', database='d', host='h', serviceName='s',
+                                        currentSchema='reporting')
+
+    assert settings.currentSchema == 'reporting'
+
+
+@pytest.mark.parametrize('databaseType', ['mysql', 'mariadb', 'mssql', 'sqlite'])
+def test_current_schema_is_refused_where_it_cannot_be_set(databaseType):
+    with pytest.raises(ConfigurationError, match='currentSchema is supported for oracle and postgresql only'):
+        Configuration.validateDatabaseConfiguration({'db': {'type': databaseType, 'user': 'u', 'password': 'p', 'database': 'd', 'host': 'h',
+                                                            'currentSchema': 'reporting'}})
+
+
+def test_current_schema_must_be_a_plain_identifier():
+    """It is written into a session statement, so nothing but a name gets through."""
+    with pytest.raises(ConfigurationError, match='plain identifier'):
+        Configuration.validateDatabaseConfiguration({'db': {'type': 'postgresql', 'user': 'u', 'password': 'p', 'database': 'd', 'host': 'h',
+                                                            'currentSchema': 'x; drop table t'}})
+
+
+def test_connection_options_are_kept_out_of_the_models_repr():
+    settings = DatabaseConnectionConfig(type='oracle', user='u', password='p', database='d', host='h', serviceName='s',
+                                        options={'wallet_password': 'hunter2', 'protocol': 'tcps', 'ignored': None})
+
+    assert settings.options == {'wallet_password': 'hunter2', 'protocol': 'tcps'}
+    assert 'hunter2' not in repr(settings)
+
+
+@pytest.mark.parametrize('timeout', [0, -5])
+def test_timeout_seconds_must_be_positive(timeout):
+    with pytest.raises(ConfigurationError, match='timeoutSeconds'):
+        Configuration.validateJobConfiguration({'workers': 1, 'jobs': {'j': _job(timeoutSeconds=timeout)}}, DataJobsFile)

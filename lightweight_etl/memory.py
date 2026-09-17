@@ -8,7 +8,7 @@ import sys
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, Iterator, Tuple, Union
+from typing import Any, Dict, Iterator, Optional, Tuple, Union
 
 import yaml
 
@@ -39,7 +39,7 @@ else:
 
 
 @contextlib.contextmanager
-def _locked(path: Path, blocking: bool = True) -> Iterator[None]:
+def exclusiveLock(path: Path, blocking: bool = True) -> Iterator[None]:
     """Holds an exclusive lock on `path`, creating it if needed. Raises
     OSError at once if `blocking` is False and someone else holds it.
     """
@@ -68,7 +68,7 @@ def exclusiveRun(lockFile: Union[str, Path]) -> Iterator[None]:
     """
 
     try:
-        with _locked(Path(lockFile), blocking=False):
+        with exclusiveLock(Path(lockFile), blocking=False):
             yield
     except OSError as error:
         raise RunInProgressError('another run is already using {} -- not starting a second one alongside it'.format(lockFile)) from error
@@ -118,6 +118,17 @@ class MemoryBackend(ABC):
             '{} does not implement recordWatermark, so it cannot persist a watermark for "{}" -- '
             'implement readWatermarks/recordWatermark on it, or use FileMemory'.format(type(self).__name__, job))
 
+    def readKeyFingerprints(self) -> Dict[str, str]:
+        """The masking-key fingerprint each masked job last completed under.
+
+        Not abstract: a backend without it simply never detects a changed key.
+        """
+
+        return {}
+
+    def recordKeyFingerprint(self, job: str, fingerprint: Optional[str]) -> None:
+        """Records the fingerprint `job` completed under; None forgets it."""
+
 
 def _yamlSafe(value: Any) -> Any:
     """Coerce a driver's value into something yaml.dump/FullLoader round-trips.
@@ -134,6 +145,9 @@ def _yamlSafe(value: Any) -> Any:
         return int(value) if value == value.to_integral_value() else float(value)
 
     return value
+
+
+SECTIONS = ('lastRun', 'watermarks', 'maskingKeys')
 
 
 class FileMemory(MemoryBackend):
@@ -156,6 +170,8 @@ class FileMemory(MemoryBackend):
           loadOrders: 1726400000.0
         watermarks:
           loadOrders: 2026-09-15 10:00:00
+        maskingKeys:
+          maskCustomers: d5930cf83dea
 
     A file written before watermarks existed is a bare job -> timestamp mapping
     with neither key, and is read as lastRun so an existing deployment's refresh
@@ -181,8 +197,8 @@ class FileMemory(MemoryBackend):
         if document and 'lastRun' not in document and 'watermarks' not in document:
             return {'lastRun': document, 'watermarks': {}}
 
-        document.setdefault('lastRun', {})
-        document.setdefault('watermarks', {})
+        for section in SECTIONS:
+            document.setdefault(section, {})
 
         return document
 
@@ -194,7 +210,7 @@ class FileMemory(MemoryBackend):
         if not self.memoryFile.exists():
             return {}
 
-        with _locked(self._lockFile):
+        with exclusiveLock(self._lockFile):
             return dict(self._load()[section])
 
 
@@ -202,9 +218,12 @@ class FileMemory(MemoryBackend):
 
         temporary = self.memoryFile.with_name(self.memoryFile.name + '.tmp')
 
-        with _locked(self._lockFile):
+        with exclusiveLock(self._lockFile):
             document = self._load()
-            document[section][job] = value
+            if value is None:
+                document[section].pop(job, None)
+            else:
+                document[section][job] = value
 
             with open(temporary, 'w') as file:
                 yaml.dump(document, file)
@@ -233,12 +252,26 @@ class FileMemory(MemoryBackend):
         self._write('watermarks', job, _yamlSafe(value))
 
 
+    def readKeyFingerprints(self) -> Dict[str, str]:
+
+        return self._read('maskingKeys')
+
+
+    def recordKeyFingerprint(self, job: str, fingerprint: Optional[str]) -> None:
+
+        self._write('maskingKeys', job, fingerprint)
+
+
 DATABASE_MEMORY_SCHEMA = """CREATE TABLE lightweight_etl_memory (
     job VARCHAR(255) PRIMARY KEY,
     last_run DOUBLE PRECISION,
     watermark_value VARCHAR(255),
     watermark_type VARCHAR(32)
     )"""
+
+
+KEY_FINGERPRINT_SUFFIX = '#maskingKey'
+KEY_FINGERPRINT_TYPE = 'maskingKey'
 
 
 class DatabaseMemory(MemoryBackend):
@@ -331,7 +364,27 @@ class DatabaseMemory(MemoryBackend):
         with Database(connectionSettings=self.connectionSettings) as database:
             rows = database.query('SELECT job, watermark_value, watermark_type FROM {}'.format(self.table))
 
-            return {job: self._decodeWatermark(value, typeTag) for job, value, typeTag in rows if value is not None}
+            return {job: self._decodeWatermark(value, typeTag) for job, value, typeTag in rows
+                    if value is not None and typeTag != KEY_FINGERPRINT_TYPE}
+
+
+    def readKeyFingerprints(self) -> Dict[str, str]:
+        """Kept in rows of their own, named `<job>#maskingKey`, so the table
+        needs no new column: their type tag keeps them out of readWatermarks,
+        and their NULL last_run out of read().
+        """
+
+        with Database(connectionSettings=self.connectionSettings) as database:
+            rows = database.query("SELECT job, watermark_value FROM {} WHERE watermark_type = '{}'".format(self.table, KEY_FINGERPRINT_TYPE))
+
+            return {job[:-len(KEY_FINGERPRINT_SUFFIX)]: value for job, value in rows if job.endswith(KEY_FINGERPRINT_SUFFIX) and value}
+
+
+    def recordKeyFingerprint(self, job: str, fingerprint: Optional[str]) -> None:
+
+        with Database(connectionSettings=self.connectionSettings) as database:
+            database.upsert(table=self.table, data=[(job + KEY_FINGERPRINT_SUFFIX, fingerprint, KEY_FINGERPRINT_TYPE)],
+                            columns=['job', 'watermark_value', 'watermark_type'])
 
 
     def recordWatermark(self, job: str, value: Any) -> None:

@@ -27,6 +27,8 @@ Streaming is per-driver, because `fetchmany()` bounds nothing if the driver has 
 | oracle | `arraysize` tuned to the chunk |
 | mssql, sqlite | plain — both already stream |
 
+Loads are written a chunk at a time too, each chunk in its own transaction. The MySQL, MariaDB and Oracle drivers already send a chunk in a few round trips; psycopg2 and pymssql send one statement per row, so those two get a bulk path. **PostgreSQL targets use `COPY`**: one round trip per chunk, which measured about 100 times faster on 50,000 rows. **SQL Server targets use multi-row statements**, a thousand rows each (the most one `VALUES` list may hold): about 6 times faster for inserts and 28 for upserts in testing. An upsert copies into a temporary table and merges it with one `INSERT ... ON CONFLICT`; since one statement can't update a row twice, rows repeating a key within a chunk are first reduced to the last of them, which is what applying them in turn would leave. A chunk holding a value `COPY` can't spell safely (an array, a JSON object, an interval) is sent row by row as before. SQL Server's `MERGE` has the same one-update-per-row rule, and gets the same reduction.
+
 **One consequence to know before sizing a job:** extract and load interleave, so a source that fails part-way leaves the rows it already yielded written.
 
 - **Invisible** for `swap`, and for `upsert` with a `targetTableStage` — both write to the stage table, and `targetTableFinal` is only touched in the last step.
@@ -134,7 +136,7 @@ The trade-off is freshness, not correctness: between windows the dependent reads
 
 `--forever` keeps the process resident, for freshness below cron's one-minute floor or where there's no scheduler.
 
-**Stopping.** On `SIGINT` or `SIGTERM`, a run starts no new jobs, lets the running ones finish, reports the rest as skipped, and exits with status 130. Killing workers mid-job instead would leave a streaming cursor or a half-loaded table for the database to clean up. A container's grace period has to cover the longest job for this to finish.
+**Stopping.** On `SIGINT` or `SIGTERM`, a run starts no new jobs, lets the running ones finish, reports the rest as skipped, and exits with status 130. Killing jobs mid-load instead would leave a streaming cursor or a half-loaded table for the database to clean up. A container's grace period has to cover the longest job for this to finish; give long jobs a `timeoutSeconds` shorter than that grace period, so a hung one can't hold the shutdown.
 
 **Overlapping runs.** `run` holds a lock (`memory.yaml.run.lock`, beside the memory file) for as long as it runs. A second invocation sharing that memory file exits with status 1 instead of running the same jobs at the same time, which a cron interval shorter than a slow run would otherwise cause. The operating system releases the lock if the process dies.
 
@@ -143,13 +145,16 @@ A skipped job exits non-zero just as a failed one does: it didn't run, so its da
 
 ## Workers
 
-Jobs run in a pool of `workers` processes, each job as soon as its predecessors have completed.
+Each job runs in a process of its own, as soon as its predecessors have completed and one of the `workers` slots is free. Starting a process costs a fraction of a second, which is noise next to a database load, and it lets each job be ended on its own:
 
-**A worker that dies** — killed for memory, crashed in a driver — fails the job it was running, and any others running in the same pool at that moment. Their dependents are skipped, jobs that start later get a new pool, and the run still ends. It no longer waits forever for a job that will never report back.
+- **A job that dies** — killed for memory, crashed in a driver — fails, and only that job. Its dependents are skipped, and the run still ends; it doesn't wait for an outcome that will never come.
+- **A job past its `timeoutSeconds`** is sent `SIGTERM`, then `SIGKILL` five seconds later if it hasn't exited. It fails with a `Timeout` error and its dependents are skipped. Its database connections close with it, so each server rolls back whatever the job hadn't committed; what it had committed stays, as for any failure part-way (see [how a data job moves rows](#how-a-data-job-moves-rows)). The timeout covers the whole job, retries included.
 
-**Logs from workers** are sent back to the main process and written by its handlers, so they follow `--log`, `--log-format` and `--quiet` like everything else.
+Processes are started with Python's `spawn` method on every platform, so a program embedding the library needs an `if __name__ == '__main__':` guard; see [library.md](library.md#running-jobs).
 
-**Ctrl-C** reaches every process in the terminal's group; workers ignore it and leave the decision to the main process, as described under stopping above.
+**Logs from jobs** are sent back to the main process and written by its handlers, so they follow `--log`, `--log-format` and `--quiet` like everything else.
+
+**Ctrl-C** reaches every process in the terminal's group; jobs ignore it and leave the decision to the main process, as described under stopping above.
 
 
 ## Retries
@@ -165,7 +170,7 @@ Masked data jobs retry like any other data job. The watermark is read again on e
 
 ## Structured logs
 
-`--log-format json` writes one object per line, for a log collector:
+`--log-format json` writes one object per line, for a log collector (for history, metrics and alerts, see [operations.md](operations.md)):
 
 ```json
 {"timestamp": "2026-09-16 01:00:12.514", "level": "INFO", "message": "loadOrders: completed in 12.5s, 4200 row(s)",
@@ -188,7 +193,7 @@ Every mask is derived from `HMAC(key, domain, value)`, keyed on the value itself
 
 A policy must list **every column the query returns**, or the job fails before writing anything. A new production column should stop the job, not flow into a non-production copy unmasked.
 
-[masking.md](masking.md) has the strategies, the key, the manifest, `discover`, `subset`, `schema`, `clear`, and how to migrate from the removed `scramble` command.
+[masking.md](masking.md) has the strategies, the key, the manifest, `audit`, `discover`, `subset`, `schema`, `clear`, and how to migrate from the removed `scramble` command.
 
 
 ## Moving values between drivers

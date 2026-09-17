@@ -7,6 +7,7 @@ Everything `lightweight-etl` does is described by YAML. This is the field refere
 - [Where configuration is found](#where-configuration-is-found)
 - [Credentials](#credentials)
 - [`database.yaml`](#databaseyaml)
+  - [Driver options and TLS](#driver-options-and-tls)
 - [`jobs.yaml` — data jobs](#jobsyaml--data-jobs)
 - [Validation](#validation)
 
@@ -31,15 +32,17 @@ Any string in any of these files may read from the environment:
 ```yaml
 password: ${PROD_DB_PASSWORD}
 port: ${PROD_DB_PORT:-5432}
+key: ${file:/run/secrets/masking-key}
 ```
 
 | Form | Behaviour |
 | --- | --- |
 | `${NAME}` | The variable's value. If it's unset, the run **stops before connecting to anything**, naming every missing variable at once. |
 | `${NAME:-default}` | The variable, or `default` if unset. Use for ports, hosts and schema names — **never for a secret**, which would just put the credential back in the file. |
-| `$${NAME}` | A literal `${NAME}`. Needed because `sourceQuery` is arbitrary SQL. PostgreSQL dollar-quoting (`$$body$$`) is never followed by a brace, so it needs no escaping. |
+| `${file:/path}` | The file's content, without a trailing newline. This is how Docker and Kubernetes mount secrets, and how the Vault agent, the AWS Secrets Manager and Azure Key Vault CSI drivers, and similar tools hand them over. An unreadable file stops the run like an unset variable. |
+| `$${NAME}` | A literal `${NAME}` (and `$${file:...}` a literal `${file:...}`). Needed because `sourceQuery` is arbitrary SQL. PostgreSQL dollar-quoting (`$$body$$`) is never followed by a brace, so it needs no escaping. |
 
-An unset variable raises rather than expanding to an empty string: a blank password fails later with the driver's own unhelpful message, and a blank host connects somewhere unintended.
+An unset variable or unreadable file raises rather than expanding to an empty string: a blank password fails later with the driver's own unhelpful message, and a blank host connects somewhere unintended.
 
 Kept this way, `database.yaml` holds *references* to secrets rather than secrets, and is safe to commit alongside your jobs.
 
@@ -61,9 +64,70 @@ warehouse:
 | --- | --- | --- |
 | `type` | required | `oracle`, `mysql`, `postgresql`, `mssql`, `mariadb` or `sqlite` |
 | `database` | required | The database name. For `sqlite`, a file path or `:memory:`. |
-| `host`, `user`, `password` | required except for `sqlite` | SQLite is a local file with no server or authentication, so these are omitted for it. The password is held as a secret, so it never appears in a log line or a traceback. |
+| `host`, `user` | required except for `sqlite` | SQLite is a local file with no server or authentication, so these are omitted for it. |
+| `password` | required except for `sqlite`, unless `passwordCommand` is set | Held as a secret, so it never appears in a log line or a traceback. |
+| `passwordCommand` | optional | A command whose output is the password, run at every connection. For credentials that expire; see [passwords that expire](#passwords-that-expire). |
 | `port` | optional | The driver's standard port when omitted. |
 | `serviceName` / `sid` | oracle only | Exactly one is required for `type: oracle`. |
+| `currentSchema` | optional, postgresql and oracle only | The schema unqualified table names, and every key and column lookup, resolve in. PostgreSQL sets `search_path` to this schema alone; Oracle sets `CURRENT_SCHEMA`. On the other databases, qualify names as `schema.table` instead. |
+| `options` | optional | Extra keyword arguments for the driver's `connect()`, for anything the fields above don't cover. See below. |
+
+### Passwords that expire
+
+Cloud databases can take short-lived tokens instead of passwords. `passwordCommand` runs a command each time a connection opens and uses what it prints, so a token is never older than the connection that uses it:
+
+```yaml
+orders:
+  type: postgresql
+  host: orders.abc123.eu-west-1.rds.amazonaws.com
+  port: 5432
+  database: orders
+  user: etl
+  passwordCommand: [aws, rds, generate-db-auth-token, --hostname, orders.abc123.eu-west-1.rds.amazonaws.com,
+                    --port, "5432", --username, etl, --region, eu-west-1]
+  options:
+    sslmode: verify-full
+    sslrootcert: /etc/ssl/rds-global-bundle.pem
+```
+
+| Service | Command |
+| --- | --- |
+| AWS RDS / Aurora IAM | `aws rds generate-db-auth-token ...` as above. MySQL also needs `options: {auth_plugin: mysql_clear_password, ssl_ca: ...}`. |
+| Azure Database for PostgreSQL / MySQL | `[az, account, get-access-token, --resource-type, oss-rdbms, --query, accessToken, -o, tsv]` |
+| Google Cloud SQL IAM | `[gcloud, sql, generate-login-token]` |
+| Oracle with OCI IAM | Pass the token as `options: {access_token: ...}` instead. |
+| Any secret manager | Its CLI, e.g. `[vault, kv, get, -field=password, secret/etl/orders]` |
+
+A list runs as written; a single string is split the way a shell would split it, but no shell runs it. The command has 60 seconds. Its output is never logged, and a failure is retried like any other connection error. `validate` never runs it. SQL Server's Azure AD tokens need a driver that pymssql isn't, so they aren't supported.
+
+### Driver options and TLS
+
+`options` is handed to the driver as it is, so it accepts whatever that driver does: `psycopg2` (any libpq parameter), `mysql.connector`, `oracledb` and `pymssql`. An option that repeats a field above (`host`, say) is refused by `validate`; set the field instead. Values are read from the environment like any other, and are left out of logs.
+
+Encrypting the connection is the common reason to use it:
+
+| Database | TLS |
+| --- | --- |
+| postgresql | `sslmode: verify-full` and `sslrootcert: /path/ca.pem`. `require` encrypts without checking the certificate. |
+| mysql, mariadb | Encrypted by default when the server supports it. Add `ssl_ca: /path/ca.pem` and `ssl_verify_identity: true` to check the certificate; `ssl_disabled: true` turns TLS off. |
+| oracle | `protocol: tcps`, plus `wallet_location` (and `wallet_password`) or `ssl_server_cert_dn` as your server requires. |
+| mssql | Configure it in FreeTDS, not in `options`: point `FREETDSCONF` at a `freetds.conf` whose `[global]` section says `encryption = require`. pymssql's own `encryption` argument had no effect in testing with pymssql 2.4.0. |
+
+```yaml
+warehouse:
+  type: postgresql
+  database: analytics
+  host: ${WAREHOUSE_HOST}
+  user: etl
+  password: ${WAREHOUSE_PASSWORD}
+  currentSchema: reporting
+  options:
+    sslmode: verify-full
+    sslrootcert: /etc/ssl/warehouse-ca.pem
+    application_name: lightweight-etl
+```
+
+Settings describe what was asked for; the server decides what happened. `lightweight-etl run --dry-run` and `lightweight-etl audit --connect` report whether each connection is actually encrypted, as the server sees it.
 
 
 ## `jobs.yaml` — data jobs
@@ -98,6 +162,7 @@ jobs:
 | `predecessors` | optional | Jobs that must complete first. A job whose predecessor fails is **skipped**. Predecessors that form a cycle are a validation error. |
 | `retries` | optional, `0` | Extra attempts after a failure, with exponential backoff. See [retries](design.md#retries). |
 | `retryDelaySeconds` | optional, `5.0` | The first backoff delay; each subsequent one doubles. |
+| `timeoutSeconds` | optional | The most the job may take, retries included. Past it, the job's process is stopped, the job fails, and its dependents are skipped. See [workers](design.md#workers). |
 
 ### Extract
 
@@ -117,18 +182,52 @@ A job with `watermarkColumn` must also put a `{{ watermark }}` placeholder in `s
 | --- | --- | --- |
 | `sourceQueryColumnTransforms` | optional | A map of column name to a list of transformer references, applied in order. |
 
-A reference is `module.path:function_name` — any importable function taking one value and returning one. A set ships with the package:
+A reference is `module.path:function_name` — any importable function taking the column value and returning the new one. Further arguments go in parentheses after the name, as literal values (numbers, quoted strings, `true`-style `True`/`False`, `None`):
 
 ```yaml
 sourceQueryColumnTransforms:
   amount:
   - lightweight_etl.builtinTransforms:currency
-  email:
-  - lightweight_etl.builtinTransforms:strip
-  - lightweight_etl.builtinTransforms:lower
+  name:
+  - lightweight_etl.builtinTransforms:collapseWhitespace
+  - lightweight_etl.builtinTransforms:truncate(50)
+  signup_date:
+  - "lightweight_etl.builtinTransforms:parseDate('%d/%m/%Y')"
 ```
 
-`currency`, `upper`, `lower`, `strip`, `truncate`, `nullIfBlank`, `digitsOnly`, `epochSecondsToDate` (UTC), `booleanToYN`. None of them is privileged; your own module works the same way.
+Quote a reference whose arguments contain `: `, `#` or a leading quote, as YAML would otherwise read them. `validate` checks that each reference imports and that its arguments fit the function, so a missing or misspelled argument fails there rather than on the first row. Only literals are accepted, so a reference can't run code.
+
+These ship with the package, in `lightweight_etl.builtinTransforms`. Every one passes NULL through unchanged, except `defaultIfNull`, and raises on a value it can't convert rather than guessing.
+
+| Transform | Result |
+| --- | --- |
+| `upper`, `lower`, `title` | Case changed: `title` gives `Ann-Marie O'Neil`. |
+| `strip` | Leading and trailing whitespace removed. |
+| `collapseWhitespace` | Stripped, with every run of whitespace inside turned into one space. |
+| `removeAccents` | `Zoë Müller` → `Zoe Muller`, so accented and plain spellings match. Letters like `ß` and `ø` are kept. |
+| `truncate(maxLength=255)` | At most `maxLength` characters: `truncate(50)`. |
+| `padLeft(width, fill='0')` | Filled on the left to `width` characters: `padLeft(5)` turns `42` into `00042`. |
+| `replace(old, new='')` | Every `old` replaced: `replace('-')` removes hyphens. |
+| `regexReplace(pattern, replacement='')` | A regular-expression replacement; `\1` refers to a group. |
+| `digitsOnly` | Only the digits: `+1 (555) 010-9999` → `15550109999`. |
+| `nullIfBlank` | NULL for empty or whitespace-only text. |
+| `nullIf(*values)` | NULL for any of the listed values: `nullIf('N/A', -1)`. |
+| `defaultIfNull(default)` | `default` in place of NULL: `defaultIfNull('unknown')`. |
+| `currency(symbol='$', decimals=2)` | `1234.5` → `$1,234.50`, `-5` → `-$5.00`; `currency('€')`, `currency('¥', 0)`. |
+| `roundNumber(digits=0)` | Rounded half away from zero, keeping the value's type; a negative `digits` rounds to tens, hundreds and so on. |
+| `toInteger` | An integer from text or a whole number. Blank text is NULL; `1.5` raises rather than being cut short. |
+| `toDecimal` | An exact decimal from text or a number; `0.1` stays exactly `0.1`. Blank text is NULL. |
+| `toBoolean` | True or false from `Y`/`N`, `yes`/`no`, `true`/`false`, `t`/`f`, `on`/`off`, `1`/`0`. Blank text is NULL; anything else raises. |
+| `booleanToYN` | `Y` or `N`, for single-character flag columns. |
+| `parseDate(format='%Y-%m-%d')` | A date from text, by a [strptime format](https://docs.python.org/3/library/datetime.html#format-codes). Dates pass through; datetimes lose their time. |
+| `parseDateTime(format='%Y-%m-%d %H:%M:%S')` | A datetime from text; `%z` in the format keeps the UTC offset. |
+| `formatDate(format='%Y-%m-%d')` | A date, datetime or time as text. |
+| `epochSecondsToDate` | A date from Unix seconds, in UTC whatever the server's timezone. |
+| `epochSecondsToDateTime`, `epochMillisecondsToDateTime` | A timezone-aware UTC datetime from Unix seconds or milliseconds. |
+| `toString` | Text: dates as ISO 8601, bytes decoded as UTF-8. |
+| `toJson` | A document or list as JSON text, with sorted keys; text passes through as it is. |
+
+None of them is privileged; your own module works the same way, arguments included.
 
 Transforms apply to **`sourceQuery`'s own result columns**, not the target's — they act on a value as extracted, before it's mapped to a target column. Naming a column the query doesn't return fails before anything is written. A transformer that raises on a value fails the job; the error names the column and the value's type, but never the value, since transforms see raw rows before any masking.
 

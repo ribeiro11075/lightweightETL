@@ -95,6 +95,18 @@ def _nameWords(name: str) -> Set[str]:
     return set(words) | {''.join(words)}
 
 
+def personalDataHint(column: str) -> Optional[str]:
+    """Why a column's name alone suggests personal data, or None.
+
+    The same name rules discovery proposes policies from, without the sampled
+    values -- what `audit` uses to question a column that is kept as it is.
+    """
+
+    words = _nameWords(column)
+
+    return next((reason for ruleWords, policy, reason in NAME_RULES if policy['strategy'] != 'keep' and words & set(ruleWords)), None)
+
+
 def _inferCategory(values: Sequence[Any]) -> Optional[ColumnCategory]:
     """For drivers that don't report column types -- SQLite reports none."""
 

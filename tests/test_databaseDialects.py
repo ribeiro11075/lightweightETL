@@ -335,3 +335,117 @@ def test_upsert_from_stage_of_a_key_only_table_is_valid_sql(dialect):
     assert not query.rstrip().endswith(('SET', 'UPDATE'))
     assert 'DO UPDATE SET ' not in query
     assert 'ON DUPLICATE KEY UPDATE ' not in query or query.endswith('ON DUPLICATE KEY UPDATE t.id=t.id')
+
+
+def test_copy_text_escapes_what_the_text_format_treats_specially():
+    import datetime
+    import decimal
+    from lightweight_etl.databaseDialects import _copyText
+
+    stream = _copyText([
+        (None, 'a\tb\nc\\d\re', True, False, decimal.Decimal('1.50'), float('nan'), float('-inf'), 2.5),
+        (datetime.datetime(2026, 1, 2, 3, 4, 5), datetime.date(2026, 1, 2), datetime.time(3, 4), b'\x00\xff', memoryview(b'\x01'), 7, '', '\\N'),
+        ])
+
+    assert stream.getvalue() == (
+        '\\N\ta\\tb\\nc\\\\d\\re\tt\tf\t1.50\tNaN\t-Infinity\t2.5\n'
+        '2026-01-02 03:04:05\t2026-01-02\t03:04:00\t\\\\x00ff\t\\\\x01\t7\t\t\\\\N\n')
+
+
+def test_copy_text_gives_up_on_a_value_it_cannot_spell():
+    import datetime
+    from lightweight_etl.databaseDialects import _copyText
+
+    assert _copyText([(1, [1, 2])]) is None
+    assert _copyText([(1, datetime.timedelta(days=1))]) is None
+
+
+class _ExecutingCursor:
+
+    def __init__(self):
+        self.executed = []
+
+    def execute(self, query, parameters=()):
+        self.executed.append((query, parameters))
+
+
+def test_mssql_bulk_insert_sends_a_thousand_rows_per_statement():
+    cursor = _ExecutingCursor()
+    rows = [(index, 'n{}'.format(index)) for index in range(2500)]
+
+    assert MSSQLDialect().bulkInsert(cursor, 'people', ['id', 'name'], rows) is True
+
+    assert [query.count('(%s, %s)') for query, _ in cursor.executed] == [1000, 1000, 500]
+    assert cursor.executed[0][0].startswith('INSERT INTO people (id, name) VALUES (%s, %s), (%s, %s)')
+    assert cursor.executed[2][1] == tuple(value for row in rows[2000:] for value in row)
+
+
+def test_mssql_bulk_upsert_merges_many_rows_per_statement():
+    cursor = _ExecutingCursor()
+
+    assert MSSQLDialect().bulkUpsert(cursor, 'people', ['id', 'name'], ['id'], ['name'], [(1, 'a'), (2, 'b')]) is True
+
+    ((query, parameters),) = cursor.executed
+    assert query.startswith('MERGE INTO people AS target USING (VALUES (%s, %s), (%s, %s)) AS source (id, name) ON (target.id = source.id)')
+    assert parameters == (1, 'a', 2, 'b')
+
+
+def test_only_postgresql_and_mssql_have_a_bulk_path():
+    for dialect in (MySQLDialect(), MariaDBDialect(), OracleDialect(), SQLiteDialect()):
+        assert dialect.bulkInsert(None, 't', ['id'], [(1,)]) is False
+        assert dialect.bulkUpsert(None, 't', ['id'], ['id'], [], [(1,)]) is False
+
+
+def _settings(**overrides):
+    from lightweight_etl.configuration import DatabaseConnectionConfig
+
+    fields = dict(type='postgresql', user='u', password='secret', database='d', host='h', port=5432)
+    fields.update(overrides)
+    return DatabaseConnectionConfig(**fields)
+
+
+def test_connect_arguments_add_the_options_to_the_fields():
+    arguments = PostgreSQLDialect().connectArguments(_settings(options={'sslmode': 'verify-full', 'sslrootcert': '/ca.pem'}))
+
+    assert arguments == {'user': 'u', 'password': 'secret', 'host': 'h', 'database': 'd', 'port': 5432,
+                         'sslmode': 'verify-full', 'sslrootcert': '/ca.pem'}
+
+
+def test_an_option_that_duplicates_a_field_is_refused():
+    from lightweight_etl.configuration import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match='options host, password duplicate'):
+        PostgreSQLDialect().connectArguments(_settings(options={'host': 'elsewhere', 'password': 'other', 'sslmode': 'require'}))
+
+
+def test_each_dialect_maps_the_fields_to_its_drivers_own_argument_names():
+    oracle = OracleDialect().connectArguments(_settings(type='oracle', serviceName='svc', options={'protocol': 'tcps'}))
+    mssql = MSSQLDialect().connectArguments(_settings(type='mssql', port=None))
+    sqlite = SQLiteDialect().connectArguments(_settings(type='sqlite', database='/tmp/x.db', options={'uri': True}))
+
+    assert oracle == {'user': 'u', 'password': 'secret', 'host': 'h', 'port': 5432, 'service_name': 'svc', 'sid': None, 'protocol': 'tcps'}
+    assert mssql == {'server': 'h', 'user': 'u', 'password': 'secret', 'database': 'd'}
+    assert sqlite == {'database': '/tmp/x.db', 'timeout': 30.0, 'uri': True}
+
+
+def test_sqlite_cannot_tell_whether_a_connection_is_encrypted():
+    assert SQLiteDialect().isEncrypted(None) is None
+
+
+@pytest.mark.parametrize('dialect,row,expected', [
+    (MySQLDialect(), ('Ssl_cipher', 'TLS_AES_128_GCM_SHA256'), True),
+    (MySQLDialect(), ('Ssl_cipher', ''), False),
+    (PostgreSQLDialect(), (True,), True),
+    (PostgreSQLDialect(), None, None),
+    (OracleDialect(), ('tcps',), True),
+    (OracleDialect(), ('tcp',), False),
+    (MSSQLDialect(), ('TRUE',), True),
+    (MSSQLDialect(), ('FALSE',), False),
+    ])
+def test_encryption_is_read_from_what_the_server_reports(dialect, row, expected):
+
+    class _Cursor(_RecordingCursor):
+        def fetchone(self):
+            return row
+
+    assert dialect.isEncrypted(_Cursor([])) is expected

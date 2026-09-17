@@ -36,7 +36,14 @@ def test_upsert_executes_for_every_dialect(dbType):
 
     database.upsert(table='people', data=[(1, 'a'), (2, 'b')], chunkSize=100)
 
-    assert database.cursor.executemany.call_count > 0
+    if dbType == DatabaseType.POSTGRESQL:
+        assert database.cursor.copy_expert.call_count == 1
+        database.cursor.executemany.assert_not_called()
+    elif dbType == DatabaseType.MSSQL:
+        assert 'VALUES (%s, %s), (%s, %s)' in database.cursor.execute.call_args[0][0]
+        database.cursor.executemany.assert_not_called()
+    else:
+        assert database.cursor.executemany.call_count > 0
     assert database.connection.commit.call_count > 0
 
 
@@ -83,14 +90,13 @@ def test_get_primary_column_names_executes_a_query(dbType):
     (DatabaseType.MYSQL, '%s'),
     (DatabaseType.POSTGRESQL, '%s'),
     (DatabaseType.ORACLE, ':1'),
-    (DatabaseType.MSSQL, '%s'),
     (DatabaseType.SQLITE, '?'),
     (DatabaseType.MARIADB, '%s'),
     ])
 def test_insert_uses_the_dialects_placeholder_style(dbType, expectedPlaceholder):
     database = _mockedDatabase(dbType)
 
-    database.insert(table='people', data=[(1, 'a')], chunkSize=100)
+    database.insert(table='people', data=[(1, [])], chunkSize=100)  # a list, which COPY leaves to executemany
 
     query = database.cursor.executemany.call_args[0][0]
     assert expectedPlaceholder in query
@@ -140,6 +146,34 @@ def test_swap_puts_the_temporary_table_in_the_stage_tables_schema(target, stage,
     database.swap(targetTable=target, stageTable=stage)
 
     database.dialect.swapQueries.assert_called_once_with(targetTable=target, stageTable=stage, tempTable=expectedTemp)
+
+
+def test_postgresql_inserts_through_copy_one_batch_at_a_time():
+    database = _mockedDatabase(DatabaseType.POSTGRESQL)
+
+    database.insert(table='people', data=[(1, 'a'), (2, 'b'), (3, 'c')], chunkSize=2, columns=['id', 'name'])
+
+    copies = database.cursor.copy_expert.call_args_list
+    assert [call.args[0] for call in copies] == ['COPY people (id, name) FROM STDIN'] * 2
+    assert [call.args[1].getvalue() for call in copies] == ['1\ta\n2\tb\n', '3\tc\n']
+    database.cursor.executemany.assert_not_called()
+    assert database.connection.commit.call_count == 2
+
+
+def test_a_copied_upsert_sends_only_the_last_row_of_each_key():
+    """One INSERT ... ON CONFLICT can't touch a row twice; applying the rows in
+    turn, as executemany does, leaves the last one -- so that one is sent.
+    """
+    database = _mockedDatabase(DatabaseType.POSTGRESQL)
+
+    database.upsert(table='people', data=[(1, 'a'), (2, 'b'), (1, 'c')])
+
+    (copy,) = database.cursor.copy_expert.call_args_list
+    assert copy.args[1].getvalue() == '1\tc\n2\tb\n'
+    statements = [call.args[0] for call in database.cursor.execute.call_args_list]
+    assert statements[0].startswith('CREATE TEMPORARY TABLE IF NOT EXISTS lightweight_etl_upsert_')
+    assert 'ON COMMIT DELETE ROWS AS SELECT id, name FROM people WITH NO DATA' in statements[0]
+    assert statements[1].startswith('INSERT INTO people (id, name) SELECT id, name FROM lightweight_etl_upsert_')
 
 
 def test_chunk_insert_splits_data_into_multiple_batches():

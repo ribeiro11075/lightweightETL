@@ -292,3 +292,28 @@ def test_stream_closes_its_cursor_when_abandoned_part_way_through(liveDatabase, 
     chunks.close()
 
     assert liveDatabase.query('SELECT count(*) FROM {}'.format(peopleTable))[0][0] == 250
+
+
+def test_bulk_loads_round_trip_awkward_values(liveDatabase):
+    """Multi-row statements carry values quoted into the SQL by pymssql: quotes,
+    percent signs, format markers, Unicode and bytes must all arrive intact.
+    """
+    import datetime
+    import decimal
+
+    table = 'bulk_{}'.format(uuid.uuid4().hex[:8])
+    liveDatabase.alter('CREATE TABLE {} (id INT PRIMARY KEY, t NVARCHAR(100), n DECIMAL(12,3), d DATETIME2, b VARBINARY(10))'.format(table))
+    try:
+        rows = [(1, "it's 100% ünï %s %(x)s", decimal.Decimal('1.250'), datetime.datetime(2026, 1, 2, 3, 4, 5), b'\x00\xff'),
+                (2, None, None, None, None)]
+        liveDatabase.insert(table=table, data=rows)
+        assert liveDatabase.query('SELECT * FROM {} ORDER BY id'.format(table)) == rows
+
+        liveDatabase.upsert(table=table, data=[(1, 'first', None, None, None), (3, 'new', None, None, None), (1, 'last', None, None, None)])
+        assert liveDatabase.query('SELECT id, t FROM {} ORDER BY id'.format(table)) == [(1, 'last'), (2, None), (3, 'new')]
+
+        many = [(index, 'n{}'.format(index), None, None, None) for index in range(10, 2510)]
+        liveDatabase.insert(table=table, data=many, chunkSize=2500)
+        assert liveDatabase.query('SELECT count(*) FROM {}'.format(table)) == [(2503,)]
+    finally:
+        liveDatabase.alter('DROP TABLE {}'.format(table))

@@ -88,7 +88,7 @@ def test_the_masked_job_in_the_masking_guide_is_valid_configuration(monkeypatch)
 def test_every_documented_subcommand_exists():
     """The README lists the commands; the parser is what actually runs."""
     readme = (ROOT / 'README.md').read_text()
-    documented = set(re.findall(r'^lightweight-etl (\w+)', readme, flags=re.MULTILINE))
+    documented = set(re.findall(r'^lightweight-etl ([a-z][a-z-]*)', readme, flags=re.MULTILINE))
 
     subparsers = next(action for action in _buildParser()._actions if action.dest == 'command')
     real = set(subparsers.choices)

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import datetime
+import decimal
+import hashlib
+import io
+import math
 import re
 import uuid
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
-from .configuration import DatabaseConnectionConfig
+from .configuration import ConfigurationError, DatabaseConnectionConfig
 
 
 class ForeignKey(NamedTuple):
@@ -130,6 +135,29 @@ class DatabaseDialect(ABC):
         only the one you actually connect with.
         """
 
+    @abstractmethod
+    def _ownConnectArguments(self, settings: DatabaseConnectionConfig, password: Optional[str]) -> Dict[str, Any]:
+        """The driver keyword arguments the connection fields map to."""
+
+    def connectArguments(self, settings: DatabaseConnectionConfig, resolvePassword: bool = True) -> Dict[str, Any]:
+        """Everything passed to the driver's connect(): the fields' own
+        arguments, plus settings.options.
+
+        An option that names an argument a field already sets is refused rather
+        than silently winning or losing -- set the field instead. Needs no
+        connection, so `validate` checks it offline -- with resolvePassword
+        False, so that checking never runs a passwordCommand.
+        """
+
+        own = self._ownConnectArguments(settings, settings.plainPassword() if resolvePassword else None)
+        clashes = sorted(set(own) & set(settings.options))
+
+        if clashes:
+            raise ConfigurationError('options {} duplicate what the connection fields already set for {}; use the fields instead'.format(
+                ', '.join(clashes), settings.type.value))
+
+        return {**own, **settings.options}
+
     def streamingCursor(self, connection: Any, chunkSize: int) -> Any:
         """A cursor that does *not* buffer the whole result set client-side.
 
@@ -163,6 +191,32 @@ class DatabaseDialect(ABC):
     @abstractmethod
     def placeholders(self, count: int) -> List[str]:
         """Parameter placeholder markers, one per bound value, in this dialect's paramstyle."""
+
+    def isEncrypted(self, cursor: Any) -> Optional[bool]:
+        """Whether this connection is encrypted in transit, as the server
+        reports it -- which is what an auditor wants, rather than what the
+        connection settings asked for. None where there is no network (SQLite)
+        or no way to tell.
+        """
+
+        return None
+
+    def bulkInsert(self, cursor: Any, table: str, columns: List[str], rows: Sequence[Sequence[Any]]) -> bool:
+        """Loads `rows` in fewer round trips than one statement per row, where
+        the driver doesn't already do that for executemany (psycopg2 and
+        pymssql don't). False means nothing was sent, and the caller should
+        insert them statement by statement instead.
+        """
+
+        return False
+
+    def bulkUpsert(self, cursor: Any, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str],
+                   rows: Sequence[Sequence[Any]]) -> bool:
+        """bulkInsert for an upsert: the same contract. `rows` hold no two rows
+        with the same key.
+        """
+
+        return False
 
     def truncateQuery(self, table: str) -> str:
         """Standard ANSI TRUNCATE TABLE, which every dialect but SQLite supports --
@@ -302,11 +356,17 @@ class MySQLDialect(DatabaseDialect):
     _DATE_TYPES = {'DATETIME', 'TIMESTAMP', 'DATE'}
     _TEXT_TYPES = {'TEXT', 'VARCHAR', 'CHAR'}
 
+    def _ownConnectArguments(self, settings: DatabaseConnectionConfig, password: Optional[str]) -> Dict[str, Any]:
+
+        return {'user': settings.user, 'password': password, 'host': settings.host, 'database': settings.database,
+                'port': settings.port}
+
+
     def connect(self, settings: DatabaseConnectionConfig) -> Tuple[Any, Any]:
 
         import mysql.connector
 
-        connection = mysql.connector.connect(user=settings.user, password=settings.plainPassword(), host=settings.host, database=settings.database, port=settings.port)
+        connection = mysql.connector.connect(**self.connectArguments(settings))
         cursor = connection.cursor(buffered=True)
 
         return connection, cursor
@@ -374,6 +434,14 @@ class MySQLDialect(DatabaseDialect):
         return None
 
 
+    def isEncrypted(self, cursor: Any) -> Optional[bool]:
+
+        cursor.execute("SHOW SESSION STATUS LIKE 'Ssl_cipher'")
+        row = cursor.fetchone()
+
+        return None if row is None else bool(row[1])
+
+
     def foreignKeysQuery(self) -> str:
 
         return ("SELECT table_name, column_name, referenced_table_name, referenced_column_name, constraint_name "
@@ -432,6 +500,59 @@ class MySQLDialect(DatabaseDialect):
         return ['RENAME TABLE {} TO {}, {} TO {}, {} TO {}'.format(stageTable, tempTable, targetTable, stageTable, tempTable, targetTable)]
 
 
+class _Unencodable(Exception):
+    """A value COPY's text format has no safe spelling for, here."""
+
+
+_COPY_ESCAPES = str.maketrans({'\\': '\\\\', '\t': '\\t', '\n': '\\n', '\r': '\\r'})
+
+
+def _copyField(value: Any) -> str:
+    """One value in PostgreSQL's COPY text format.
+
+    Only types whose text form PostgreSQL parses back exactly are handled;
+    anything else -- a list, a dict, a timedelta -- raises _Unencodable, and
+    the chunk goes through the driver's own adapters instead.
+    """
+
+    if value is None:
+        return '\\N'
+    if isinstance(value, bool):
+        return 't' if value else 'f'
+    if isinstance(value, (int, decimal.Decimal)):
+        return str(value)
+    if isinstance(value, float):
+        if math.isnan(value):
+            return 'NaN'
+        if math.isinf(value):
+            return 'Infinity' if value > 0 else '-Infinity'
+        return repr(value)
+    if isinstance(value, str):
+        return value.translate(_COPY_ESCAPES)
+    if isinstance(value, datetime.datetime):
+        return value.isoformat(sep=' ')
+    if isinstance(value, (datetime.date, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        # bytea's hex input, with its backslash escaped for the text format.
+        return '\\\\x' + bytes(value).hex()
+
+    raise _Unencodable(type(value).__name__)
+
+
+def _copyText(rows: Sequence[Sequence[Any]]) -> Optional[io.StringIO]:
+    """The rows as a COPY text-format stream, or None if any value can't be encoded."""
+
+    try:
+        text = ''.join('\t'.join(_copyField(value) for value in row) + '\n' for row in rows)
+    except _Unencodable:
+        return None
+
+    return io.StringIO(text)
+
+
 class PostgreSQLDialect(_OnConflictDialect):
 
     _NUMBER_OIDS = {20, 21, 23}
@@ -442,10 +563,24 @@ class PostgreSQLDialect(_OnConflictDialect):
 
         import psycopg2
 
-        connection = psycopg2.connect(user=settings.user, password=settings.plainPassword(), host=settings.host, database=settings.database, port=settings.port)
+        connection = psycopg2.connect(**self.connectArguments(settings))
         cursor = connection.cursor()
 
+        # Only the one schema: a fallback such as `public` would send an
+        # unqualified write to a table there while every catalog lookup
+        # (current_schema()) looked here. Committed, since a SET inside a
+        # transaction that is later rolled back is undone with it.
+        if settings.currentSchema:
+            cursor.execute('SET search_path TO {}'.format(settings.currentSchema))
+            connection.commit()
+
         return connection, cursor
+
+
+    def _ownConnectArguments(self, settings: DatabaseConnectionConfig, password: Optional[str]) -> Dict[str, Any]:
+
+        return {'user': settings.user, 'password': password, 'host': settings.host, 'database': settings.database,
+                'port': settings.port}
 
 
     def streamingCursor(self, connection: Any, chunkSize: int) -> Any:
@@ -472,6 +607,52 @@ class PostgreSQLDialect(_OnConflictDialect):
     def placeholders(self, count: int) -> List[str]:
 
         return count * ['%s']
+
+
+    def isEncrypted(self, cursor: Any) -> Optional[bool]:
+
+        cursor.execute('SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()')
+        row = cursor.fetchone()
+
+        return None if row is None else bool(row[0])
+
+
+    def bulkInsert(self, cursor: Any, table: str, columns: List[str], rows: Sequence[Sequence[Any]]) -> bool:
+        """COPY FROM STDIN: one round trip per chunk, where psycopg2's
+        executemany sends one statement per row.
+        """
+
+        stream = _copyText(rows)
+        if stream is None:
+            return False
+
+        cursor.copy_expert('COPY {} ({}) FROM STDIN'.format(table, ', '.join(columns)), stream)
+
+        return True
+
+
+    def bulkUpsert(self, cursor: Any, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str],
+                   rows: Sequence[Sequence[Any]]) -> bool:
+        """COPY into a temporary table shaped like the target's columns, then
+        one INSERT ... ON CONFLICT from it.
+
+        The temporary table takes only the columns' types -- no constraints,
+        defaults or identity -- and empties itself at every commit, so it is
+        created once per connection and column list, and reused by each chunk.
+        """
+
+        stream = _copyText(rows)
+        if stream is None:
+            return False
+
+        columns = ', '.join(allColumns)
+        staging = 'lightweight_etl_upsert_{}'.format(hashlib.sha1('{}|{}'.format(table, columns).encode('utf-8')).hexdigest()[:12])
+
+        cursor.execute('CREATE TEMPORARY TABLE IF NOT EXISTS {} ON COMMIT DELETE ROWS AS SELECT {} FROM {} WITH NO DATA'.format(staging, columns, table))
+        cursor.copy_expert('COPY {} ({}) FROM STDIN'.format(staging, columns), stream)
+        cursor.execute(self.upsertFromStageQuery(table, staging, allColumns, primaryKeyColumns, nonPrimaryKeyColumns))
+
+        return True
 
 
     def columnCategory(self, dataType: Any) -> Optional[ColumnCategory]:
@@ -596,13 +777,21 @@ class OracleDialect(DatabaseDialect):
 
         import oracledb
 
-        connection = oracledb.connect(user=settings.user, password=settings.plainPassword(), host=settings.host, port=settings.port,
-                                       service_name=settings.serviceName, sid=settings.sid)
+        connection = oracledb.connect(**self.connectArguments(settings))
         connection.outputtypehandler = _oracleLobsAsValues
         cursor = connection.cursor()
         cursor.execute(self.SESSION_FORMATS)
 
+        if settings.currentSchema:
+            cursor.execute('ALTER SESSION SET CURRENT_SCHEMA = {}'.format(settings.currentSchema))
+
         return connection, cursor
+
+
+    def _ownConnectArguments(self, settings: DatabaseConnectionConfig, password: Optional[str]) -> Dict[str, Any]:
+
+        return {'user': settings.user, 'password': password, 'host': settings.host, 'port': settings.port,
+                'service_name': settings.serviceName, 'sid': settings.sid}
 
 
     def streamingCursor(self, connection: Any, chunkSize: int) -> Any:
@@ -670,6 +859,14 @@ class OracleDialect(DatabaseDialect):
                 "FROM all_tab_columns WHERE owner = " + self.OWNER + " AND table_name = UPPER({}) ORDER BY column_id")
 
 
+    def isEncrypted(self, cursor: Any) -> Optional[bool]:
+
+        cursor.execute("SELECT SYS_CONTEXT('USERENV', 'NETWORK_PROTOCOL') FROM dual")
+        protocol = cursor.fetchone()[0]
+
+        return None if protocol is None else protocol.lower() == 'tcps'
+
+
     def primaryKeyQuery(self) -> str:
 
         return ("SELECT cols.column_name FROM all_constraints cons "
@@ -714,21 +911,23 @@ class MSSQLDialect(DatabaseDialect):
 
         import pymssql
 
-        # host is Optional[str] on DatabaseConnectionConfig only to accommodate
-        # sqlite; _requireNetworkCredentialsExceptSqlite already guarantees it's
-        # set for every other type, including mssql, by the time connect() runs
-        assert settings.host is not None
-
-        # pymssql's port kwarg is a str, and unlike the other three drivers it
-        # doesn't fall back to its own default ('1433') when explicitly passed
-        # None -- omit it entirely rather than pass a broken value through
-        if settings.port is not None:
-            connection = pymssql.connect(server=settings.host, port=str(settings.port), user=settings.user, password=settings.plainPassword(), database=settings.database)
-        else:
-            connection = pymssql.connect(server=settings.host, user=settings.user, password=settings.plainPassword(), database=settings.database)
+        connection = pymssql.connect(**self.connectArguments(settings))
         cursor = connection.cursor()
 
         return connection, cursor
+
+
+    def _ownConnectArguments(self, settings: DatabaseConnectionConfig, password: Optional[str]) -> Dict[str, Any]:
+        """pymssql's port is a str, and unlike the other drivers it doesn't fall
+        back to its own default ('1433') when passed None, so it's left out
+        entirely when unset.
+        """
+
+        arguments: Dict[str, Any] = {'server': settings.host, 'user': settings.user, 'password': password, 'database': settings.database}
+        if settings.port is not None:
+            arguments['port'] = str(settings.port)
+
+        return arguments
 
 
     def placeholders(self, count: int) -> List[str]:
@@ -756,6 +955,17 @@ class MSSQLDialect(DatabaseDialect):
                 "FROM information_schema.columns WHERE table_schema = COALESCE({}, SCHEMA_NAME()) AND table_name = {} ORDER BY ordinal_position")
 
 
+    def isEncrypted(self, cursor: Any) -> Optional[bool]:
+        """Needs VIEW SERVER STATE; without it the query fails, and the answer
+        is None.
+        """
+
+        cursor.execute('SELECT encrypt_option FROM sys.dm_exec_connections WHERE session_id = @@SPID')
+        row = cursor.fetchone()
+
+        return None if row is None else str(row[0]).upper() == 'TRUE'
+
+
     def primaryKeyQuery(self) -> str:
 
         return ("SELECT k.column_name FROM information_schema.table_constraints t "
@@ -769,14 +979,46 @@ class MSSQLDialect(DatabaseDialect):
         return "SELECT count(*) FROM information_schema.tables WHERE table_schema = COALESCE({}, SCHEMA_NAME()) AND table_name = {}"
 
 
-    def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
+    def upsertQuery(self, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str], rowCount: int = 1) -> str:
 
-        bindColumns = ', '.join(self.placeholders(len(allColumns)))
+        rowValues = ', '.join(['({})'.format(', '.join(self.placeholders(len(allColumns))))] * rowCount)
         columnNames = ', '.join(allColumns)
         mergeClause = _mergeUpdateInsertClause('target', 'source', allColumns, primaryKeyColumns, nonPrimaryKeyColumns)
 
         # MERGE requires a terminating semicolon in T-SQL, unlike Oracle
-        return 'MERGE INTO {} AS target USING (VALUES ({})) AS source ({}) {};'.format(table, bindColumns, columnNames, mergeClause)
+        return 'MERGE INTO {} AS target USING (VALUES {}) AS source ({}) {};'.format(table, rowValues, columnNames, mergeClause)
+
+
+    # A VALUES list in an INSERT takes at most 1000 rows. pymssql binds
+    # parameters by quoting them into the statement itself, so SQL Server's
+    # 2100-parameter limit doesn't apply.
+    VALUES_ROW_LIMIT = 1000
+
+    def bulkInsert(self, cursor: Any, table: str, columns: List[str], rows: Sequence[Sequence[Any]]) -> bool:
+        """Multi-row INSERT ... VALUES: pymssql's executemany sends a statement per row."""
+
+        rowValues = '({})'.format(', '.join(self.placeholders(len(columns))))
+
+        for offset in range(0, len(rows), self.VALUES_ROW_LIMIT):
+            batch = rows[offset:offset + self.VALUES_ROW_LIMIT]
+            cursor.execute('INSERT INTO {} ({}) VALUES {}'.format(table, ', '.join(columns), ', '.join([rowValues] * len(batch))),
+                           tuple(value for row in batch for value in row))
+
+        return True
+
+
+    def bulkUpsert(self, cursor: Any, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str],
+                   rows: Sequence[Sequence[Any]]) -> bool:
+        """One MERGE per thousand rows. `rows` hold one row per key, which MERGE
+        requires: it refuses to update a target row twice.
+        """
+
+        for offset in range(0, len(rows), self.VALUES_ROW_LIMIT):
+            batch = rows[offset:offset + self.VALUES_ROW_LIMIT]
+            cursor.execute(self.upsertQuery(table, allColumns, primaryKeyColumns, nonPrimaryKeyColumns, rowCount=len(batch)),
+                           tuple(value for row in batch for value in row))
+
+        return True
 
 
     def upsertFromStageQuery(self, targetTable: str, stageTable: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
@@ -871,11 +1113,16 @@ class SQLiteDialect(_OnConflictDialect):
         # connection -- opening a database in WAL leaves it in WAL afterwards. It
         # is a no-op for ":memory:", and requires a local filesystem: WAL uses
         # shared memory, so it does not work over NFS or SMB.
-        connection = sqlite3.connect(settings.database, timeout=30.0)
+        connection = sqlite3.connect(**self.connectArguments(settings))
         connection.execute('PRAGMA journal_mode=WAL')
         cursor = connection.cursor()
 
         return connection, cursor
+
+
+    def _ownConnectArguments(self, settings: DatabaseConnectionConfig, password: Optional[str]) -> Dict[str, Any]:
+
+        return {'database': settings.database, 'timeout': 30.0}
 
 
     def placeholders(self, count: int) -> List[str]:

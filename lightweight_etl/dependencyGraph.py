@@ -95,13 +95,13 @@ class DependencyGraph:
         return not self._notStarted and not self._running
 
 
-    def takeReady(self) -> List[str]:
-        """Jobs that may start now, marked as running.
+    def takeReady(self, limit: Optional[int] = None) -> List[str]:
+        """Jobs that may start now -- at most `limit` of them -- marked as running.
 
         A job whose predecessor failed or was skipped is recorded as SKIPPED
         instead, and counts as unsuccessful itself, so the skip cascades down
-        the graph -- in this same call, since a skip is decided without waiting
-        on anything.
+        the graph -- in this same call, and whatever the limit, since a skip is
+        decided without waiting on anything.
         """
 
         ready: List[str] = []
@@ -116,7 +116,7 @@ class DependencyGraph:
                 if unsuccessful:
                     self._skip(job, 'predecessor(s) did not complete: {}'.format(', '.join(unsuccessful)))
                     changed = True
-                elif all(predecessor in self._completed for predecessor in predecessors):
+                elif (limit is None or len(ready) < limit) and all(predecessor in self._completed for predecessor in predecessors):
                     self._notStarted.remove(job)
                     self._running.add(job)
                     ready.append(job)

@@ -510,3 +510,223 @@ def test_workers_must_be_a_positive_number(workspace, capsys):
         main(['run', '--quiet', '--workers', '0'])
 
     assert 'must be at least 1' in capsys.readouterr().err
+
+
+AUDIT_JOBS_YAML = """workers: 1
+jobs:
+  maskRows:
+    active: true
+    sourceDatabase: demo
+    sourceQuery: SELECT id, name AS email FROM src
+    targetDatabase: demo
+    targetTableFinal: tgt
+    insertStrategy: upsert
+    chunkSize: 2
+    masking:
+      key: an-audit-cli-masking-key
+      columns:
+        id: keep
+        email: keep
+"""
+
+
+def test_audit_reports_offline_and_passes_without_errors(workspace, capsys, monkeypatch):
+    def explode(*args, **kwargs):
+        raise AssertionError('audit without --connect must not connect')
+
+    monkeypatch.setattr('lightweight_etl.cli.Database', explode)
+    (workspace / 'configuration' / 'jobs.yaml').write_text(AUDIT_JOBS_YAML)
+
+    assert main(['audit', '--quiet']) == EXIT_SUCCESS
+
+    out = capsys.readouterr().out
+    assert 'as declared (run with --connect to resolve)' in out
+    assert 'column email is kept unmasked' in out
+
+
+def test_audit_strict_fails_on_warnings(workspace):
+    (workspace / 'configuration' / 'jobs.yaml').write_text(AUDIT_JOBS_YAML)
+
+    assert main(['audit', '--quiet', '--strict']) == EXIT_JOBS_DID_NOT_SUCCEED
+
+
+def test_audit_connect_resolves_columns_and_writes_json(workspace):
+    import json
+
+    (workspace / 'configuration' / 'jobs.yaml').write_text(AUDIT_JOBS_YAML.replace('        email: keep\n', '').replace(
+        '        id: keep\n', '        id: keep\n      defaultStrategy: "null"\n'))
+
+    assert main(['audit', '--quiet', '--connect', '--format', 'json', '--output', 'audit.json']) == EXIT_SUCCESS
+
+    report = json.loads((workspace / 'audit.json').read_text())
+    (job,) = report['jobs']
+    assert job['columnsResolved']
+    assert [(column['column'], column['source']) for column in job['columns']] == [('id', 'column'), ('email', 'defaultStrategy')]
+    assert report['connections'] == {}
+
+
+def test_audit_connect_fails_on_a_policy_the_query_outgrew(workspace, capsys):
+    (workspace / 'configuration' / 'jobs.yaml').write_text(AUDIT_JOBS_YAML.replace('        email: keep\n', ''))
+
+    assert main(['audit', '--quiet', '--connect']) == EXIT_JOBS_DID_NOT_SUCCEED
+    assert 'not in the masking policy: email' in capsys.readouterr().out
+
+
+def test_validate_refuses_an_option_that_duplicates_a_field(workspace):
+    (workspace / 'configuration' / 'database.yaml').write_text('demo:\n  type: sqlite\n  database: demo.db\n  options:\n    database: other.db\n')
+
+    assert main(['validate', '--quiet']) == EXIT_BAD_CONFIGURATION
+
+
+def _runWithManifest(workspace, monkeypatch, signingKey=None):
+    import json
+
+    (workspace / 'configuration' / 'jobs.yaml').write_text(AUDIT_JOBS_YAML)
+    if signingKey:
+        monkeypatch.setenv('LIGHTWEIGHT_ETL_MANIFEST_KEY', signingKey)
+    else:
+        monkeypatch.delenv('LIGHTWEIGHT_ETL_MANIFEST_KEY', raising=False)
+
+    assert main(['run', '--quiet', '--manifest', 'manifest.json']) == EXIT_SUCCESS
+
+    return workspace / 'manifest.json', json.loads((workspace / 'manifest.json').read_text())
+
+
+def test_the_manifest_records_the_tool_and_the_jobs_file_and_is_sealed(workspace, monkeypatch, capsys):
+    import hashlib
+
+    path, manifest = _runWithManifest(workspace, monkeypatch)
+
+    assert manifest['tool']['name'] == 'lightweight-etl'
+    assert manifest['configuration']['sha256'] == hashlib.sha256((workspace / 'configuration' / 'jobs.yaml').read_bytes()).hexdigest()
+    assert set(manifest['integrity']) == {'algorithm', 'digest'}
+
+    assert main(['verify-manifest', str(path), '--quiet']) == EXIT_SUCCESS
+    assert 'not signed' in capsys.readouterr().out
+
+
+def test_verify_manifest_catches_an_edit(workspace, monkeypatch, caplog):
+    import json
+
+    path, manifest = _runWithManifest(workspace, monkeypatch)
+    manifest['jobs'][0]['rowCount'] = 999
+    path.write_text(json.dumps(manifest))
+
+    assert main(['verify-manifest', str(path), '--quiet']) == EXIT_JOBS_DID_NOT_SUCCEED
+    assert 'changed after it was written' in caplog.text
+
+
+def test_a_signed_manifest_needs_its_key_to_verify(workspace, monkeypatch, capsys, caplog):
+    path, manifest = _runWithManifest(workspace, monkeypatch, signingKey='a-cli-manifest-signing-key')
+    assert manifest['integrity']['signatureAlgorithm'] == 'hmac-sha256'
+
+    assert main(['verify-manifest', str(path), '--quiet']) == EXIT_SUCCESS
+    assert 'intact, and signed with key' in capsys.readouterr().out
+
+    monkeypatch.setenv('LIGHTWEIGHT_ETL_MANIFEST_KEY', 'some-other-signing-key')
+    assert main(['verify-manifest', str(path), '--quiet']) == EXIT_JOBS_DID_NOT_SUCCEED
+    assert 'signature is not valid' in caplog.text
+
+    monkeypatch.delenv('LIGHTWEIGHT_ETL_MANIFEST_KEY')
+    assert main(['verify-manifest', str(path), '--quiet']) == EXIT_BAD_CONFIGURATION
+
+
+def test_run_records_history_and_metrics_and_history_shows_them(workspace, capsys):
+    import json
+
+    assert main(['run', '--quiet', '--history', 'state/history.jsonl', '--metrics', 'state/etl.prom']) == EXIT_SUCCESS
+    assert main(['run', '--quiet', '--force', '--job', 'loadRows', '--history', 'state/history.jsonl']) == EXIT_SUCCESS
+    capsys.readouterr()
+
+    assert 'lightweight_etl_job_last_run_rows{job="loadRows"} 5.0' in (workspace / 'state' / 'etl.prom').read_text()
+
+    assert main(['history', '--quiet', '--history', 'state/history.jsonl']) == EXIT_SUCCESS
+    rows = capsys.readouterr().out.splitlines()
+    assert rows[0].split() == ['FINISHED', 'JOB', 'STATUS', 'ROWS', 'SECONDS', 'ERROR']
+    assert [row.split()[2] for row in rows[1:]] == ['loadRows', 'dependent', 'loadRows']
+
+    assert main(['history', '--quiet', '--history', 'state/history.jsonl', '--job', 'dependent', '--format', 'json']) == EXIT_SUCCESS
+    assert [record['job'] for record in json.loads(capsys.readouterr().out)] == ['dependent']
+
+
+def test_history_needs_to_be_told_where_to_read(workspace):
+    assert main(['history', '--quiet']) == EXIT_BAD_CONFIGURATION
+
+
+def test_a_failed_run_posts_a_notification(workspace, monkeypatch):
+    import http.server
+    import json
+    import threading
+
+    received = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, *arguments):
+            pass
+
+    server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv('LIGHTWEIGHT_ETL_NOTIFY_URL', 'http://127.0.0.1:{}/hook'.format(server.server_port))
+
+    try:
+        assert main(['run', '--quiet']) == EXIT_SUCCESS
+        (workspace / 'configuration' / 'jobs.yaml').write_text(JOBS_YAML.replace('FROM src', 'FROM missing_table', 1))
+        assert main(['run', '--quiet', '--force']) == EXIT_JOBS_DID_NOT_SUCCEED
+    finally:
+        server.shutdown()
+
+    assert [payload['status'] for payload in received] == ['failed']
+    assert received[0]['summary'] == {'completed': 0, 'failed': 1, 'skipped': 1, 'rows': 0}
+
+
+def test_reporting_failures_do_not_fail_the_run(workspace, caplog):
+    assert main(['run', '--quiet', '--notify-url', 'http://127.0.0.1:9/unreachable', '--notify-on', 'always']) == EXIT_SUCCESS
+    assert 'Could not send the notification' in caplog.text
+
+
+def test_run_memory_can_live_in_a_database(workspace):
+    import sqlite3
+
+    from lightweight_etl.memory import DATABASE_MEMORY_SCHEMA
+
+    connection = sqlite3.connect(str(workspace / 'demo.db'))
+    connection.execute(DATABASE_MEMORY_SCHEMA)
+    connection.commit()
+    connection.close()
+
+    assert main(['run', '--quiet', '--memory-database', 'demo']) == EXIT_SUCCESS
+
+    connection = sqlite3.connect(str(workspace / 'demo.db'))
+    assert {row[0] for row in connection.execute('SELECT job FROM lightweight_etl_memory')} == {'loadRows', 'dependent'}
+    connection.close()
+    assert not (workspace / 'configuration' / 'memory.yaml').exists()
+
+
+def test_a_rotated_masking_key_needs_clear_or_acknowledgement(workspace, monkeypatch, caplog):
+    monkeypatch.setenv('MASKING_KEY', 'the-original-masking-key')
+    (workspace / 'configuration' / 'jobs.yaml').write_text(MASKED_JOBS_YAML)
+    assert main(['run', '--quiet']) == EXIT_SUCCESS
+
+    monkeypatch.setenv('MASKING_KEY', 'the-rotated-masking-key')
+    assert main(['run', '--quiet', '--force']) == EXIT_BAD_CONFIGURATION
+    assert 'masking key changed' in caplog.text
+
+    assert main(['run', '--quiet', '--force', '--accept-key-change']) == EXIT_SUCCESS
+
+    monkeypatch.setenv('MASKING_KEY', 'a-third-masking-key-value')
+    assert main(['clear', '--quiet', '--yes']) == EXIT_SUCCESS
+    assert main(['run', '--quiet', '--force']) == EXIT_SUCCESS
+
+
+def test_validate_never_runs_a_password_command(workspace, capsys):
+    (workspace / 'configuration' / 'database.yaml').write_text(
+        'demo:\n  type: sqlite\n  database: demo.db\n'
+        'warehouse:\n  type: postgresql\n  database: w\n  host: h\n  user: u\n  passwordCommand: [/no/such/command]\n')
+
+    assert main(['validate', '--quiet']) == EXIT_SUCCESS
+    assert '2 database alias(es)' in capsys.readouterr().out

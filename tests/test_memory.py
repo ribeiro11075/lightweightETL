@@ -186,3 +186,54 @@ def test_the_database_memory_schema_uses_a_portable_float_type():
     from lightweight_etl.memory import DATABASE_MEMORY_SCHEMA
 
     assert 'DOUBLE PRECISION' in DATABASE_MEMORY_SCHEMA
+
+
+def test_file_memory_records_and_forgets_key_fingerprints(tmp_path):
+    memory = FileMemory(memoryFile=tmp_path / 'memory.yaml')
+    memory.recordRun('maskCustomers')
+
+    memory.recordKeyFingerprint('maskCustomers', 'abc123')
+    assert memory.readKeyFingerprints() == {'maskCustomers': 'abc123'}
+    assert memory.read().keys() == {'maskCustomers'}
+
+    memory.recordKeyFingerprint('maskCustomers', None)
+    assert memory.readKeyFingerprints() == {}
+
+
+def test_database_memory_keeps_key_fingerprints_out_of_watermarks_and_runs(tmp_path):
+    import sqlite3
+
+    from lightweight_etl.configuration import DatabaseConnectionConfig
+    from lightweight_etl.memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory
+
+    path = tmp_path / 'memory.db'
+    connection = sqlite3.connect(path)
+    connection.execute(DATABASE_MEMORY_SCHEMA)
+    connection.close()
+    memory = DatabaseMemory(DatabaseConnectionConfig(type='sqlite', database=str(path)))
+
+    memory.recordWatermark('maskCustomers', 7)
+    memory.recordKeyFingerprint('maskCustomers', 'abc123')
+
+    assert memory.readKeyFingerprints() == {'maskCustomers': 'abc123'}
+    assert memory.readWatermarks() == {'maskCustomers': 7}
+    assert memory.read() == {}
+
+    memory.recordKeyFingerprint('maskCustomers', None)
+    assert memory.readKeyFingerprints() == {}
+
+
+def test_a_backend_without_fingerprint_support_reports_none():
+    from lightweight_etl.memory import MemoryBackend
+
+    class _Minimal(MemoryBackend):
+        def read(self):
+            return {}
+
+        def recordRun(self, job):
+            return None
+
+    memory = _Minimal()
+    memory.recordKeyFingerprint('job', 'abc')
+
+    assert memory.readKeyFingerprints() == {}

@@ -15,6 +15,7 @@ Since masking runs inside a data job, it also gets streaming, retries, watermark
 - [The key](#the-key)
 - [Masking in place](#masking-in-place)
 - [The manifest](#the-manifest)
+- [Reviewing policies: `audit`](#reviewing-policies-audit)
 - [Proposing a policy: `discover`](#proposing-a-policy-discover)
 - [Copying a subset: `subset`](#copying-a-subset-subset)
 - [Creating and refreshing the copy](#creating-and-refreshing-the-copy)
@@ -75,7 +76,8 @@ A NULL stays NULL under every strategy except `constant` and `null`.
 | `number` | A number of the same type and precision, either within `variance` of the original (default `0.1`) or within `min`–`max`. | `min` + `max`, or `variance` (0–1); `decimals` |
 | `dateShift` | Moved by a keyed number of whole days, never zero. Times of day are kept. ISO 8601 text, which is how SQLite stores dates, is written back in the same format. | `maxDays` (default 30) |
 | `key` | A one-to-one mapping, safe for primary and foreign keys. See below. | `charset`: `alphanumeric` (default), `digits`, `hex` |
-| `fakeName`, `fakeFirstName`, `fakeLastName`, `fakeCity`, `fakeCompany`, `fakeStreetAddress` | Realistic values from bundled lists. Not unique. | `maxLength` |
+| `fpe` | Like `key`, but using NIST's FF1 format-preserving encryption, for policies that must name a standard. See below. | `charset`: `alphanumeric` (default), `digits`, `hex` |
+| `fakeName`, `fakeFirstName`, `fakeLastName`, `fakeCity`, `fakeCompany`, `fakeStreetAddress` | Realistic values from bundled lists. Not unique. | `maxLength`; `locale`, below |
 | `shuffle` | The column's values rearranged among rows in the same chunk. **Not anonymization:** every real value is still in the table, and a small chunk barely moves them. See [limits](#limits). | |
 
 A value a strategy can't handle fails the job, for example text given to `number`. The error names the column and the value's type, never the value itself.
@@ -93,6 +95,53 @@ The output has the same shape as the input:
 `charset` is set once per column rather than detected from each value, because detection could give two different shapes the same output.
 
 `number` handles ordinary numeric columns. `key` is for identifiers, whose values have to stay distinct.
+
+### `fpe`
+
+`fpe` is `key`'s alternative for when a security review asks for a published algorithm: FF1 from NIST SP 800-38G Rev. 1, with AES-256. It is checked against NIST's sample vectors, and needs the `cryptography` package (`pip install "lightweight-etl[fpe]"`; the `oracle` extra already brings it).
+
+- It keeps shapes the way `key` does: integers keep sign and digit count, text keeps its length and every character outside `charset`. With `alphanumeric`, letters and digits share one alphabet, so a letter may become a digit; `key` keeps each character's class.
+- The masking key is turned into an AES key per domain, and the domain goes into FF1's tweak.
+- **FF1 needs at least a million possible values**: six digits, five hex characters or four alphanumerics. Shorter values are masked with `key`'s permutation instead, and still never collide with longer ones, since lengths are kept. If a reviewer needs FF1 for every value, make sure the column's values are long enough.
+- It is about half as fast as `key`: roughly 20,000 values a second per worker.
+
+Only encryption is implemented. Nothing in the package can reverse a mask.
+
+### Fake data by country
+
+The `fake*` strategies draw from an international mix of names and places by default. `locale` picks one country's names, cities and address layout instead: `en_US`, `en_GB`, `de_DE`, `fr_FR`, `es_ES`, `it_IT`, `nl_NL` or `pt_BR`.
+
+```yaml
+columns:
+  full_name: { strategy: fakeName, locale: de_DE }          # Lukas Schneider
+  street:    { strategy: fakeStreetAddress, locale: fr_FR } # 12 rue des Lilas
+```
+
+Leaving `locale` out keeps the original lists, so existing masks don't change.
+
+### Your own strategies
+
+A policy can name a class of your own as `module.path:ClassName`:
+
+```python
+# acme/masks.py
+from lightweight_etl.masking import Strategy
+
+class Initials(Strategy):
+    OPTIONS = {'separator': str}                   # option name -> check that returns the value
+
+    def mask(self, value):                          # called for each non-NULL value
+        separator = self.options.get('separator', '.')
+        suffix = self.keyedHash.digest(str(value).encode()).hex()[:4]
+        return separator.join(word[0] for word in value.split()) + separator + suffix
+```
+
+```yaml
+columns:
+  full_name: { strategy: "acme.masks:Initials", separator: "-" }
+```
+
+Derive anything random from `self.keyedHash` (`digest`, `below`, `unit`, `permute`), so the mask stays keyed, consistent within its domain, and reproducible. `validate` imports the class and checks its options; the module must also be importable wherever jobs run. The manifest records the strategy by the name the policy used.
 
 
 ## Domains: keeping joins intact
@@ -143,7 +192,7 @@ The key is what stops someone who knows this scheme from hashing likely values, 
 
 - **Read it from the environment**: `key: ${MASKING_KEY}`. Never give it a `${NAME:-default}`, and never commit it.
 - It must be at least 16 characters. Use a random one: `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
-- **Rotating it changes every mask.** A copy masked under the old key won't join to one masked under the new key.
+- **Rotating it changes every mask.** A copy masked under the old key won't join to one masked under the new key. So each masked job's key fingerprint is recorded when it completes, and an **upsert** job whose key has changed since stops the run: its target still holds rows masked under the old key. Empty those targets with `lightweight-etl clear`, which also forgets the recorded fingerprints, or pass `--accept-key-change` (`acceptKeyChange=True` from Python) if you mean it. A `swap` job replaces its whole target, so it just carries on.
 - The key never appears in logs, errors or the manifest, and pydantic hides it from the configuration's repr. Runs log a **fingerprint** instead: a short, non-reversible identifier. Two runs with the same fingerprint used the same key.
 
 Whoever holds the key can confirm a guess (for example "is this row Alice?") by masking the guess and comparing, so give it the same care as production credentials.
@@ -197,7 +246,16 @@ This writes a record of what was masked, how, and under which key fingerprint. I
         {"column": "notes", "strategy": "null", "domain": null, "source": "column"}
       ]
     }
-  ]
+  ],
+  "tool": {"name": "lightweight-etl", "version": "0.1.0"},
+  "configuration": {"jobsFile": "configuration/jobs.yaml", "sha256": "9f2c…"},
+  "integrity": {
+    "algorithm": "sha256",
+    "digest": "4be1…",
+    "signatureAlgorithm": "hmac-sha256",
+    "signature": "0c7a…",
+    "signingKeyFingerprint": "71d04ab2e913"
+  }
 }
 ```
 
@@ -205,7 +263,47 @@ This writes a record of what was masked, how, and under which key fingerprint. I
 - A masked job that failed or was skipped is still listed, with its status and no columns. "This copy was not refreshed" belongs in the record too.
 - The manifest is written even when the run fails. It never contains a value or the key.
 
-From Python, `RunResult.maskingManifest(jobsFile.jobs)` returns the same dictionary.
+- `configuration` names the jobs file and its SHA-256, so a reviewer can tell which policy produced the run.
+
+From Python, `RunResult.maskingManifest(jobsFile.jobs)` returns the manifest before sealing, without `tool`, `configuration` or `integrity`; `sealManifest` adds the last.
+
+### Sealing and verifying
+
+Every manifest carries a SHA-256 digest of its own content, which shows it hasn't been edited since it was written. Anyone can recompute a digest, though, so it doesn't show who wrote it. For that, set a signing key and the manifest is also signed with HMAC-SHA256:
+
+```
+export LIGHTWEIGHT_ETL_MANIFEST_KEY=...      # at least 16 characters; not the masking key
+lightweight-etl run --manifest audit/manifest.json
+
+lightweight-etl verify-manifest audit/manifest.json
+```
+
+`verify-manifest` exits 0 for an intact manifest (saying whether it was signed), and 1 if it was altered or its signature doesn't match. A signed manifest records its key's fingerprint; verifying it without that key exits 2 rather than half-answering. `--manifest-key-variable` reads the key from another variable, on both commands.
+
+
+## Reviewing policies: `audit`
+
+```
+lightweight-etl audit                      # offline, from the configuration alone
+lightweight-etl audit --connect --strict   # also asks the databases; fails on warnings
+```
+
+`audit` lists every job, whether it masks, and what each masked column gets. It then reports what a reviewer should question — things validation allows, because they can be right:
+
+| Severity | Finding |
+| --- | --- |
+| error | A masked query returns a column the policy doesn't cover, or names one it doesn't return (`--connect`). |
+| error | A masked query couldn't be run to check (`--connect`). |
+| warning | A column is kept unmasked although its name suggests personal data (`email`, `ssn`, `phone`, ...). |
+| warning | `defaultStrategy` is `keep`, so any column added to the source later is copied unmasked. |
+| warning | A job copies from a database without masking while other jobs mask what they read from it. |
+| warning | A masked job reads over a connection that isn't encrypted, as the server reports it (`--connect`). |
+| warning | `shuffle` on an incremental job, whose small chunks leave values near their own rows. |
+| note | Columns that fall to `defaultStrategy`, by name (`--connect`). |
+
+Without `--connect`, columns are shown as declared. With it, each masked query is run for a single row, discarded unexamined, to list the columns it really returns and the policy each one gets.
+
+`audit` exits 1 on an error, and with `--strict` on a warning too, so it can gate a CI pipeline. `--format json` writes the same report for other tools, and `--output FILE` writes it to a file. `--job` narrows it.
 
 
 ## Proposing a policy: `discover`

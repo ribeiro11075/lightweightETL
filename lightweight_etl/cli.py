@@ -21,21 +21,22 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import yaml
 
 from .configuration import Configuration, ConfigurationError, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, expandEnvironmentVariables
-from .database import Database
+from .database import DIALECTS, Database
 from .dependencyGraph import DependencyGraph
 from .log import Log
-from .masking import MaskingError
-from .memory import FileMemory, RunInProgressError, exclusiveRun
+from .masking import MaskingError, keyFingerprint, sealManifest, verifyManifest
+from .memory import DatabaseMemory, FileMemory, MemoryBackend, RunInProgressError, exclusiveRun
 from .runner import RunResult, runDataJobs
 
 EXIT_SUCCESS = 0
@@ -44,6 +45,8 @@ EXIT_BAD_CONFIGURATION = 2
 EXIT_INTERRUPTED = 130
 
 CONFIG_DIRECTORY_VARIABLE = 'LIGHTWEIGHT_ETL_CONFIG'
+MANIFEST_KEY_VARIABLE = 'LIGHTWEIGHT_ETL_MANIFEST_KEY'
+NOTIFY_URL_VARIABLE = 'LIGHTWEIGHT_ETL_NOTIFY_URL'
 
 
 class UsageError(Exception):
@@ -108,6 +111,64 @@ def _resolveMemoryPath(arguments: argparse.Namespace, log: Log) -> Path:
         return legacy
 
     return path
+
+
+def _memoryBackend(arguments: argparse.Namespace, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
+                   log: Log) -> Tuple[MemoryBackend, Path]:
+    """The run memory to use, and the file a run holds as its lock.
+
+    With --memory-database the lock can only sit in the config directory, so
+    it keeps overlapping runs apart on one machine only; across machines, let
+    the scheduler do it (a CronJob's concurrencyPolicy: Forbid).
+    """
+
+    if arguments.memory_database:
+        _requireAlias(databaseConfiguration, arguments.memory_database)
+        return DatabaseMemory(connectionSettings=databaseConfiguration[arguments.memory_database]), _configDirectory(arguments) / 'memory.run.lock'
+
+    memoryPath = _resolveMemoryPath(arguments, log)
+
+    return FileMemory(memoryFile=memoryPath), memoryPath.with_name(memoryPath.name + '.run.lock')
+
+
+def _cycleReporter(arguments: argparse.Namespace, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
+                   log: Log) -> Optional[Callable[[RunResult], None]]:
+    """What `run` does as each cycle ends: history, metrics and notifications,
+    as the flags ask. None if they ask for nothing.
+    """
+
+    from .reporting import DatabaseHistory, FileHistory, RunHistory, newRunId, notify, pushMetrics, writeMetricsFile
+
+    history: Optional[RunHistory] = None
+    if arguments.history:
+        history = FileHistory(arguments.history)
+    elif arguments.history_database:
+        _requireAlias(databaseConfiguration, arguments.history_database)
+        history = DatabaseHistory(connectionSettings=databaseConfiguration[arguments.history_database])
+
+    notifyUrl = arguments.notify_url or os.environ.get(NOTIFY_URL_VARIABLE)
+
+    if not (history or arguments.metrics or arguments.metrics_push or notifyUrl):
+        return None
+
+    def attempt(what: str, step: Callable[[], Any]) -> None:
+        # Each is independent: one failing mustn't cost the others.
+        try:
+            step()
+        except Exception as error:
+            log.logging.error('Could not {}: {}: {}'.format(what, type(error).__name__, error))
+
+    def report(result: RunResult) -> None:
+        if history is not None:
+            attempt('record the run history', lambda: history.append(result, newRunId()))
+        if arguments.metrics:
+            attempt('write the metrics file', lambda: writeMetricsFile(arguments.metrics, result))
+        if arguments.metrics_push:
+            attempt('push metrics', lambda: pushMetrics(arguments.metrics_push, result))
+        if notifyUrl:
+            attempt('send the notification', lambda: notify(notifyUrl, result, always=arguments.notify_on == 'always'))
+
+    return report
 
 
 def _configureLogging(arguments: argparse.Namespace) -> Log:
@@ -214,35 +275,103 @@ def _commandRun(arguments: argparse.Namespace, log: Log) -> int:
     if arguments.dry_run:
         return _dryRunDataJobs(jobsFile, databaseConfiguration, log)
 
-    memoryPath = _resolveMemoryPath(arguments, log)
-    memoryPath.parent.mkdir(parents=True, exist_ok=True)
+    memory, lockFile = _memoryBackend(arguments, databaseConfiguration, log)
+    lockFile.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        with exclusiveRun(memoryPath.with_name(memoryPath.name + '.run.lock')):
+        with exclusiveRun(lockFile):
             result = runDataJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration, logFile=arguments.log,
-                                 memory=FileMemory(memoryFile=memoryPath), runForever=arguments.forever,
-                                 logLevel=getattr(logging, arguments.log_level.upper()), logFormat=arguments.log_format)
+                                 memory=memory, runForever=arguments.forever,
+                                 logLevel=getattr(logging, arguments.log_level.upper()), logFormat=arguments.log_format,
+                                 acceptKeyChange=arguments.accept_key_change, onCycle=_cycleReporter(arguments, databaseConfiguration, log))
     except RunInProgressError as error:
         log.logging.error(str(error))
         return EXIT_JOBS_DID_NOT_SUCCEED
 
     if arguments.manifest:
-        _writeManifest(Path(arguments.manifest), result, jobsFile, log)
+        _writeManifest(Path(arguments.manifest), result, jobsFile, arguments, log)
 
     return _reportRun(result, log)
 
 
-def _writeManifest(path: Path, result: RunResult, jobsFile: DataJobsFile, log: Log) -> None:
-    """Writes the run's masking manifest as JSON.
+def _toolVersion() -> str:
+
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version('lightweight-etl')
+    except PackageNotFoundError:
+        return 'unknown'
+
+
+def _writeManifest(path: Path, result: RunResult, jobsFile: DataJobsFile, arguments: argparse.Namespace, log: Log) -> None:
+    """Writes the run's masking manifest as JSON, sealed.
 
     Written even when a job failed -- a record that a masked copy was *not*
     refreshed is as much a part of the audit trail as one that it was.
+
+    It records the tool version and a digest of the jobs file, so a reviewer
+    can tell which policy produced it, and is sealed with a digest of its own
+    -- signed, too, when the signing key's variable is set.
     """
 
+    jobsPath, _ = _resolveConfigurationPaths(arguments)
     manifest = result.maskingManifest(jobsFile.jobs)
+    manifest.update(tool={'name': 'lightweight-etl', 'version': _toolVersion()},
+                    configuration={'jobsFile': str(jobsPath), 'sha256': hashlib.sha256(jobsPath.read_bytes()).hexdigest()})
+
+    signingKey = os.environ.get(arguments.manifest_key_variable)
+    manifest = sealManifest(manifest, signingKey=signingKey)
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, indent=2, default=str) + '\n')
-    log.logging.info('Wrote the masking manifest for {} job(s) to {}'.format(len(manifest['jobs']), path))
+    path.write_text(json.dumps(manifest, indent=2) + '\n')
+    log.logging.info('Wrote the masking manifest for {} job(s) to {}, {}'.format(
+        len(manifest['jobs']), path, 'signed' if signingKey else 'unsigned (set ${} to sign it)'.format(arguments.manifest_key_variable)))
+
+
+def _commandVerifyManifest(arguments: argparse.Namespace, log: Log) -> int:
+    """Checks a manifest's digest, and its signature if it has one.
+
+    A signed manifest can't be vouched for without its key, so asking to verify
+    one without the key is a usage error rather than a half-answer.
+    """
+
+    path = Path(arguments.manifest)
+    try:
+        manifest = json.loads(path.read_text())
+    except FileNotFoundError as error:
+        raise UsageError('no such file: {}'.format(path)) from error
+    except ValueError as error:
+        raise UsageError('{} is not valid JSON: {}'.format(path, error)) from error
+
+    signingKey = os.environ.get(arguments.manifest_key_variable)
+
+    try:
+        verification = verifyManifest(manifest, signingKey=signingKey)
+    except ValueError as error:
+        log.logging.error('{}: {}'.format(path, error))
+        return EXIT_JOBS_DID_NOT_SUCCEED
+
+    if not verification.digestValid:
+        log.logging.error('{}: the digest does not match -- the manifest was changed after it was written'.format(path))
+        return EXIT_JOBS_DID_NOT_SUCCEED
+
+    if not verification.signed:
+        print('{}: intact. It is not signed, so this shows only that it is unchanged, not who wrote it.'.format(path))
+        return EXIT_SUCCESS
+
+    if signingKey is None:
+        raise UsageError('{} is signed with key {}; set ${} to verify the signature'.format(
+            path, verification.signingKeyFingerprint, arguments.manifest_key_variable))
+
+    if not verification.signatureValid:
+        log.logging.error('{}: the signature is not valid for key {} -- it was signed with key {}, or altered'.format(
+            path, keyFingerprint(signingKey), verification.signingKeyFingerprint))
+        return EXIT_JOBS_DID_NOT_SUCCEED
+
+    print('{}: intact, and signed with key {}.'.format(path, verification.signingKeyFingerprint))
+
+    return EXIT_SUCCESS
 
 
 def _commandValidate(arguments: argparse.Namespace, log: Log) -> int:
@@ -264,8 +393,14 @@ def _commandValidate(arguments: argparse.Namespace, log: Log) -> int:
                 except Exception as error:
                     problems.append('{}: {} -> {}'.format(name, column, error))
 
+    for alias, settings in sorted(databaseConfiguration.items()):
+        try:
+            DIALECTS[settings.type].connectArguments(settings, resolvePassword=False)
+        except ConfigurationError as error:
+            problems.append('{}: {}'.format(alias, error))
+
     if problems:
-        raise ConfigurationError('unresolvable transformer reference(s):\n' + '\n'.join(problems))
+        raise ConfigurationError('invalid configuration:\n' + '\n'.join(problems))
 
     print('configuration is valid: {} database alias(es), {} job(s)'.format(len(databaseConfiguration), len(jobsFile.jobs)))
 
@@ -287,7 +422,8 @@ def _dryRunDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Dat
     for alias in aliases:
         try:
             with Database(connectionSettings=databaseConfiguration[alias]) as database:
-                log.logging.info('{}: connected ({})'.format(alias, databaseConfiguration[alias].type.value))
+                encrypted = {True: 'encrypted', False: 'NOT encrypted', None: 'encryption unknown'}[database.isEncrypted()]
+                log.logging.info('{}: connected ({}, {})'.format(alias, databaseConfiguration[alias].type.value, encrypted))
         except Exception as error:
             problems.append('{}: cannot connect -- {}: {}'.format(alias, type(error).__name__, error))
 
@@ -319,26 +455,33 @@ def _dryRunDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Dat
     return EXIT_SUCCESS
 
 
-def _checkMaskingCoverage(name: str, job: Any, databaseConfiguration: Dict[str, DatabaseConnectionConfig], log: Log) -> Optional[str]:
-    """Whether the job's masking policy covers every column its query returns.
+def _sourceQueryColumns(job: DataJobConfig, databaseConfiguration: Dict[str, DatabaseConnectionConfig]) -> List[str]:
+    """The columns a job's sourceQuery returns.
 
-    Finding the columns means running the query, so this reads a single row --
-    and discards it unexamined -- rather than trusting a WHERE 1=0 rewrite of
+    Finding them means running the query, so this reads a single row -- and
+    discards it unexamined -- rather than trusting a WHERE 1=0 rewrite of
     arbitrary SQL to be valid on every dialect.
     """
+
+    with Database(connectionSettings=databaseConfiguration[job.sourceDatabase]) as database:
+        query = job.sourceQuery
+        parameters = None
+        if job.watermarkColumn:
+            query = database.substituteWatermarkPlaceholder(query)
+            parameters = (job.watermarkInitial,)
+        columns, chunks = database.stream(query=query, chunkSize=1, parameters=parameters)
+        chunks.close()  # type: ignore[attr-defined]
+
+    return columns
+
+
+def _checkMaskingCoverage(name: str, job: Any, databaseConfiguration: Dict[str, DatabaseConnectionConfig], log: Log) -> Optional[str]:
+    """Whether the job's masking policy covers every column its query returns."""
 
     from .masking import MaskingPlan
 
     try:
-        with Database(connectionSettings=databaseConfiguration[job.sourceDatabase]) as database:
-            query = job.sourceQuery
-            parameters = None
-            if job.watermarkColumn:
-                query = database.substituteWatermarkPlaceholder(query)
-                parameters = (job.watermarkInitial,)
-            columns, chunks = database.stream(query=query, chunkSize=1, parameters=parameters)
-            chunks.close()  # type: ignore[attr-defined]
-
+        columns = _sourceQueryColumns(job, databaseConfiguration)
         plan = MaskingPlan(key=job.masking.key.get_secret_value(), columns=job.masking.columns, defaultStrategy=job.masking.defaultStrategy)
         plan.bind(columns)
         log.logging.info('{}: masking policy covers all {} column(s), key {}'.format(name, len(columns), plan.fingerprint))
@@ -597,7 +740,77 @@ def _commandClear(arguments: argparse.Namespace, log: Log) -> int:
         print('{}: emptied {}'.format(alias, ', '.join(table for table, _ in cleared)))
 
     if not arguments.dry_run:
+        # Emptied targets hold nothing masked under the old key any more, so
+        # a key change is no longer a reason to refuse these jobs.
+        memory, _ = _memoryBackend(arguments, databaseConfiguration, log)
+        for name, job in jobs.items():
+            if job.masking is not None:
+                memory.recordKeyFingerprint(name, None)
         print('Run the jobs with --force, so a `refresh` window cannot leave a cleared table empty.')
+
+    return EXIT_SUCCESS
+
+
+def _commandAudit(arguments: argparse.Namespace, log: Log) -> int:
+    """Reports what each job does with data, and anything a reviewer should
+    question. Offline unless --connect, which also resolves each masked
+    query's real columns and checks whether each connection is encrypted.
+
+    Exits 1 on an error finding, and with --strict on a warning too.
+    """
+
+    from .audit import auditJobs, renderAudit
+
+    jobsFile, databaseConfiguration = _loadDataJobs(arguments)
+    jobs = _selectJobs(jobsFile.jobs, arguments.job, log)
+    returnedColumns: Dict[str, List[str]] = {}
+    unreachable: Dict[str, str] = {}
+    encryption: Dict[str, Optional[bool]] = {}
+
+    if arguments.connect:
+        for name, job in jobs.items():
+            if job.masking is not None:
+                try:
+                    returnedColumns[name] = _sourceQueryColumns(job, databaseConfiguration)
+                except Exception as error:
+                    unreachable[name] = '{}: {}'.format(type(error).__name__, error)
+
+        for alias in sorted({job.sourceDatabase for job in jobs.values()} | {job.targetDatabase for job in jobs.values()}):
+            if databaseConfiguration[alias].type.value == 'sqlite':
+                continue
+            try:
+                with Database(connectionSettings=databaseConfiguration[alias]) as database:
+                    encryption[alias] = database.isEncrypted()
+            except Exception as error:
+                log.logging.warning('{}: could not connect to check encryption -- {}: {}'.format(alias, type(error).__name__, error))
+                encryption[alias] = None
+
+    report = auditJobs(jobs, returnedColumns=returnedColumns, encryption=encryption, unreachable=unreachable)
+    _writeOutput(json.dumps(report, indent=2, default=str) + '\n' if arguments.format == 'json' else renderAudit(report), arguments.output)
+
+    if report['summary']['error'] or (arguments.strict and report['summary']['warning']):
+        return EXIT_JOBS_DID_NOT_SUCCEED
+
+    return EXIT_SUCCESS
+
+
+def _commandHistory(arguments: argparse.Namespace, log: Log) -> int:
+    """The latest outcomes a `run --history` recorded, newest first."""
+
+    from .reporting import DatabaseHistory, FileHistory, RunHistory, renderHistory
+
+    history: RunHistory
+    if arguments.history:
+        history = FileHistory(arguments.history)
+    elif arguments.history_database:
+        databaseConfiguration = _loadDatabases(arguments)
+        _requireAlias(databaseConfiguration, arguments.history_database)
+        history = DatabaseHistory(connectionSettings=databaseConfiguration[arguments.history_database])
+    else:
+        raise UsageError('name the history to read with --history FILE or --history-database ALIAS')
+
+    records = history.read(limit=arguments.limit, job=arguments.job)
+    sys.stdout.write(json.dumps(records, indent=2) + '\n' if arguments.format == 'json' else renderHistory(records))
 
     return EXIT_SUCCESS
 
@@ -608,8 +821,8 @@ def _commandJobs(arguments: argparse.Namespace, log: Log) -> int:
     job isn't running.
     """
 
-    jobsFile, _ = _loadDataJobs(arguments)
-    memory = FileMemory(memoryFile=_resolveMemoryPath(arguments, log))
+    jobsFile, databaseConfiguration = _loadDataJobs(arguments)
+    memory, _ = _memoryBackend(arguments, databaseConfiguration, log)
     graph = DependencyGraph(jobs=jobsFile.jobs, memory=memory.read())
     watermarks = memory.readWatermarks()
 
@@ -640,6 +853,25 @@ def _addCommonArguments(parser: argparse.ArgumentParser, jobs: bool = True) -> N
     parser.add_argument('--databases', help='explicit path to the database file, overriding --config')
     if jobs:
         parser.add_argument('--memory', help='path to the run-memory file (default: memory.yaml in the --config directory)')
+        parser.add_argument('--memory-database', metavar='ALIAS',
+                            help='keep run memory in this database instead of a file (table lightweight_etl_memory; see docs/library.md)')
+    _addLoggingArguments(parser)
+
+
+def _addHistoryArguments(parser: argparse.ArgumentParser) -> None:
+
+    parser.add_argument('--history', metavar='FILE', help='run history as JSON lines')
+    parser.add_argument('--history-database', metavar='ALIAS', help='run history in this database (table lightweight_etl_history)')
+
+
+def _addManifestKeyArgument(parser: argparse.ArgumentParser) -> None:
+
+    parser.add_argument('--manifest-key-variable', default=MANIFEST_KEY_VARIABLE,
+                        help='environment variable holding the manifest signing key (default: {})'.format(MANIFEST_KEY_VARIABLE))
+
+
+def _addLoggingArguments(parser: argparse.ArgumentParser) -> None:
+
     parser.add_argument('--log', help='also write logs to this file (logs always go to stderr unless --quiet)')
     parser.add_argument('--log-level', default='info', choices=['debug', 'info', 'warning', 'error'], help='default: info')
     parser.add_argument('--log-format', default='text', choices=['text', 'json'],
@@ -685,11 +917,44 @@ def _buildParser() -> argparse.ArgumentParser:
     _addCommonArguments(runParser)
     _addRunArguments(runParser)
     runParser.add_argument('--manifest', help='write a JSON record of what was masked, how, and under which key fingerprint')
+    _addManifestKeyArgument(runParser)
+    runParser.add_argument('--accept-key-change', action='store_true',
+                           help='run upsert jobs even though their masking key changed since their last run')
+    _addHistoryArguments(runParser)
+    runParser.add_argument('--metrics', metavar='FILE', help='write Prometheus metrics to this file after each cycle (for the textfile collector)')
+    runParser.add_argument('--metrics-push', metavar='URL', help='push Prometheus metrics to this Pushgateway after each cycle')
+    runParser.add_argument('--notify-url', metavar='URL', help='post a JSON summary to this webhook when a cycle does not succeed '
+                                                              '(default: ${})'.format(NOTIFY_URL_VARIABLE))
+    runParser.add_argument('--notify-on', default='failure', choices=['failure', 'always'], help='default: failure')
     runParser.set_defaults(handler=_commandRun)
 
     validateParser = subparsers.add_parser('validate', help='check configuration offline, without connecting to anything')
     _addCommonArguments(validateParser)
     validateParser.set_defaults(handler=_commandValidate)
+
+    auditParser = subparsers.add_parser('audit', help='report what each job does with data, and what a reviewer should question')
+    _addCommonArguments(auditParser)
+    auditParser.add_argument('--connect', action='store_true',
+                             help='also run each masked query for its real columns, and check whether each connection is encrypted')
+    auditParser.add_argument('--job', action='append', help='audit only this job (repeatable)')
+    auditParser.add_argument('--format', default='text', choices=['text', 'json'], help='default: text')
+    auditParser.add_argument('--strict', action='store_true', help='exit 1 on warnings as well as errors')
+    auditParser.add_argument('--output', help='write the report here instead of stdout; must not already exist')
+    auditParser.set_defaults(handler=_commandAudit)
+
+    verifyParser = subparsers.add_parser('verify-manifest', help='check that a manifest is unaltered, and who signed it')
+    verifyParser.add_argument('manifest', help='the manifest file written by run --manifest')
+    _addManifestKeyArgument(verifyParser)
+    _addLoggingArguments(verifyParser)
+    verifyParser.set_defaults(handler=_commandVerifyManifest)
+
+    historyParser = subparsers.add_parser('history', help='show recent job outcomes recorded with run --history')
+    _addCommonArguments(historyParser, jobs=False)
+    _addHistoryArguments(historyParser)
+    historyParser.add_argument('--job', help='only this job')
+    historyParser.add_argument('--limit', type=_positiveInteger, default=20, help='how many records (default: 20)')
+    historyParser.add_argument('--format', default='text', choices=['text', 'json'], help='default: text')
+    historyParser.set_defaults(handler=_commandHistory)
 
     jobsParser = subparsers.add_parser('jobs', help='show the job graph and which jobs are due')
     _addCommonArguments(jobsParser)
@@ -744,7 +1009,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = _buildParser()
     arguments = parser.parse_args(argv)
 
-    for name in ('job', 'force', 'workers', 'dry_run', 'forever', 'manifest', 'jobs', 'memory', 'yes'):
+    for name in ('job', 'force', 'workers', 'dry_run', 'forever', 'manifest', 'jobs', 'memory', 'memory_database', 'yes', 'config', 'databases',
+                 'accept_key_change', 'history', 'history_database', 'metrics', 'metrics_push', 'notify_url'):
         if not hasattr(arguments, name):
             setattr(arguments, name, None)
 

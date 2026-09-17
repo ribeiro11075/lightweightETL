@@ -167,3 +167,15 @@ def test_rendered_jobs_mask_in_place_through_a_swap(sampleDatabase, monkeypatch)
     assert job.insertStrategy.value == 'swap'
     assert job.targetTableStage == 'customers_masked_stage'
     assert job.targetTableFinal == 'customers'
+
+
+@pytest.mark.parametrize('column,expected', [
+    ('customerEmail', 'name suggests an email address'),
+    ('SSN', 'name suggests a government identifier; key keeps it unique and shaped'),
+    ('created_at', None),
+    ('status', None),
+    ])
+def test_personal_data_hint_reads_the_name_alone(column, expected):
+    from lightweight_etl.discovery import personalDataHint
+
+    assert personalDataHint(column) == expected

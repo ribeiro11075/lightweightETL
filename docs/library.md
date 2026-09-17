@@ -7,6 +7,7 @@ The package does no file I/O of its own: you load configuration however you like
 - [Running jobs](#running-jobs)
 - [Results](#results)
 - [Memory backends](#memory-backends)
+- [History, metrics and notifications](#history-metrics-and-notifications)
 - [Masking, discovery and subsets](#masking-discovery-and-subsets)
 - [Streaming directly](#streaming-directly)
 
@@ -40,14 +41,18 @@ if __name__ == '__main__':
     main()
 ```
 
-**Keep the `if __name__ == '__main__':` guard.** Jobs run in worker processes, and on macOS, Windows, and Linux from Python 3.14, each worker starts by importing your script. Without the guard, that import starts the run again.
+**Keep the `if __name__ == '__main__':` guard.** Each job runs in a process of its own, started with Python's `spawn` method on every platform, and each one begins by importing your script. Without the guard, that import starts the run again.
 
 `expandEnvironmentVariables` is what resolves `${NAME}` references — the CLI calls it for you, but a library caller must, before validating. It raises `ConfigurationError` naming every unset variable.
 
 ```python
 runDataJobs(jobsFile, databaseConfiguration, memory,
-            logFile=None, runForever=False, logLevel=logging.INFO, logFormat='text')
+            logFile=None, runForever=False, logLevel=logging.INFO, logFormat='text',
+            acceptKeyChange=False, onCycle=None)
 ```
+
+- **`onCycle`** is called with each cycle's `RunResult` as the cycle ends, including under `runForever`. See [below](#history-metrics-and-notifications). An exception it raises is logged, not raised.
+- **`acceptKeyChange=True`** runs upsert jobs whose masking key changed since their last run; see [the key](masking.md#the-key).
 
 - **`runForever=False`** makes one pass and returns. `True` keeps running, honouring `refresh`, until `SIGINT` or `SIGTERM`. Either signal stops new jobs from starting and lets running ones finish; see [stopping](design.md#single-runs-not-a-daemon).
 - **`logFile`** is optional. Without one, attach a stream yourself: `Log(level=...).addStreamHandler(sys.stderr)`. Workers' records are written by the calling process's handlers, whichever those are.
@@ -124,10 +129,41 @@ Subclass `MemoryBackend`:
 | `recordRun(job)` | **abstract** — record that `job` ran now |
 | `readWatermarks()` | every job's stored watermark; defaults to none |
 | `recordWatermark(job, value)` | store a watermark; defaults to raising |
+| `readKeyFingerprints()` | each masked job's last key fingerprint; defaults to none, which turns the key-change check off |
+| `recordKeyFingerprint(job, fingerprint)` | store one, or forget it with `None`; defaults to doing nothing |
 
 The watermark pair isn't abstract, so a backend that predates incremental loads still works for every job that doesn't use them.
 
 **One constraint:** the same instance is pickled into every worker process. Hold settings — a path, connection details — rather than an open file or connection, and open what you need inside each method.
+
+
+## History, metrics and notifications
+
+What the CLI's `--history`, `--metrics` and `--notify-url` do, as functions to call from `onCycle`:
+
+```python
+import os
+from lightweight_etl import FileHistory, notify, writeMetricsFile
+from lightweight_etl.reporting import newRunId
+
+history = FileHistory('history.jsonl')
+
+def report(result):
+    history.append(result, newRunId())
+    writeMetricsFile('/var/lib/node_exporter/etl.prom', result)
+    notify(os.environ['ALERT_WEBHOOK'], result)
+
+runDataJobs(jobsFile, databases, memory, onCycle=report)
+```
+
+| | |
+| --- | --- |
+| `FileHistory(path)`, `DatabaseHistory(connectionSettings, table=...)` | `RunHistory` backends: `append(result, runId)`, and `read(limit=20, job=None)` newest first. `DATABASE_HISTORY_SCHEMA` is the table. |
+| `writeMetricsFile(path, result)` | Prometheus text for the textfile collector, keeping jobs that weren't in this cycle. |
+| `pushMetrics(gatewayUrl, result)` | The same, to a Pushgateway. |
+| `notify(url, result, always=False)` | Posts `notificationPayload(result)` if the cycle didn't succeed, or always; returns whether it posted. |
+
+See [operations.md](operations.md) for the metrics and payload.
 
 
 ## Masking, discovery and subsets
@@ -151,10 +187,15 @@ with Database(connectionSettings=databases['prod']) as database:
 | --- | --- |
 | `MaskingPlan(key, columns, defaultStrategy=None)` | A validated policy. `bind(columns)` checks coverage and returns an object whose `apply(rows)` masks one chunk, and whose `manifest` lists what each column gets. `fingerprint` is the key's safe identifier. |
 | `STRATEGIES` | Strategy name → class. Each `Strategy` validates its own options in `validateOptions`. |
+| `resolveStrategy(name)` | A built-in strategy, or your own named `module.path:ClassName`; see [your own strategies](masking.md#your-own-strategies). |
+| `LOCALES` | The fake-data locales, as name → `Locale`. |
 | `keyFingerprint(key)` | The same fingerprint, for a key on its own. |
 | `buildMaskingManifest(outcomes, declared)` | The manifest from outcomes and each masked job's declared target and fingerprint. `RunResult.maskingManifest` wraps it. |
+| `sealManifest(manifest, signingKey=None)`, `verifyManifest(manifest, signingKey=None)` | Add a manifest's digest (and signature), and check them. `verifyManifest` returns `digestValid`, `signed`, `signatureValid` and the signing key's fingerprint, and raises `ValueError` for a manifest with no integrity section. See [sealing and verifying](masking.md#sealing-and-verifying). |
+| `auditJobs(jobs, returnedColumns=None, encryption=None, unreachable=None)`, `renderAudit(report)` | The `audit` report as a dict, and as text. The optional arguments carry what `audit --connect` learns from the databases. |
 | `Database.getForeignKeys()` | Every foreign key in the connection's current schema, as `ForeignKey(table, columns, referencedTable, referencedColumns, name)`. |
 | `Database.sample(query, rows)` | Column names and at most `rows` rows, without reading the rest. |
+| `Database.isEncrypted()` | Whether the server reports the connection as encrypted; `None` if it can't say. |
 | `proposeTable(database, table, sampleSize=1000)` | A `TableProposal` with a suggested policy and the reason for it, per column. |
 | `Database.getColumnDefinitions(table)`, `getPrimaryColumnNames(table)`, `tableExists(table)` | The catalog facts `schema` and upserts use. `table` may be `schema.table`; otherwise the connection's current schema is searched, and no other. |
 | `relatedTables(foreignKeys, roots, followChildren=True)` | Every table a subset from `roots` would copy. |

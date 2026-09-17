@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
+import subprocess
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Mapping, Optional, Sequence, Set, Type, TypeVar
+from typing import Annotated, Any, Dict, List, Mapping, Optional, Sequence, Set, Type, TypeVar, Union
 
 from pydantic import BaseModel, BeforeValidator, Field, SecretStr, ValidationError, field_validator, model_validator
 
@@ -41,6 +43,7 @@ def _dropNoneMappingListItems(value: Any) -> Any:
 
 
 CleanedStringList = Annotated[List[str], BeforeValidator(_dropNoneListItems)]
+CleanedMapping = Annotated[Dict[str, Any], BeforeValidator(_dropNoneMappingEntries)]
 CleanedListMapping = Annotated[Dict[str, List[str]], BeforeValidator(_dropNoneMappingListItems)]
 
 
@@ -59,14 +62,15 @@ class ConfigurationError(Exception):
 
 WATERMARK_PLACEHOLDER = re.compile(r'\{\{\s*watermark\s*\}\}')
 
-# ${NAME} or ${NAME:-default}. A doubled $$ escapes the whole construct, which
-# matters because a sourceQuery is arbitrary SQL -- PostgreSQL's dollar-quoting
-# ($$body$$) is untouched here since it is never followed by a brace.
-ENVIRONMENT_VARIABLE = re.compile(r'(\$?)\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}')
+# ${NAME}, ${NAME:-default} or ${file:/path}. A doubled $$ escapes the whole
+# construct, which matters because a sourceQuery is arbitrary SQL --
+# PostgreSQL's dollar-quoting ($$body$$) is untouched here since it is never
+# followed by a brace.
+ENVIRONMENT_VARIABLE = re.compile(r'(\$?)\$\{(?:file:([^}]+)|([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?)\}')
 
 
 def _expand(value: Any, missing: List[str]) -> Any:
-    """Recursive worker: collects unset names rather than raising on the first."""
+    """Recursive worker: collects what couldn't be read rather than raising on the first."""
 
     if isinstance(value, dict):
         return {key: _expand(item, missing) for key, item in value.items()}
@@ -76,16 +80,27 @@ def _expand(value: Any, missing: List[str]) -> Any:
         return value
 
     def replace(match: Any) -> str:
-        escape, name, default = match.group(1), match.group(2), match.group(3)
+        escape, path, name, default = match.groups()
 
         if escape:
             return match.group(0)[1:]
+
+        if path is not None:
+            try:
+                with open(path) as file:
+                    # Secret files usually end with a newline nobody meant as
+                    # part of the secret.
+                    return file.read().rstrip('\r\n')
+            except OSError as error:
+                missing.append('file {} ({})'.format(path, error.strerror or error))
+                return ''
+
         if name in os.environ:
             return os.environ[name]
         if default is not None:
             return default
 
-        missing.append(name)
+        missing.append('${}'.format(name))
 
         return ''
 
@@ -93,16 +108,21 @@ def _expand(value: Any, missing: List[str]) -> Any:
 
 
 def expandEnvironmentVariables(value: Any) -> Any:
-    """Recursively replace ${NAME} in a loaded configuration with the environment.
+    """Recursively replace ${NAME} and ${file:/path} in a loaded configuration.
 
     This is what keeps credentials out of the YAML that sits next to your job
     definitions, which is the first thing a security review objects to:
 
         password: ${PROD_DB_PASSWORD}
         port: ${PROD_DB_PORT:-5432}
+        key: ${file:/run/secrets/masking-key}
 
-    An unset variable with no default raises ConfigurationError rather than
-    expanding to an empty string. A blank password that fails at connect time
+    A file reference reads the file's content, less a trailing newline. That's
+    how Docker and Kubernetes mount secrets, and how the Vault agent and the
+    AWS and Azure secret-store drivers hand them over.
+
+    An unset variable with no default, or an unreadable file, raises
+    ConfigurationError rather than expanding to an empty string. A blank password that fails at connect time
     with the database's own unhelpful error is a much worse outcome than
     refusing to start, and an empty host would silently connect somewhere
     unintended. Every unset name in the whole document is reported at once, the
@@ -122,8 +142,8 @@ def expandEnvironmentVariables(value: Any) -> Any:
 
     if missing:
         raise ConfigurationError(
-            'configuration references environment variable(s) that are not set: {}. '
-            'Set them, or give a default with ${{NAME:-value}} (never for a secret).'.format(', '.join(sorted(set(missing)))))
+            'configuration references value(s) that could not be read: {}. '
+            'Set each variable, or give it a default with ${{NAME:-value}} (never for a secret).'.format(', '.join(sorted(set(missing)))))
 
     return expanded
 
@@ -133,10 +153,65 @@ class InsertStrategy(str, Enum):
     UPSERT = 'upsert'
 
 
+# A plain SQL identifier -- what currentSchema is written into a session
+# statement as, so nothing else may get through.
+IDENTIFIER = re.compile(r'^[A-Za-z_][A-Za-z0-9_$#]*$')
+
+# The dialects that can change a session's current schema with a statement.
+# SQL Server takes the default schema from the login, and MySQL, MariaDB and
+# SQLite have no schema separate from the database.
+CURRENT_SCHEMA_TYPES = frozenset({'postgresql', 'oracle'})
+
+
+PASSWORD_COMMAND_TIMEOUT_SECONDS = 60
+
+
+class PasswordCommandError(RuntimeError):
+    """passwordCommand failed. Not a ConfigurationError: the usual cause -- a
+    token service that's briefly unreachable -- is worth a retry.
+    """
+
+
+def runPasswordCommand(command: Union[str, List[str]]) -> str:
+    """Runs a passwordCommand and returns what it printed, stripped.
+
+    A list runs as it is; a string is split like a shell would split it, but
+    no shell is involved. The output is never put in an error message, since
+    it is the secret.
+    """
+
+    arguments = shlex.split(command) if isinstance(command, str) else list(command)
+
+    try:
+        completed = subprocess.run(arguments, capture_output=True, text=True, timeout=PASSWORD_COMMAND_TIMEOUT_SECONDS)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise PasswordCommandError('passwordCommand {} could not run: {}'.format(arguments[0], error)) from None
+
+    if completed.returncode != 0:
+        raise PasswordCommandError('passwordCommand {} exited with status {}: {}'.format(
+            arguments[0], completed.returncode, completed.stderr.strip()[-500:]))
+
+    password = completed.stdout.strip()
+    if not password:
+        raise PasswordCommandError('passwordCommand {} printed nothing'.format(arguments[0]))
+
+    return password
+
+
 class DatabaseConnectionConfig(BaseModel):
     """`password` is a SecretStr, like the masking key, so it can't reach a log
     line or a traceback through the model's repr. Drivers get it from
     plainPassword().
+
+    `options` go to the driver's connect() as keyword arguments, for anything
+    the fields here don't cover -- TLS above all. They are left out of the
+    model's repr, since some (a wallet password, say) are secrets too.
+
+    `currentSchema` makes the connection resolve unqualified table names, and
+    every catalog lookup, in that schema.
+
+    `passwordCommand` replaces `password` with a command run at every connect,
+    for credentials that expire: an RDS IAM token, an Azure AD access token.
     """
 
     type: DatabaseType
@@ -147,6 +222,24 @@ class DatabaseConnectionConfig(BaseModel):
     port: Optional[int] = None
     serviceName: Optional[str] = None
     sid: Optional[str] = None
+    passwordCommand: Optional[Union[str, List[str]]] = None
+    currentSchema: Optional[str] = None
+    options: CleanedMapping = Field(default_factory=dict, repr=False)
+
+    @model_validator(mode='after')
+    def _checkCurrentSchema(self) -> 'DatabaseConnectionConfig':
+
+        if self.currentSchema is None:
+            return self
+
+        if self.type.value not in CURRENT_SCHEMA_TYPES:
+            raise ValueError('currentSchema is supported for {} only; for {}, qualify table names as schema.table instead'.format(
+                ' and '.join(sorted(CURRENT_SCHEMA_TYPES)), self.type.value))
+
+        if not IDENTIFIER.match(self.currentSchema):
+            raise ValueError('currentSchema must be a plain identifier, got {!r}'.format(self.currentSchema))
+
+        return self
 
     @model_validator(mode='after')
     def _requireOracleIdentifier(self) -> 'DatabaseConnectionConfig':
@@ -167,13 +260,22 @@ class DatabaseConnectionConfig(BaseModel):
         server, user, or password to speak of.
         """
 
-        if self.type != DatabaseType.SQLITE and (self.user is None or self.password is None or self.host is None):
-            raise ValueError('user, password, and host are required for every database type except sqlite')
+        if self.password is not None and self.passwordCommand is not None:
+            raise ValueError('set password or passwordCommand, not both')
+
+        if self.type != DatabaseType.SQLITE and (self.user is None or self.host is None or (self.password is None and not self.passwordCommand)):
+            raise ValueError('user, host, and a password or passwordCommand are required for every database type except sqlite')
 
         return self
 
 
     def plainPassword(self) -> Optional[str]:
+        """The password to connect with -- running passwordCommand, if that's
+        how it is configured, so call it only when about to connect.
+        """
+
+        if self.passwordCommand:
+            return runPasswordCommand(self.passwordCommand)
 
         return None if self.password is None else self.password.get_secret_value()
 
@@ -250,6 +352,7 @@ class DataJobConfig(BaseJobConfig):
     watermarkInitial: Optional[Any] = None
     retries: int = 0
     retryDelaySeconds: float = 5.0
+    timeoutSeconds: Optional[float] = Field(default=None, gt=0)
     masking: Optional[MaskingConfig] = None
     preTargetAdhocQueries: CleanedStringList = Field(default_factory=list)
     postTargetAdhocQueries: CleanedStringList = Field(default_factory=list)
