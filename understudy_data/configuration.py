@@ -291,7 +291,7 @@ class MaskingConfig(BaseModel):
 
     `key` is a SecretStr so it can't reach a log line or a traceback through a
     model's repr. `columns` and `defaultStrategy` are normalized here, so an
-    unknown strategy or a bad option fails `lightweight-etl validate` rather
+    unknown strategy or a bad option fails `understudy validate` rather
     than a run.
     """
 

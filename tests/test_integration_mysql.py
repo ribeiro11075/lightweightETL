@@ -15,16 +15,16 @@ import pytest
 
 pytest.importorskip('mysql.connector', reason='mysql-connector-python is not installed (pip install -e ".[mysql]")')
 
-from lightweight_etl.memory import DatabaseMemory
-from lightweight_etl.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from lightweight_etl.database import Database
-from lightweight_etl.memory import FileMemory
-from lightweight_etl.runner import runDataJobs
+from understudy_data.memory import DatabaseMemory
+from understudy_data.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from understudy_data.database import Database
+from understudy_data.memory import FileMemory
+from understudy_data.runner import runDataJobs
 
 pytestmark = pytest.mark.integration
 
 CONNECTION_SETTINGS = DatabaseConnectionConfig(
-    type=DatabaseType.MYSQL, user='root', password='root', database='lightweight_etl_test', host='127.0.0.1', port=3307,
+    type=DatabaseType.MYSQL, user='root', password='root', database='understudy_test', host='127.0.0.1', port=3307,
     )
 
 

@@ -23,16 +23,16 @@ import pytest
 
 pytest.importorskip('psycopg2', reason='psycopg2 is not installed (pip install psycopg2-binary, or pip install -e ".[postgresql]")')
 
-from lightweight_etl.memory import DatabaseMemory
-from lightweight_etl.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from lightweight_etl.database import Database
-from lightweight_etl.memory import FileMemory
-from lightweight_etl.runner import runDataJobs
+from understudy_data.memory import DatabaseMemory
+from understudy_data.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from understudy_data.database import Database
+from understudy_data.memory import FileMemory
+from understudy_data.runner import runDataJobs
 
 pytestmark = pytest.mark.integration
 
 CONNECTION_SETTINGS = DatabaseConnectionConfig(
-    type=DatabaseType.POSTGRESQL, user='postgres', password='postgres', database='lightweight_etl_test', host='127.0.0.1', port=5433,
+    type=DatabaseType.POSTGRESQL, user='postgres', password='postgres', database='understudy_test', host='127.0.0.1', port=5433,
     )
 
 
@@ -347,3 +347,35 @@ def test_a_copied_upsert_updates_existing_rows_and_keeps_the_last_of_repeated_ke
 
     assert liveDatabase.query('SELECT id, name, amount FROM {} ORDER BY id'.format(peopleTable)) == [
         (1, 'new', 11), (2, 'second', 21), (3, 'third', 30)]
+
+
+def test_a_swap_repoints_views_at_the_new_target(liveDatabase):
+    """A PostgreSQL view follows the table it was made on, not its name, so a
+    swap used to leave views reading the old rows -- now the stage table,
+    emptied by the next run.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    target, stage = 'orders_{}'.format(suffix), 'orders_{}_stage'.format(suffix)
+    view, summary = 'recent_{}'.format(suffix), 'summary_{}'.format(suffix)
+    role = 'reader_{}'.format(suffix)
+
+    liveDatabase.alter('CREATE TABLE {} (id INT PRIMARY KEY, amount INT)'.format(target))
+    liveDatabase.alter('CREATE TABLE {} (id INT PRIMARY KEY, amount INT)'.format(stage))
+    liveDatabase.alter('CREATE VIEW {} AS SELECT id, amount FROM {} WHERE amount > 0'.format(view, target))
+    liveDatabase.alter('CREATE VIEW {} AS SELECT count(*) AS orders FROM {}'.format(summary, view))
+    liveDatabase.alter('CREATE ROLE {}'.format(role))
+    liveDatabase.alter('GRANT SELECT ON {} TO {}'.format(view, role))
+
+    try:
+        liveDatabase.insert(table=target, data=[(1, 10)])
+        liveDatabase.insert(table=stage, data=[(2, 20), (3, 30)])
+
+        liveDatabase.swap(targetTable=target, stageTable=stage)
+
+        assert liveDatabase.query('SELECT id FROM {} ORDER BY id'.format(view)) == [(2,), (3,)]
+        assert liveDatabase.query('SELECT orders FROM {}'.format(summary)) == [(2,)]
+        assert liveDatabase.query("SELECT has_table_privilege('{}', '{}', 'SELECT')".format(role, view)) == [(True,)]
+    finally:
+        for statement in ('DROP VIEW IF EXISTS {} '.format(summary), 'DROP VIEW IF EXISTS {}'.format(view), 'DROP TABLE IF EXISTS {}'.format(target),
+                          'DROP TABLE IF EXISTS {}'.format(stage), 'DROP ROLE IF EXISTS {}'.format(role)):
+            liveDatabase.alter(statement)

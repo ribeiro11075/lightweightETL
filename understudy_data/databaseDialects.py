@@ -131,7 +131,7 @@ class DatabaseDialect(ABC):
         """Returns (connection, cursor).
 
         Implementations import their driver lazily, inside this method, so that
-        `import lightweight_etl` doesn't require every database driver to be installed --
+        `import understudy_data` doesn't require every database driver to be installed --
         only the one you actually connect with.
         """
 
@@ -191,6 +191,13 @@ class DatabaseDialect(ABC):
     @abstractmethod
     def placeholders(self, count: int) -> List[str]:
         """Parameter placeholder markers, one per bound value, in this dialect's paramstyle."""
+
+    def supportsMaterializedSelections(self) -> bool:
+        """Whether `WITH name AS MATERIALIZED (...)` is accepted, and worth
+        using: planSubset's queries then compute each selection once.
+        """
+
+        return False
 
     def isEncrypted(self, cursor: Any) -> Optional[bool]:
         """Whether this connection is encrypted in transit, as the server
@@ -315,6 +322,14 @@ class DatabaseDialect(ABC):
         the target's (configuration checks that), since a rename never moves a
         table between schemas. Renames take the new name unqualified.
         """
+
+    def swap(self, cursor: Any, targetTable: str, stageTable: str, tempTable: str) -> None:
+        """Runs the swap on `cursor`; the caller commits. A dialect with more to
+        do around the renames overrides this.
+        """
+
+        for query in self.swapQueries(targetTable=targetTable, stageTable=stageTable, tempTable=tempTable):
+            cursor.execute(query)
 
 
 class _OnConflictDialect(DatabaseDialect):
@@ -598,7 +613,7 @@ class PostgreSQLDialect(_OnConflictDialect):
         (Database.query/alter commit; stream() does not).
         """
 
-        cursor = connection.cursor(name='lightweight_etl_{}'.format(uuid.uuid4().hex))
+        cursor = connection.cursor(name='understudy_{}'.format(uuid.uuid4().hex))
         cursor.itersize = chunkSize
 
         return cursor
@@ -607,6 +622,14 @@ class PostgreSQLDialect(_OnConflictDialect):
     def placeholders(self, count: int) -> List[str]:
 
         return count * ['%s']
+
+
+    def supportsMaterializedSelections(self) -> bool:
+        """PostgreSQL 12 and later. Without it, PostgreSQL copies a selection
+        used once into its user, and planning a 12-table subset took minutes.
+        """
+
+        return True
 
 
     def isEncrypted(self, cursor: Any) -> Optional[bool]:
@@ -646,7 +669,7 @@ class PostgreSQLDialect(_OnConflictDialect):
             return False
 
         columns = ', '.join(allColumns)
-        staging = 'lightweight_etl_upsert_{}'.format(hashlib.sha1('{}|{}'.format(table, columns).encode('utf-8')).hexdigest()[:12])
+        staging = 'understudy_upsert_{}'.format(hashlib.sha1('{}|{}'.format(table, columns).encode('utf-8')).hexdigest()[:12])
 
         cursor.execute('CREATE TEMPORARY TABLE IF NOT EXISTS {} ON COMMIT DELETE ROWS AS SELECT {} FROM {} WITH NO DATA'.format(staging, columns, table))
         cursor.copy_expert('COPY {} ({}) FROM STDIN'.format(staging, columns), stream)
@@ -716,15 +739,44 @@ class PostgreSQLDialect(_OnConflictDialect):
     def swapQueries(self, targetTable: str, stageTable: str, tempTable: str) -> List[str]:
         """Three renames in one transaction: PostgreSQL DDL is transactional, so
         a failure part-way leaves both tables as they were.
-
-        A view or foreign key that references the target follows the table
-        itself, not its name, so after a swap it points at what is now the
-        stage table. Recreate such views after the swap (postTargetAdhocQueries),
-        or use a stage-backed upsert instead.
         """
 
         return ['ALTER TABLE {} RENAME TO {}; ALTER TABLE {} RENAME TO {}; ALTER TABLE {} RENAME TO {}'.format(
             stageTable, unqualifiedName(tempTable), targetTable, unqualifiedName(stageTable), tempTable, unqualifiedName(targetTable))]
+
+
+    # Views built directly on a table: their names, and their definitions as
+    # PostgreSQL would write them now, table names and all.
+    DEPENDENT_VIEWS_QUERY = (
+        "SELECT DISTINCT view.oid::regclass::text, pg_get_viewdef(view.oid) "
+        "FROM pg_depend dependency "
+        "JOIN pg_rewrite rewrite ON rewrite.oid = dependency.objid "
+        "JOIN pg_class view ON view.oid = rewrite.ev_class "
+        "WHERE dependency.classid = 'pg_rewrite'::regclass AND dependency.refobjid = %s::regclass "
+        "AND view.oid <> dependency.refobjid AND view.relkind = 'v'")
+
+    def swap(self, cursor: Any, targetTable: str, stageTable: str, tempTable: str) -> None:
+        """Renames, then points the target's views at the new target.
+
+        A PostgreSQL view is bound to the table it was created on, not to that
+        table's name, so after the renames it would read what is now the stage
+        table -- the old data, emptied by the next run. Each view built directly
+        on the target is recreated from its own definition, captured before the
+        renames, whose table name now resolves to the new target. CREATE OR
+        REPLACE keeps the view itself, so its grants and any views built on it
+        stay as they were. It all happens in the swap's transaction.
+
+        Materialized views and foreign keys referencing the target aren't
+        rebound; see docs/design.md.
+        """
+
+        cursor.execute(self.DEPENDENT_VIEWS_QUERY, (targetTable,))
+        views = cursor.fetchall()
+
+        super().swap(cursor, targetTable, stageTable, tempTable)
+
+        for name, definition in views:
+            cursor.execute('CREATE OR REPLACE VIEW {} AS {}'.format(name, definition))
 
 
 def _oracleLobsAsValues(cursor: Any, metadata: Any) -> Any:
@@ -1128,6 +1180,16 @@ class SQLiteDialect(_OnConflictDialect):
     def placeholders(self, count: int) -> List[str]:
 
         return count * ['?']
+
+
+    def supportsMaterializedSelections(self) -> bool:
+        """SQLite 3.35 and later, which is what Python's own sqlite3 links
+        against on most platforms -- but not all, hence the check.
+        """
+
+        import sqlite3
+
+        return sqlite3.sqlite_version_info >= (3, 35)
 
 
     def truncateQuery(self, table: str) -> str:

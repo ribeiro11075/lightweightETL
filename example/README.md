@@ -2,6 +2,27 @@
 
 Executable documentation. Every part is run by the test suite, so none of it can drift from what the code accepts.
 
+## `walkthrough.py`
+
+```
+python example/walkthrough.py
+```
+
+The whole workflow in one session, through the commands a person would type, with no server and no credentials. It builds a small shop's "production" database -- customers with national ids and phone numbers, orders, support tickets full of personal details, and payment cards -- and makes a safe staging copy of its Portuguese and Spanish customers:
+
+1. **`discover`** proposes a masking policy.
+2. **`subset --mask`** generates a job per table for those customers and everything they reference. The script then applies what a reviewer would decide, and records each decision at the top of the jobs file: masked ids sharing domains, `fpe` for national ids, `redact` for ticket text, and no copy at all of payment cards.
+3. **`schema`** creates staging's tables.
+4. **`audit --connect --strict`** checks the reviewed policy against production.
+5. **`run`** copies and masks, writing a signed manifest and run history.
+6. **`verify-manifest`** checks the manifest.
+7. **`synthesize`** fills staging's payment cards with generated rows.
+8. **`history`** shows what ran.
+
+It ends by showing the same customers and a support ticket before and after, including what `redact` leaves behind, and writes the session to `walkthrough.md` next to the databases.
+
+Tested by `tests/test_walkthrough.py`, which also checks that no production email, phone number or card number reaches staging.
+
 ## `incremental_demo.py`
 
 ```
@@ -24,8 +45,8 @@ Watch masking, discovery and subsetting work, again with no server. It builds a 
 
 1. **Masks** customers and orders into staging. The two tables still join, because `customers.id` and `orders.customer_id` share the `customer` domain.
 2. **Adds an `ssn` column** to production, which the policy doesn't cover. The next run fails before writing anything, and staging is left as it was. New columns never leak by default.
-3. **Proposes a policy** for the changed table, as `lightweight-etl discover` does.
-4. **Plans a subset** of European customers and their orders, as `lightweight-etl subset` does.
+3. **Proposes a policy** for the changed table, as `understudy discover` does.
+4. **Plans a subset** of European customers and their orders, as `understudy subset` does.
 
 It uses a throwaway key unless `MASKING_KEY` is already set, and writes the masking manifest next to its databases.
 

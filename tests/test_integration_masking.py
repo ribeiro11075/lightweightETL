@@ -17,13 +17,13 @@ import uuid
 
 import pytest
 
-from lightweight_etl.configuration import Configuration, DataJobsFile
-from lightweight_etl.database import Database
-from lightweight_etl.dependencyGraph import JobStatus
-from lightweight_etl.discovery import proposeTable
-from lightweight_etl.memory import FileMemory
-from lightweight_etl.runner import runDataJobs
-from lightweight_etl.subset import planSubset
+from understudy_data.configuration import Configuration, DataJobsFile
+from understudy_data.database import Database
+from understudy_data.dependencyGraph import JobStatus
+from understudy_data.discovery import proposeTable
+from understudy_data.memory import FileMemory
+from understudy_data.runner import runDataJobs
+from understudy_data.subset import planSubset
 from servers import SERVERS
 
 pytestmark = pytest.mark.integration
@@ -171,3 +171,39 @@ def test_discovery_reads_real_column_types(schema):
 
     orders = {suggestion.column.lower(): suggestion.policy for suggestion in proposeTable(database, names['orders']).columns}
     assert orders['customer_id']['strategy'] == 'keep'
+
+
+def test_the_deepest_subset_allowed_runs_on_every_server(server):
+    """A 16-table chain, the deepest planSubset accepts. Nested selections
+    once made PostgreSQL run out of memory planning a 12-table chain and
+    restart; without MATERIALIZED it still took minutes. Every server has to
+    answer every query, quickly, with only the rows that belong.
+    """
+    import time
+
+    settings, database = server
+    suffix = uuid.uuid4().hex[:5]
+    names = ['c{}_{}'.format(level, suffix) for level in range(16)]
+
+    try:
+        database.alter('CREATE TABLE {} (id INT PRIMARY KEY, parent_id INT)'.format(names[0]))
+        database.insert(table=names[0], data=[(index, None) for index in range(20)])
+        for level in range(1, len(names)):
+            database.alter('CREATE TABLE {0} (id INT PRIMARY KEY, parent_id INT, CONSTRAINT fk_{0} FOREIGN KEY (parent_id) REFERENCES {1}(id))'.format(
+                names[level], names[level - 1]))
+            database.insert(table=names[level], data=[(index, (index * 7) % 20) for index in range(20)])
+
+        foreignKeys = [foreignKey for foreignKey in database.getForeignKeys() if foreignKey.table.lower().endswith(suffix)]
+        plan = planSubset(foreignKeys, root=names[0], where='id < 5', materialize=database.dialect.supportsMaterializedSelections())
+
+        started = time.time()
+        counts = [len(database.query(plan.queries[table])) for table in plan.tables]
+
+        assert counts == [5] * len(names)
+        assert time.time() - started < 60
+    finally:
+        for name in reversed(names):
+            try:
+                database.alter('DROP TABLE {}'.format(name))
+            except Exception:
+                database.connection.rollback()

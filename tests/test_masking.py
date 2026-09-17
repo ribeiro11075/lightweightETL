@@ -11,9 +11,9 @@ import uuid
 
 import pytest
 
-from lightweight_etl.configuration import Configuration, ConfigurationError, DataJobsFile
-from lightweight_etl.dependencyGraph import JobOutcome, JobStatus
-from lightweight_etl.masking import (FIRST_NAMES, LAST_NAMES, STRATEGIES, KeyedHash, MaskingError, MaskingPlan, buildMaskingManifest,
+from understudy_data.configuration import Configuration, ConfigurationError, DataJobsFile
+from understudy_data.dependencyGraph import JobOutcome, JobStatus
+from understudy_data.masking import (FIRST_NAMES, LAST_NAMES, STRATEGIES, KeyedHash, MaskingError, MaskingPlan, buildMaskingManifest,
                                      keyFingerprint, validateColumnPolicy)
 
 KEY = 'a-test-key-that-is-long-enough'
@@ -557,7 +557,7 @@ def _manifest():
 
 def test_a_sealed_manifest_verifies_until_it_is_changed():
     import json
-    from lightweight_etl.masking import sealManifest, verifyManifest
+    from understudy_data.masking import sealManifest, verifyManifest
 
     sealed = json.loads(json.dumps(sealManifest(_manifest()), indent=4))
 
@@ -568,7 +568,7 @@ def test_a_sealed_manifest_verifies_until_it_is_changed():
 
 
 def test_a_signed_manifest_verifies_only_with_its_key():
-    from lightweight_etl.masking import keyFingerprint, sealManifest, verifyManifest
+    from understudy_data.masking import keyFingerprint, sealManifest, verifyManifest
 
     key = 'a-manifest-signing-key'
     sealed = sealManifest(_manifest(), signingKey=key)
@@ -582,7 +582,7 @@ def test_a_signed_manifest_verifies_only_with_its_key():
 def test_a_forged_signature_does_not_verify():
     """Anyone can recompute a digest after editing; only the key can re-sign."""
     import hashlib
-    from lightweight_etl.masking import _canonicalManifest, sealManifest, verifyManifest
+    from understudy_data.masking import _canonicalManifest, sealManifest, verifyManifest
 
     key = 'a-manifest-signing-key'
     sealed = sealManifest(_manifest(), signingKey=key)
@@ -596,14 +596,14 @@ def test_a_forged_signature_does_not_verify():
 
 
 def test_a_manifest_without_an_integrity_section_cannot_be_verified():
-    from lightweight_etl.masking import verifyManifest
+    from understudy_data.masking import verifyManifest
 
     with pytest.raises(ValueError, match='no integrity section'):
         verifyManifest(_manifest())
 
 
 def test_a_signing_key_must_be_long_enough():
-    from lightweight_etl.masking import sealManifest
+    from understudy_data.masking import sealManifest
 
     with pytest.raises(ValueError, match='at least 16'):
         sealManifest(_manifest(), signingKey='short')
@@ -624,7 +624,7 @@ def test_fake_values_without_a_locale_are_unchanged_by_locale_support():
 
 @pytest.mark.parametrize('locale', ['de_DE', 'fr_FR', 'es_ES', 'pt_BR', 'it_IT', 'nl_NL', 'en_US', 'en_GB'])
 def test_a_locale_draws_from_its_own_lists(locale):
-    from lightweight_etl.masking import LOCALES
+    from understudy_data.masking import LOCALES
 
     policy = {name: {'strategy': name, 'locale': locale} for name in FAKE_STRATEGIES}
     bound = MaskingPlan(GOLDEN_KEY, policy).bind(FAKE_STRATEGIES)
@@ -726,3 +726,86 @@ def test_a_bad_custom_strategy_reference_is_refused(reference, message):
 def test_a_custom_strategy_checks_its_own_options():
     with pytest.raises(ValueError, match='strategy "tests.customStrategies:Initials" does not take option'):
         validateColumnPolicy({'strategy': 'tests.customStrategies:Initials', 'colour': 'red'})
+
+
+def test_strict_fpe_refuses_a_value_too_short_for_ff1():
+    strict = {'strategy': 'fpe', 'strict': True}
+
+    assert len(str(_fpe(strict, [1234567])[0])) == 7
+
+    with pytest.raises(MaskingError, match='strict, and FF1 needs at least 6 digits') as excinfo:
+        _fpe(strict, [12345])
+    assert '12345' not in str(excinfo.value)
+
+    with pytest.raises(MaskingError, match='at least 4 alphanumeric characters'):
+        _fpe(strict, ['ab-1'])
+
+
+def test_strict_must_be_a_boolean():
+    with pytest.raises(ValueError, match='strict: must be true or false'):
+        validateColumnPolicy({'strategy': 'fpe', 'strict': 'yes'})
+
+
+SAMPLE_TEXT = ('Called Ann at +1 (555) 010-9999, email Ann.Lee@corp.example.com; card 4111 1111 1111 1111 '
+               'SSN 123-45-6789 IBAN GB82 WEST 1234 5698 7654 32 from 192.168.1.20. '
+               'Order 2026-01-02 or 02/01/2026, qty 12, v1.2.3.')
+
+
+def _redact(policy, values):
+    return [row[0] for row in MaskingPlan(GOLDEN_KEY, {'notes': policy}).bind(['notes']).apply([(value,) for value in values])]
+
+
+def test_redact_labels_each_identifier_and_keeps_the_rest():
+    (redacted,) = _redact('redact', [SAMPLE_TEXT])
+
+    assert redacted == ('Called Ann at [PHONE], email [EMAIL]; card [CARD] SSN [SSN] IBAN [IBAN] from [IP]. '
+                        'Order 2026-01-02 or 02/01/2026, qty 12, v1.2.3.')
+
+
+def test_redact_mask_mode_writes_consistent_values_of_the_same_shape():
+    first, second = _redact({'strategy': 'redact', 'replacement': 'mask'}, [SAMPLE_TEXT, 'reach me at ann.lee@CORP.example.com'])
+
+    for secret in ('555', '010-9999', 'Ann.Lee', '4111 1111 1111 1111', '123-45-6789', '1234 5698', '192.168'):
+        assert secret not in first
+    assert re.search(r'\+\d \(\d{3}\) \d{3}-\d{4}', first)
+    assert re.search(r'card \d{4} \d{4} \d{4} 1111 ', first)
+    assert re.search(r'SSN \d{3}-\d{2}-\d{4} ', first)
+    assert re.search(r'IBAN GB[0-9A-Z]{2} [0-9A-Z]{4} ', first)
+    assert re.search(r'from 10\.\d+\.\d+\.\d+\.', first)
+    assert first.split('email ')[1].split(';')[0] == second.split('at ')[1]
+    assert 'Order 2026-01-02 or 02/01/2026, qty 12, v1.2.3.' in first
+
+
+@pytest.mark.parametrize('text', [
+    'card 4111 1111 1111 1112',     # fails the Luhn check
+    'IBAN GB82 WEST 1234 5698 7654 33',  # fails the mod-97 check
+    'address 999.1.1.1',
+    'build 20260102',
+    'call 12345',
+    ])
+def test_redact_leaves_lookalikes_that_fail_their_checks(text):
+    (redacted,) = _redact({'strategy': 'redact', 'detect': ['card', 'iban', 'ip', 'ssn', 'email']}, [text])
+
+    assert redacted == text
+
+
+def test_redact_can_be_narrowed_and_extended():
+    (redacted,) = _redact({'strategy': 'redact', 'detect': ['email'], 'patterns': [r'ACC-\d{6}']},
+                          ['ann@example.com called about ACC-123456 from +1 555 010 9999'])
+
+    assert redacted == '[EMAIL] called about [REDACTED] from +1 555 010 9999'
+
+
+@pytest.mark.parametrize('policy,message', [
+    ({'strategy': 'redact', 'detect': ['names']}, 'detect: must be a non-empty list of'),
+    ({'strategy': 'redact', 'patterns': ['(unclosed']}, 'is not a valid regular expression'),
+    ({'strategy': 'redact', 'replacement': 'blank'}, 'replacement: must be one of'),
+    ])
+def test_redact_options_are_checked(policy, message):
+    with pytest.raises(ValueError, match=message):
+        validateColumnPolicy(policy)
+
+
+def test_redact_needs_text():
+    with pytest.raises(MaskingError, match='redact strategy needs text, got int'):
+        _redact('redact', [5])

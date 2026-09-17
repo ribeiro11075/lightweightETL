@@ -3,7 +3,7 @@ import decimal
 
 import pytest
 
-from lightweight_etl.memory import FileMemory
+from understudy_data.memory import FileMemory
 
 
 def test_missing_memory_file_reads_as_empty(tmp_path):
@@ -159,7 +159,7 @@ def test_a_write_replaces_the_file_rather_than_rewriting_it_in_place(tmp_path, m
         stream.write('lastRun:\n  fir')
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(yaml, 'dump', dieMidWrite)
+    monkeypatch.setattr(yaml, 'safe_dump', dieMidWrite)
 
     with pytest.raises(KeyboardInterrupt):
         memory.recordRun('second')
@@ -168,7 +168,7 @@ def test_a_write_replaces_the_file_rather_than_rewriting_it_in_place(tmp_path, m
 
 
 def test_the_run_lock_is_exclusive_and_released_afterwards(tmp_path):
-    from lightweight_etl.memory import RunInProgressError, exclusiveRun
+    from understudy_data.memory import RunInProgressError, exclusiveRun
 
     lockFile = tmp_path / 'memory.yaml.run.lock'
 
@@ -183,7 +183,7 @@ def test_the_run_lock_is_exclusive_and_released_afterwards(tmp_path):
 
 def test_the_database_memory_schema_uses_a_portable_float_type():
     """DOUBLE alone is MySQL's spelling; PostgreSQL, Oracle and SQL Server reject it."""
-    from lightweight_etl.memory import DATABASE_MEMORY_SCHEMA
+    from understudy_data.memory import DATABASE_MEMORY_SCHEMA
 
     assert 'DOUBLE PRECISION' in DATABASE_MEMORY_SCHEMA
 
@@ -203,8 +203,8 @@ def test_file_memory_records_and_forgets_key_fingerprints(tmp_path):
 def test_database_memory_keeps_key_fingerprints_out_of_watermarks_and_runs(tmp_path):
     import sqlite3
 
-    from lightweight_etl.configuration import DatabaseConnectionConfig
-    from lightweight_etl.memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory
+    from understudy_data.configuration import DatabaseConnectionConfig
+    from understudy_data.memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory
 
     path = tmp_path / 'memory.db'
     connection = sqlite3.connect(path)
@@ -224,7 +224,7 @@ def test_database_memory_keeps_key_fingerprints_out_of_watermarks_and_runs(tmp_p
 
 
 def test_a_backend_without_fingerprint_support_reports_none():
-    from lightweight_etl.memory import MemoryBackend
+    from understudy_data.memory import MemoryBackend
 
     class _Minimal(MemoryBackend):
         def read(self):

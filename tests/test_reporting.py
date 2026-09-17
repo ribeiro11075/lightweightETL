@@ -6,11 +6,11 @@ import threading
 
 import pytest
 
-from lightweight_etl.configuration import DatabaseConnectionConfig
-from lightweight_etl.dependencyGraph import JobOutcome, JobStatus
-from lightweight_etl.reporting import (DATABASE_HISTORY_SCHEMA, DatabaseHistory, FileHistory, historyRecords, notificationPayload, notify,
+from understudy_data.configuration import DatabaseConnectionConfig
+from understudy_data.dependencyGraph import JobOutcome, JobStatus
+from understudy_data.reporting import (DATABASE_HISTORY_SCHEMA, DatabaseHistory, FileHistory, historyRecords, notificationPayload, notify,
                                        pushMetrics, renderHistory, writeMetricsFile)
-from lightweight_etl.runner import RunResult
+from understudy_data.runner import RunResult
 
 
 def _result(*outcomes: JobOutcome, interrupted: bool = False) -> RunResult:
@@ -76,47 +76,47 @@ def _samples(text):
 
 
 def test_the_metrics_file_describes_the_cycle_and_each_job(tmp_path):
-    path = tmp_path / 'lightweight_etl.prom'
+    path = tmp_path / 'understudy.prom'
 
     writeMetricsFile(path, _result(COMPLETED, FAILED, SKIPPED), now=1_790_000_100.0)
 
     samples = _samples(path.read_text())
-    assert samples['lightweight_etl_job_last_run_success{job="loadOrders"}'] == 1.0
-    assert samples['lightweight_etl_job_last_run_rows{job="loadOrders"}'] == 42.0
-    assert samples['lightweight_etl_job_last_success_timestamp_seconds{job="loadOrders"}'] == 1_790_000_012.5
-    assert samples['lightweight_etl_job_last_run_success{job="loadCustomers"}'] == 0.0
-    assert 'lightweight_etl_job_last_success_timestamp_seconds{job="loadCustomers"}' not in samples
-    assert samples['lightweight_etl_job_last_run_skipped{job="loadInvoices"}'] == 1.0
-    assert samples['lightweight_etl_cycle_jobs{status="failed"}'] == 1.0
-    assert samples['lightweight_etl_cycle_rows'] == 42.0
-    assert path.read_text().count('# TYPE lightweight_etl_job_last_run_success gauge') == 1
+    assert samples['understudy_job_last_run_success{job="loadOrders"}'] == 1.0
+    assert samples['understudy_job_last_run_rows{job="loadOrders"}'] == 42.0
+    assert samples['understudy_job_last_success_timestamp_seconds{job="loadOrders"}'] == 1_790_000_012.5
+    assert samples['understudy_job_last_run_success{job="loadCustomers"}'] == 0.0
+    assert 'understudy_job_last_success_timestamp_seconds{job="loadCustomers"}' not in samples
+    assert samples['understudy_job_last_run_skipped{job="loadInvoices"}'] == 1.0
+    assert samples['understudy_cycle_jobs{status="failed"}'] == 1.0
+    assert samples['understudy_cycle_rows'] == 42.0
+    assert path.read_text().count('# TYPE understudy_job_last_run_success gauge') == 1
 
 
 def test_a_job_outside_the_cycle_keeps_its_last_values(tmp_path):
     """A job inside its refresh window isn't in the cycle; its series must not
     vanish, and its last success must stay what it was.
     """
-    path = tmp_path / 'lightweight_etl.prom'
+    path = tmp_path / 'understudy.prom'
     writeMetricsFile(path, _result(COMPLETED), now=1_790_000_100.0)
 
     writeMetricsFile(path, _result(FAILED._replace(job='loadOrders', finishedAt=1_790_000_200.0)), now=1_790_000_300.0)
     writeMetricsFile(path, _result(SKIPPED), now=1_790_000_400.0)
 
     samples = _samples(path.read_text())
-    assert samples['lightweight_etl_job_last_run_success{job="loadOrders"}'] == 0.0
-    assert samples['lightweight_etl_job_last_success_timestamp_seconds{job="loadOrders"}'] == 1_790_000_012.5
-    assert samples['lightweight_etl_job_last_run_skipped{job="loadInvoices"}'] == 1.0
-    assert samples['lightweight_etl_cycle_jobs{status="skipped"}'] == 1.0
+    assert samples['understudy_job_last_run_success{job="loadOrders"}'] == 0.0
+    assert samples['understudy_job_last_success_timestamp_seconds{job="loadOrders"}'] == 1_790_000_012.5
+    assert samples['understudy_job_last_run_skipped{job="loadInvoices"}'] == 1.0
+    assert samples['understudy_cycle_jobs{status="skipped"}'] == 1.0
 
 
 def test_job_names_are_escaped_in_labels_and_survive_a_rewrite(tmp_path):
-    path = tmp_path / 'lightweight_etl.prom'
+    path = tmp_path / 'understudy.prom'
     odd = COMPLETED._replace(job='say "hi" \\ there')
 
     writeMetricsFile(path, _result(odd))
     writeMetricsFile(path, _result())
 
-    assert 'lightweight_etl_job_last_run_rows{job="say \\"hi\\" \\\\ there"} 42.0' in path.read_text()
+    assert 'understudy_job_last_run_rows{job="say \\"hi\\" \\\\ there"} 42.0' in path.read_text()
 
 
 class _Recorder(http.server.BaseHTTPRequestHandler):
@@ -151,13 +151,13 @@ def test_metrics_are_pushed_per_job_and_per_cycle(webServer):
     pushMetrics(url, _result(COMPLETED, FAILED), now=1_790_000_100.0)
 
     paths = [request[1] for request in server.requests]
-    assert paths == ['/metrics/job/lightweight_etl/etl_job@base64/bG9hZE9yZGVycw==',
-                     '/metrics/job/lightweight_etl/etl_job@base64/bG9hZEN1c3RvbWVycw==',
-                     '/metrics/job/lightweight_etl']
+    assert paths == ['/metrics/job/understudy/etl_job@base64/bG9hZE9yZGVycw==',
+                     '/metrics/job/understudy/etl_job@base64/bG9hZEN1c3RvbWVycw==',
+                     '/metrics/job/understudy']
     assert all(request[0] == 'PUT' and request[2].startswith('text/plain') for request in server.requests)
-    assert 'lightweight_etl_job_last_run_rows 42.0' in server.requests[0][3]
+    assert 'understudy_job_last_run_rows 42.0' in server.requests[0][3]
     assert 'job=' not in server.requests[0][3]
-    assert 'lightweight_etl_cycle_rows 42' in server.requests[2][3]
+    assert 'understudy_cycle_rows 42' in server.requests[2][3]
 
 
 def test_a_notification_is_sent_only_when_a_cycle_does_not_succeed(webServer):
@@ -179,5 +179,5 @@ def test_a_notification_is_sent_only_when_a_cycle_does_not_succeed(webServer):
 def test_the_notification_text_leads_with_the_outcome():
     payload = notificationPayload(_result(COMPLETED))
 
-    assert payload['text'].startswith('lightweight-etl on ')
+    assert payload['text'].startswith('understudy on ')
     assert ': succeeded -- 1 completed, 0 failed, 0 skipped, 42 row(s)' in payload['text']

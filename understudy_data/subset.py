@@ -1,4 +1,4 @@
-"""Plans referentially complete subsets, for `lightweight-etl subset`.
+"""Plans referentially complete subsets, for `understudy subset`.
 
 A subset starts from one root table and a filter -- "customers created this
 year" -- and becomes one source query per table, so that every foreign key in
@@ -13,9 +13,10 @@ Two directions are followed:
 - Up, always: the rows that anything selected references. The products those
   line items point at, and whatever the products point at in turn.
 
-Each table's query is plain SQL built from nested EXISTS subqueries, so it runs
-on all six dialects and needs nothing materialized between tables. Queries grow
-with the depth of the graph; that is the price of running as ordinary data jobs.
+Each table's query is plain SQL: EXISTS subqueries over named common table
+expressions (WITH), so it runs on all six dialects -- MySQL from 8.0, MariaDB
+from 10.2 -- and needs nothing materialized between tables. Each selection is
+defined once, so a query grows linearly with the size of the graph.
 
 Cycles -- including a table that references itself, like employees.managerId --
 can't be closed without recursive SQL, which the dialects don't share. They're
@@ -30,7 +31,15 @@ from .databaseDialects import ForeignKey
 
 
 class SubsetError(Exception):
-    """The schema can't be subset as asked: a cycle, or an unknown table."""
+    """The schema can't be subset as asked: a cycle, or a chain too deep."""
+
+
+# The longest chain of selections, each built on the next, that a query may
+# carry. A chain of N tables followed down and back up needs 2N - 1: 31 for 16
+# tables, which MySQL accepts, and 33 for 17, which it refuses ("Too high
+# level of nesting"). SQL Server's planning time grows steeply past this too,
+# and gives out by 24 tables.
+MAX_SELECTION_DEPTH = 32
 
 
 class SubsetPlan(NamedTuple):
@@ -62,11 +71,23 @@ def parseIgnore(entries: Iterable[str]) -> Set[Tuple[str, str]]:
 
 
 class _Builder:
-    """Builds the nested queries, numbering aliases so no two scopes share one."""
+    """Builds each table's selection once, as a named common table expression.
 
-    def __init__(self, names: Dict[str, str]) -> None:
+    A table's rows are chosen by EXISTS over the selections of the tables it
+    is connected to. Writing those selections inline would copy each one into
+    every query that needs it -- and into every selection built on it -- so a
+    query grows exponentially with the depth of the schema, until a database
+    refuses it or, as PostgreSQL did, runs out of memory planning it. Named
+    once in a WITH clause and referred to by name, every query nests only
+    three levels deep and grows linearly.
+    """
+
+    def __init__(self, names: Dict[str, str], materialize: bool) -> None:
         self.names = names
+        self.materialize = materialize
         self.counter = 0
+        self.bodies: Dict[str, str] = {}
+        self.dependencies: Dict[str, List[str]] = {}
 
 
     def alias(self, prefix: str) -> str:
@@ -76,8 +97,8 @@ class _Builder:
         return '{}{}'.format(prefix, self.counter)
 
 
-    def exists(self, innerQuery: str, pairs: Sequence[Tuple[str, str]], outerAlias: str) -> str:
-        """EXISTS over `innerQuery`, matching inner columns to the outer row's.
+    def exists(self, selection: str, pairs: Sequence[Tuple[str, str]], outerAlias: str, dependencies: List[str]) -> str:
+        """EXISTS over the named `selection`, matching its columns to the outer row's.
 
         EXISTS rather than `(a, b) IN (...)`, because SQL Server has no
         row-value IN, and one form for single and composite keys is simpler.
@@ -85,13 +106,48 @@ class _Builder:
 
         inner = self.alias('s')
         conditions = ' AND '.join('{}.{} = {}.{}'.format(inner, innerColumn, outerAlias, outerColumn) for innerColumn, outerColumn in pairs)
+        dependencies.append(selection)
 
-        return 'EXISTS (SELECT 1 FROM ({}) {} WHERE {})'.format(innerQuery, inner, conditions)
+        return 'EXISTS (SELECT 1 FROM {} {} WHERE {})'.format(selection, inner, conditions)
 
 
-    def select(self, table: str, conditions: Sequence[str], alias: str) -> str:
+    def define(self, selection: str, table: str, conditions: Sequence[str], alias: str, dependencies: List[str]) -> None:
 
-        return 'SELECT * FROM {} {} WHERE {}'.format(self.names[table], alias, ' OR '.join('({})'.format(condition) for condition in conditions))
+        self.bodies[selection] = 'SELECT * FROM {} {} WHERE {}'.format(
+            self.names[table], alias, ' OR '.join('({})'.format(condition) for condition in conditions))
+        self.dependencies[selection] = dependencies
+
+
+    def query(self, selection: str) -> str:
+        """`WITH ... SELECT * FROM selection`, defining just what it needs, each
+        before its first use -- the order selections were defined in.
+        """
+
+        needed: Set[str] = set()
+        pending = [selection]
+        while pending:
+            name = pending.pop()
+            if name not in needed:
+                needed.add(name)
+                pending.extend(self.dependencies[name])
+
+        keyword = 'AS MATERIALIZED' if self.materialize else 'AS'
+        definitions = ',\n'.join('{} {} ({})'.format(name, keyword, self.bodies[name]) for name in self.bodies if name in needed)
+
+        return 'WITH {}\nSELECT * FROM {}'.format(definitions, selection)
+
+
+    def depth(self) -> int:
+        """The most selections on any chain of references."""
+
+        depths: Dict[str, int] = {}
+
+        def visit(name: str) -> int:
+            if name not in depths:
+                depths[name] = 1 + max((visit(dependency) for dependency in self.dependencies[name]), default=0)
+            return depths[name]
+
+        return max((visit(name) for name in self.bodies), default=0)
 
 
 def _traverse(parentEdges: Dict[str, List[ForeignKey]], childEdges: Dict[str, List[ForeignKey]], roots: Iterable[str],
@@ -151,13 +207,22 @@ def relatedTables(foreignKeys: Sequence[ForeignKey], roots: Iterable[str], follo
 
 
 def planSubset(foreignKeys: Sequence[ForeignKey], root: str, where: str, followChildren: bool = True,
-               ignore: Iterable[str] = ()) -> SubsetPlan:
+               ignore: Iterable[str] = (), materialize: bool = False) -> SubsetPlan:
     """The per-table queries for a subset rooted at `root`, filtered by `where`.
 
     `where` is SQL in the root table's own terms, and is embedded verbatim --
     it comes from the person running the command, like a sourceQuery does.
     Table names match case-insensitively, and the generated SQL uses each
     table's name as the database reports it.
+
+    `materialize` writes each selection as `AS MATERIALIZED`, so the database
+    computes it once instead of copying it into every query that uses it --
+    without it, PostgreSQL took minutes to plan a 12-table chain. Only
+    PostgreSQL and SQLite 3.35+ accept the keyword; see
+    DatabaseDialect.supportsMaterializedSelections.
+
+    A subset whose selections would nest deeper than MAX_SELECTION_DEPTH raises
+    SubsetError before any query is written.
     """
 
     ignoreSet = parseIgnore(ignore)
@@ -182,9 +247,11 @@ def planSubset(foreignKeys: Sequence[ForeignKey], root: str, where: str, followC
                           'ignored column is nullable or masked'.format(described))
 
     order = _topologicalOrder(included, parentEdges)
-    builder = _Builder(names)
+    builder = _Builder(names, materialize)
+    downSelection = {table: 'subset_down_{}'.format(position) for position, table in enumerate(order, start=1)}
+    keptSelection = {table: 'subset_kept_{}'.format(position) for position, table in enumerate(order, start=1)}
 
-    def downConditions(table: str, alias: str) -> List[str]:
+    def downConditions(table: str, alias: str, dependencies: List[str]) -> List[str]:
         """Why a table's rows are in the subset on the way down: the root's
         filter, or a reference to a row selected on the way down.
         """
@@ -193,27 +260,38 @@ def planSubset(foreignKeys: Sequence[ForeignKey], root: str, where: str, followC
             return [where]
 
         return [
-            builder.exists(downQueries[foreignKey.referencedTable.upper()], list(zip(foreignKey.referencedColumns, foreignKey.columns)), alias)
+            builder.exists(downSelection[foreignKey.referencedTable.upper()], list(zip(foreignKey.referencedColumns, foreignKey.columns)), alias,
+                           dependencies)
             for foreignKey in parentEdges.get(table, []) if foreignKey.referencedTable.upper() in down
             ]
 
-    downQueries: Dict[str, str] = {}
+    # Parents first on the way down: a row is selected for referencing a
+    # selected parent row.
     for table in order:
         if table in down:
             alias = builder.alias('t')
-            downQueries[table] = builder.select(table, downConditions(table, alias), alias)
+            dependencies: List[str] = []
+            builder.define(downSelection[table], table, downConditions(table, alias, dependencies), alias, dependencies)
 
-    # Children before parents: a parent's rows are whatever its selected
-    # children reference, so each child's final query must exist first.
-    finalQueries: Dict[str, str] = {}
+    # Children before parents for what is kept: a parent's rows are whatever
+    # its kept children reference, so each child's selection must exist first.
     for table in reversed(order):
         alias = builder.alias('t')
-        conditions = downConditions(table, alias) if table in down else []
+        dependencies = []
+        conditions = downConditions(table, alias, dependencies) if table in down else []
         for foreignKey in childEdges.get(table, []):
             child = foreignKey.table.upper()
             if child in included:
-                conditions.append(builder.exists(finalQueries[child], list(zip(foreignKey.columns, foreignKey.referencedColumns)), alias))
-        finalQueries[table] = builder.select(table, conditions, alias)
+                conditions.append(builder.exists(keptSelection[child], list(zip(foreignKey.columns, foreignKey.referencedColumns)), alias,
+                                                 dependencies))
+        builder.define(keptSelection[table], table, conditions, alias, dependencies)
+
+    depth = builder.depth()
+    if depth > MAX_SELECTION_DEPTH:
+        raise SubsetError('this subset chains {} selections, each built on the next; databases refuse or struggle past {} '
+                          '(a chain of about {} tables). Root it lower in the schema, follow only parents with --no-children, '
+                          'or split it into subsets rooted at different tables'.format(
+                              depth, MAX_SELECTION_DEPTH, MAX_SELECTION_DEPTH // 2))
 
     parents = {
         names[table]: sorted({names[foreignKey.referencedTable.upper()] for foreignKey in parentEdges.get(table, [])
@@ -221,7 +299,7 @@ def planSubset(foreignKeys: Sequence[ForeignKey], root: str, where: str, followC
         for table in order
         }
 
-    return SubsetPlan(tables=[names[table] for table in order], queries={names[table]: finalQueries[table] for table in order},
+    return SubsetPlan(tables=[names[table] for table in order], queries={names[table]: builder.query(keptSelection[table]) for table in order},
                       parents=parents, ignored=ignored)
 
 

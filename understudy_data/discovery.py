@@ -1,4 +1,4 @@
-"""Proposes masking policies from a live schema, for `lightweight-etl discover`.
+"""Proposes masking policies from a live schema, for `understudy discover`.
 
 A proposal is a starting point for review, never a finished policy. Each
 column's suggestion carries the reason it was made, and the rendered YAML puts
@@ -70,7 +70,7 @@ NAME_RULES: Tuple[Tuple[Tuple[str, ...], Dict[str, Any], str], ...] = (
     (('gender', 'sex', 'race', 'ethnicity', 'religion', 'nationality'), {'strategy': 'shuffle'},
      'name suggests a sensitive attribute; shuffle keeps the distribution but is not anonymization'),
     (('note', 'notes', 'comment', 'comments', 'description', 'remarks', 'memo', 'bio', 'message', 'body', 'freetext'),
-     {'strategy': 'null'}, 'name suggests free text, which can hold PII anywhere'),
+     {'strategy': 'null'}, 'name suggests free text, which can hold PII anywhere; redact keeps the text but only removes identifiers with a known shape'),
     )
 
 
@@ -87,7 +87,10 @@ class TableProposal(NamedTuple):
     columns: List[Suggestion]
 
 
-def _nameWords(name: str) -> Set[str]:
+def nameWords(name: str) -> Set[str]:
+    """A column name's words, lower-cased, plus the whole name run together:
+    `first_name`, `firstName` and `FIRSTNAME` all give `firstname`.
+    """
 
     split = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name)
     words = [word for word in re.split(r'[^a-z0-9]+', split.lower()) if word]
@@ -102,7 +105,7 @@ def personalDataHint(column: str) -> Optional[str]:
     values -- what `audit` uses to question a column that is kept as it is.
     """
 
-    words = _nameWords(column)
+    words = nameWords(column)
 
     return next((reason for ruleWords, policy, reason in NAME_RULES if policy['strategy'] != 'keep' and words & set(ruleWords)), None)
 
@@ -252,12 +255,12 @@ def suggestColumn(table: str, column: str, category: Optional[ColumnCategory], v
             return Suggestion(column, {'strategy': 'keep'}, 'numeric key (domain {}); use key if the ids themselves are meaningful'.format(domain))
         return Suggestion(column, {'strategy': 'key', 'domain': domain}, 'text key; masked one-to-one so references still match')
 
-    words = _nameWords(column)
+    words = nameWords(column)
     for ruleWords, policy, reason in NAME_RULES:
         if words & set(ruleWords) and _compatible(policy['strategy'], values, category):
             return Suggestion(column, dict(policy), reason)
 
-    if 'name' in words and _nameWords(table) & PERSONAL_TABLE_WORDS and _compatible('fakeName', values, category):
+    if 'name' in words and nameWords(table) & PERSONAL_TABLE_WORDS and _compatible('fakeName', values, category):
         return Suggestion(column, {'strategy': 'fakeName'}, 'a name column in a table that looks like it holds people')
 
     texts = [value for value in values if isinstance(value, str)]
@@ -309,7 +312,7 @@ def proposeTable(database: Any, table: str, sampleSize: int = DEFAULT_SAMPLE_SIZ
                  primaryKeys: Optional[Mapping[str, Sequence[str]]] = None) -> TableProposal:
     """Samples `table` and suggests a policy for each of its columns.
 
-    `database` is a lightweight_etl Database. foreignKeys and primaryKeys can be
+    `database` is a understudy_data Database. foreignKeys and primaryKeys can be
     passed in when proposing several tables, so the schema is read once.
     """
 

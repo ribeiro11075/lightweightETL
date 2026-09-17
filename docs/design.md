@@ -49,7 +49,9 @@ Masking is a stage of this same pipeline (transform, then mask, then load), so a
 
 On Oracle, a failure between the renames can leave the target under its temporary name; the job fails and says which statement failed.
 
-**Views and foreign keys.** PostgreSQL ties a view or foreign key to the table itself, not to its name. After a swap, a view over the target reads what is now the stage table, which the next run truncates. Recreate such views in `postTargetAdhocQueries`, or use `upsert` with a stage table. The other dialects resolve views by name, so views follow the swap.
+**Views.** PostgreSQL ties a view to the table itself, not to its name, so after the renames a view over the target would read what is now the stage table. The swap takes care of it: each view built directly on the target is recreated from its own definition in the same transaction, so it reads the new target, and keeps its grants and the views built on it. The other dialects resolve views by name, so their views follow the swap by themselves.
+
+**What isn't rebound on PostgreSQL:** materialized views, which keep reading the old table until recreated, and foreign keys in other tables that reference the target, which move with the old table. For a target that either points at, recreate them in `postTargetAdhocQueries`, or use `upsert` with a stage table instead of `swap`.
 
 
 ## Incremental loads
@@ -121,17 +123,17 @@ A job with `refresh: 5` whose predecessor has `refresh: 60` runs alone for 11 cy
 
 The trade-off is freshness, not correctness: between windows the dependent reads output up to an hour old. That's fine for a durable table, and wrong if the predecessor produces something transient the dependent consumes. Give both the same `refresh` in that case.
 
-`lightweight-etl jobs` shows which jobs are due and which are throttled.
+`understudy jobs` shows which jobs are due and which are throttled.
 
 
 ## Single runs, not a daemon
 
-`lightweight-etl run` makes one pass and exits, because it should compose with whatever already schedules work — cron, a systemd timer, a Kubernetes CronJob, an Airflow task — rather than compete with it. Those give you alerting, backfill and calendar-aware schedules that `refresh` can't express; `refresh` is a throttle, not a schedule.
+`understudy run` makes one pass and exits, because it should compose with whatever already schedules work — cron, a systemd timer, a Kubernetes CronJob, an Airflow task — rather than compete with it. Those give you alerting, backfill and calendar-aware schedules that `refresh` can't express; `refresh` is a throttle, not a schedule.
 
 `refresh` still works across separate invocations, since it's checked against the durable memory backend. Running every 5 minutes with `refresh: 60` correctly skips 11 runs in 12:
 
 ```cron
-*/5 * * * *  cd /srv/etl && lightweight-etl run --memory ./memory.yaml
+*/5 * * * *  cd /srv/etl && understudy run --memory ./memory.yaml
 ```
 
 `--forever` keeps the process resident, for freshness below cron's one-minute floor or where there's no scheduler.

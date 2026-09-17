@@ -23,11 +23,11 @@ import pytest
 
 pytest.importorskip('pymssql', reason='pymssql is not installed (pip install -e ".[mssql]")')
 
-from lightweight_etl.memory import DatabaseMemory
-from lightweight_etl.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from lightweight_etl.database import Database
-from lightweight_etl.memory import FileMemory
-from lightweight_etl.runner import runDataJobs
+from understudy_data.memory import DatabaseMemory
+from understudy_data.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from understudy_data.database import Database
+from understudy_data.memory import FileMemory
+from understudy_data.runner import runDataJobs
 
 pytestmark = pytest.mark.integration
 

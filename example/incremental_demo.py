@@ -27,7 +27,7 @@ import yaml
 exampleDirectory = Path(__file__).resolve().parent
 sys.path.append(str(exampleDirectory.parent))
 
-from lightweight_etl import Configuration, Database, DataJobsFile, FileMemory, expandEnvironmentVariables, runDataJobs
+from understudy_data import Configuration, Database, DataJobsFile, FileMemory, expandEnvironmentVariables, runDataJobs
 
 DEFAULT_WORKING_DIRECTORY = exampleDirectory / 'memory' / 'incremental_demo'
 
@@ -38,7 +38,7 @@ def loadConfiguration(name: str) -> Any:
     """Loads a demo YAML file the same way the CLI does, ${NAME} expansion included."""
 
     with open(DEMO_CONFIGURATION_DIRECTORY / name) as file:
-        return expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader))
+        return expandEnvironmentVariables(yaml.safe_load(file))
 
 
 def describe(database: Database, memory: FileMemory, heading: str) -> Optional[str]:

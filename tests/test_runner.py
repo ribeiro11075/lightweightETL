@@ -9,12 +9,12 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 
-from lightweight_etl.configuration import Configuration, ConfigurationError, DatabaseConnectionConfig, DatabaseType, DataJobConfig, DataJobsFile, \
+from understudy_data.configuration import Configuration, ConfigurationError, DatabaseConnectionConfig, DatabaseType, DataJobConfig, DataJobsFile, \
     InsertStrategy
-from lightweight_etl.dependencyGraph import DependencyGraph, JobOutcome, JobStatus
-from lightweight_etl.memory import FileMemory, MemoryBackend
-from lightweight_etl.runner import RunResult, _initializeWorker, _jobProcess, _runCycle, _runDataJob, _terminationHandling, _executeDataJob, runDataJobs
-from lightweight_etl.transform import TransformError
+from understudy_data.dependencyGraph import DependencyGraph, JobOutcome, JobStatus
+from understudy_data.memory import FileMemory, MemoryBackend
+from understudy_data.runner import RunResult, _initializeWorker, _jobProcess, _runCycle, _runDataJob, _terminationHandling, _executeDataJob, runDataJobs
+from understudy_data.transform import TransformError
 
 
 def test_worker_functions_are_picklable():
@@ -104,7 +104,7 @@ def fakeDatabases(monkeypatch):
             super().__init__(connectionSettings)
             created.append(self)
 
-    monkeypatch.setattr('lightweight_etl.runner.Database', _TrackedFakeDatabase)
+    monkeypatch.setattr('understudy_data.runner.Database', _TrackedFakeDatabase)
 
     return created
 
@@ -348,7 +348,7 @@ def _runDataWorkerOnce(monkeypatch, succeeds: bool, memoryFails: bool = False) -
             raise RuntimeError('job blew up')
         return JobOutcome(job=job, status=JobStatus.COMPLETED, rowCount=1)
 
-    monkeypatch.setattr('lightweight_etl.runner._executeDataJob', fakeExecute)
+    monkeypatch.setattr('understudy_data.runner._executeDataJob', fakeExecute)
 
     return _runJobWithTimeline(_dataJobConfig(), _TimelineMemory([], failing=memoryFails))
 
@@ -432,7 +432,7 @@ def test_execute_data_job_streams_rather_than_materializing_the_whole_extract(mo
         def alter(self, query: str) -> None:
             return None
 
-    monkeypatch.setattr('lightweight_etl.runner.Database', _StreamingFake)
+    monkeypatch.setattr('understudy_data.runner.Database', _StreamingFake)
 
     result = _executeDataJob('job1', _dataJobConfig(chunkSize=3), {'src': _dbConfig(), 'tgt': _dbConfig()})
 
@@ -609,7 +609,7 @@ def _runWatermarkWorkerOnce(monkeypatch, tmp_path, succeeds: bool, watermarks: D
             raise RuntimeError('job blew up')
         return JobOutcome(job=job, status=JobStatus.COMPLETED, rowCount=3, watermark='reached-{}'.format(watermark))
 
-    monkeypatch.setattr('lightweight_etl.runner._executeDataJob', fakeExecute)
+    monkeypatch.setattr('understudy_data.runner._executeDataJob', fakeExecute)
 
     return _runJobWithTimeline(_watermarkJobConfig(), _WatermarkTimelineMemory([], watermarks))
 
@@ -751,7 +751,7 @@ def test_the_data_worker_reports_row_count_and_error_on_its_outcome(monkeypatch,
     def fakeExecute(job: Any, jobConfig: Any, databaseConfiguration: Any, watermark: Any = None) -> JobOutcome:
         return JobOutcome(job=job, status=JobStatus.COMPLETED, rowCount=42)
 
-    monkeypatch.setattr('lightweight_etl.runner._executeDataJob', fakeExecute)
+    monkeypatch.setattr('understudy_data.runner._executeDataJob', fakeExecute)
 
     outcome = _runDataJob('job1', _dataJobConfig(), {}, _TimelineMemory([]))
 
@@ -767,7 +767,7 @@ def test_the_data_worker_records_the_failure_text_on_its_outcome(monkeypatch, tm
     def fakeExecute(job: Any, jobConfig: Any, databaseConfiguration: Any, watermark: Any = None) -> JobOutcome:
         raise RuntimeError('the source went away')
 
-    monkeypatch.setattr('lightweight_etl.runner._executeDataJob', fakeExecute)
+    monkeypatch.setattr('understudy_data.runner._executeDataJob', fakeExecute)
 
     outcome = _runDataJob('job1', _dataJobConfig(), {}, _TimelineMemory([]))
 
@@ -856,7 +856,7 @@ def _retryJobConfig(**overrides: Any) -> DataJobConfig:
 
 def _runRetryWorker(monkeypatch, tmp_path, attempt: Any, jobConfig: Any = None) -> List[Any]:
 
-    monkeypatch.setattr('lightweight_etl.runner._executeDataJob', lambda job, config, databases, watermark=None: attempt())
+    monkeypatch.setattr('understudy_data.runner._executeDataJob', lambda job, config, databases, watermark=None: attempt())
 
     return [_runDataJob('job1', jobConfig or _retryJobConfig(), {}, _TimelineMemory([]))]
 
@@ -935,7 +935,7 @@ def test_retry_backoff_grows_between_attempts(monkeypatch, tmp_path):
     interval while it tries to come back.
     """
     delays = []
-    monkeypatch.setattr('lightweight_etl.runner.time.sleep', lambda seconds: delays.append(seconds))
+    monkeypatch.setattr('understudy_data.runner.time.sleep', lambda seconds: delays.append(seconds))
 
     def alwaysFails():
         raise OSError('down')
@@ -959,7 +959,7 @@ def test_the_stored_watermark_is_read_again_on_each_attempt(monkeypatch):
                 raise OSError('memory database unavailable')
             return {'job1': 'stored'}
 
-    monkeypatch.setattr('lightweight_etl.runner._executeDataJob',
+    monkeypatch.setattr('understudy_data.runner._executeDataJob',
                         lambda job, config, databases, watermark=None: JobOutcome(job=job, status=JobStatus.COMPLETED, watermark=watermark))
     memory = _FlakyWatermarks([], {})
 
@@ -1070,7 +1070,7 @@ def test_a_signal_stops_new_jobs_from_starting_and_reports_them_skipped():
     """
     graph = DependencyGraph({'first': _dataJobConfig(), 'second': _dataJobConfig(predecessors=['first'])})
 
-    _runCycle(graph, 1, {}, _TimelineMemory([]), {'terminating': True}, logQueue=None, logLevel=0)
+    _runCycle(graph, 1, {}, _TimelineMemory([]), {'terminating': True}, logLevel=0)
 
     assert {outcome.job: outcome.status for outcome in graph.outcomes} == {'first': JobStatus.SKIPPED, 'second': JobStatus.SKIPPED}
     assert 'stopped by a signal' in graph.outcomes[0].error
@@ -1105,7 +1105,7 @@ def _maskedSqliteJob(databases, key='an-original-masking-key', **overrides):
 
 
 def test_a_masked_job_records_the_key_it_completed_under(tmp_path, sqliteDatabase):
-    from lightweight_etl.masking import keyFingerprint
+    from understudy_data.masking import keyFingerprint
 
     _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
 
@@ -1123,7 +1123,7 @@ def test_a_changed_key_stops_an_upsert_job_before_anything_runs(tmp_path, sqlite
 
 
 def test_a_changed_key_is_accepted_when_acknowledged_and_then_recorded(tmp_path, sqliteDatabase):
-    from lightweight_etl.masking import keyFingerprint
+    from understudy_data.masking import keyFingerprint
 
     _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
     jobsFile = Configuration.validateJobConfiguration(
@@ -1160,3 +1160,40 @@ def test_each_cycle_is_reported_to_on_cycle_and_its_failures_are_contained(tmp_p
 
     assert result.succeeded
     assert [[outcome.job for outcome in cycle.outcomes] for cycle in seen] == [['copies']]
+
+
+def test_stopping_a_job_mid_log_record_leaves_the_other_jobs_working(tmp_path, sqliteDatabase):
+    """Jobs used to share one log queue, and its lock. Stopping a job while it
+    held that lock left every later job unable to log or exit, and the run
+    hung. Each job now writes to a pipe of its own.
+    """
+    jobs = {'noisy': _sqliteJob(sqliteDatabase, timeoutSeconds=1, sourceQueryColumnTransforms={'name': ['tests.crashingTransforms:logWithoutPause']})}
+    jobs.update({'after{}'.format(index): _sqliteJob(sqliteDatabase) for index in range(3)})
+    jobsFile = Configuration.validateJobConfiguration({'workers': 1, 'jobs': jobs}, DataJobsFile)
+    logPath = tmp_path / 'run.log'
+    results: List[RunResult] = []
+
+    thread = threading.Thread(target=lambda: results.append(runDataJobs(
+        jobsFile=jobsFile, databaseConfiguration=sqliteDatabase, memory=FileMemory(tmp_path / 'memory.yaml'), logFile=logPath)), daemon=True)
+    thread.start()
+    thread.join(timeout=60)
+
+    assert not thread.is_alive(), 'the run hung after a job was stopped'
+    statuses = {outcome.job: outcome.status for outcome in results[0].outcomes}
+    assert statuses == {'noisy': JobStatus.FAILED, 'after0': JobStatus.COMPLETED, 'after1': JobStatus.COMPLETED, 'after2': JobStatus.COMPLETED}
+    log = logPath.read_text()
+    assert all('Completed after{} (2 row(s))'.format(index) in log for index in range(3))
+
+
+def test_a_noisy_job_does_not_starve_the_others(tmp_path, sqliteDatabase):
+    """A job that logs without pause must not keep the others' records and
+    outcomes from being read -- here the quiet job finishes long before the
+    noisy one is stopped.
+    """
+    jobs = {'noisy': _sqliteJob(sqliteDatabase, timeoutSeconds=5, sourceQueryColumnTransforms={'name': ['tests.crashingTransforms:logWithoutPause']}),
+            'quiet': _sqliteJob(sqliteDatabase)}
+    result = _runJobs(jobs, sqliteDatabase, tmp_path, workers=2)
+
+    quiet = next(outcome for outcome in result.outcomes if outcome.job == 'quiet')
+    assert quiet.status == JobStatus.COMPLETED
+    assert quiet.finishedAt - quiet.startedAt < 4

@@ -1,6 +1,6 @@
 # Using it as a library
 
-Most deployments should use the `lightweight-etl` command. Embed the library when a load needs to be one step inside a larger Python program.
+Most deployments should use the `understudy` command. Embed the library when a load needs to be one step inside a larger Python program.
 
 The package does no file I/O of its own: you load configuration however you like and hand it over as plain data. It also never requires every driver — each is imported only when a connection of that type is opened.
 
@@ -16,7 +16,7 @@ The package does no file I/O of its own: you load configuration however you like
 
 ```python
 import yaml
-from lightweight_etl import (Configuration, DataJobsFile, FileMemory,
+from understudy_data import (Configuration, DataJobsFile, FileMemory,
                              expandEnvironmentVariables, runDataJobs)
 
 def load(path):
@@ -109,7 +109,7 @@ A `MemoryBackend` holds what the scheduler needs *before* a job runs: when it la
 `DatabaseMemory` needs its table to exist first — the library never creates tables you didn't ask for. `DATABASE_MEMORY_SCHEMA` is the shape; adjust the column types for your database:
 
 ```sql
-CREATE TABLE lightweight_etl_memory (
+CREATE TABLE understudy_memory (
     job VARCHAR(255) PRIMARY KEY,
     last_run DOUBLE PRECISION,
     watermark_value VARCHAR(255),
@@ -143,8 +143,8 @@ What the CLI's `--history`, `--metrics` and `--notify-url` do, as functions to c
 
 ```python
 import os
-from lightweight_etl import FileHistory, notify, writeMetricsFile
-from lightweight_etl.reporting import newRunId
+from understudy_data import FileHistory, notify, writeMetricsFile
+from understudy_data.reporting import newRunId
 
 history = FileHistory('history.jsonl')
 
@@ -172,7 +172,7 @@ The pieces behind `masking:`, `discover` and `subset` are all importable, and no
 
 ```python
 import os
-from lightweight_etl import Database, MaskingPlan, planSubset, proposeTable
+from understudy_data import Database, MaskingPlan, planSubset, proposeTable
 
 plan = MaskingPlan(key=os.environ['MASKING_KEY'], columns={'id': 'keep', 'email': 'email'})
 masking = plan.bind(['id', 'email'])      # raises MaskingError for an uncovered column
@@ -201,13 +201,14 @@ with Database(connectionSettings=databases['prod']) as database:
 | `relatedTables(foreignKeys, roots, followChildren=True)` | Every table a subset from `roots` would copy. |
 | `schema.readTable`, `schema.createStatements`, `schema.renderScript` | A table's shape, CREATE TABLE statements for a target dialect, and the script form. |
 | `schema.clearTables(database, tables)` | Empties tables children-first, in one transaction. |
-| `planSubset(foreignKeys, root, where, followChildren=True, ignore=())` | A `SubsetPlan`: tables in load order, a query for each, each table's parents, and the foreign keys ignored. Raises `SubsetError` on a cycle. |
+| `planSubset(foreignKeys, root, where, followChildren=True, ignore=(), materialize=False)` | A `SubsetPlan`: tables in load order, a query for each, each table's parents, and the foreign keys ignored. Raises `SubsetError` on a cycle, or on a chain deeper than 16 tables. Pass `materialize=database.dialect.supportsMaterializedSelections()`. |
+| `synthesizeTable(database, table, rows, seed=0)`, `planTable(...)` | Fill a table with generated rows, returning how many; or just describe how, with a row generator. Raise `SynthesisError`. |
 
 
 ## Streaming directly
 
 ```python
-from lightweight_etl import Database
+from understudy_data import Database
 
 with Database(connectionSettings=databases['app']) as database:
     columns, chunks = database.stream('select * from orders', chunkSize=5000)

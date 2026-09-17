@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from lightweight_etl.configuration import (
+from understudy_data.configuration import (
     Configuration,
     ConfigurationError,
     DatabaseConnectionConfig,

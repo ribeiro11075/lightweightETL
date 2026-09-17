@@ -2,8 +2,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lightweight_etl.configuration import DatabaseConnectionConfig, DatabaseType
-from lightweight_etl.database import Database
+from understudy_data.configuration import DatabaseConnectionConfig, DatabaseType
+from understudy_data.database import Database
 
 
 def _mockedDatabase(dbType: DatabaseType) -> Database:
@@ -16,7 +16,7 @@ def _mockedDatabase(dbType: DatabaseType) -> Database:
     database = Database.__new__(Database)
     database.connectionSettings = settings
     database.type = dbType
-    from lightweight_etl.database import DIALECTS
+    from understudy_data.database import DIALECTS
     database.dialect = DIALECTS[dbType]
     database.cursor = MagicMock()
     database.connection = MagicMock()
@@ -59,7 +59,7 @@ def test_upsert_from_stage_executes_for_every_dialect(dbType):
 
 @pytest.mark.parametrize('dbType,expectedStatementCount', [
     (DatabaseType.MYSQL, 1),
-    (DatabaseType.POSTGRESQL, 1),
+    (DatabaseType.POSTGRESQL, 2),  # the dependent-views lookup, then the renames
     (DatabaseType.ORACLE, 3),
     (DatabaseType.MSSQL, 1),
     (DatabaseType.SQLITE, 4),
@@ -123,7 +123,7 @@ def test_an_upsert_into_a_table_without_a_primary_key_fails_rather_than_guessing
     """With no key there's nothing to match rows on. MySQL used to insert a
     duplicate of every row on every run; the others generated invalid SQL.
     """
-    from lightweight_etl.configuration import ConfigurationError
+    from understudy_data.configuration import ConfigurationError
 
     database = _mockedDatabase(dbType)
     database.getPrimaryColumnNames = MagicMock(return_value=[])
@@ -141,11 +141,10 @@ def test_an_upsert_into_a_table_without_a_primary_key_fails_rather_than_guessing
 def test_swap_puts_the_temporary_table_in_the_stage_tables_schema(target, stage, expectedTemp):
     database = _mockedDatabase(DatabaseType.MYSQL)
     database.dialect = MagicMock()
-    database.dialect.swapQueries.return_value = []
 
     database.swap(targetTable=target, stageTable=stage)
 
-    database.dialect.swapQueries.assert_called_once_with(targetTable=target, stageTable=stage, tempTable=expectedTemp)
+    database.dialect.swap.assert_called_once_with(database.cursor, targetTable=target, stageTable=stage, tempTable=expectedTemp)
 
 
 def test_postgresql_inserts_through_copy_one_batch_at_a_time():
@@ -171,9 +170,9 @@ def test_a_copied_upsert_sends_only_the_last_row_of_each_key():
     (copy,) = database.cursor.copy_expert.call_args_list
     assert copy.args[1].getvalue() == '1\tc\n2\tb\n'
     statements = [call.args[0] for call in database.cursor.execute.call_args_list]
-    assert statements[0].startswith('CREATE TEMPORARY TABLE IF NOT EXISTS lightweight_etl_upsert_')
+    assert statements[0].startswith('CREATE TEMPORARY TABLE IF NOT EXISTS understudy_upsert_')
     assert 'ON COMMIT DELETE ROWS AS SELECT id, name FROM people WITH NO DATA' in statements[0]
-    assert statements[1].startswith('INSERT INTO people (id, name) SELECT id, name FROM lightweight_etl_upsert_')
+    assert statements[1].startswith('INSERT INTO people (id, name) SELECT id, name FROM understudy_upsert_')
 
 
 def test_chunk_insert_splits_data_into_multiple_batches():

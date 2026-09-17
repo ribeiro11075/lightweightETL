@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lightweight_etl.configuration import Configuration, ConfigurationError, DataJobsFile, expandEnvironmentVariables
-from lightweight_etl.transform import resolveTransformer
+from understudy_data.configuration import Configuration, ConfigurationError, DataJobsFile, expandEnvironmentVariables
+from understudy_data.transform import resolveTransformer
 
 CONFIGURATION_DIRECTORY = Path(__file__).resolve().parents[1] / 'example' / 'configuration'
 
@@ -78,7 +78,7 @@ def test_the_masking_demo_configuration_validates_as_a_complete_config_directory
 
 
 def test_every_transformer_the_sample_references_actually_resolves():
-    """The sample points at lightweight_etl.builtinTransforms now that those ship
+    """The sample points at understudy_data.builtinTransforms now that those ship
     with the package -- so a rename there breaks this rather than a user's config.
     """
     jobsFile = Configuration.validateJobConfiguration(_load('jobs.yaml'), DataJobsFile)

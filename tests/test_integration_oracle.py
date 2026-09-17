@@ -4,7 +4,7 @@ See test_integration_mysql.py for the rationale. This is the dialect that was,
 until now, only ever verified as generated SQL text against a mocked cursor --
 cx_Oracle wouldn't even compile in earlier attempts at this. Switching to
 oracledb's default "thin" mode (pure Python, no Oracle Client install, see
-lightweight_etl/databaseDialects.py) finally made a real connection possible, including
+understudy_data/databaseDialects.py) finally made a real connection possible, including
 proving the MERGE-based upsert/upsertFromStage and the three-statement swap
 (Oracle's cursor.execute() only runs one statement at a time) actually work.
 
@@ -25,17 +25,17 @@ import pytest
 
 pytest.importorskip('oracledb', reason='oracledb is not installed (pip install -e ".[oracle]")')
 
-from lightweight_etl.memory import DatabaseMemory
-from lightweight_etl.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from lightweight_etl.database import Database
-from lightweight_etl.memory import FileMemory
-from lightweight_etl.runner import runDataJobs
+from understudy_data.memory import DatabaseMemory
+from understudy_data.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from understudy_data.database import Database
+from understudy_data.memory import FileMemory
+from understudy_data.runner import runDataJobs
 
 pytestmark = pytest.mark.integration
 
 CONNECTION_SETTINGS = DatabaseConnectionConfig(
-    type=DatabaseType.ORACLE, user='system', password='oracle', database='lightweight_etl_test',
-    host='127.0.0.1', port=1522, serviceName='lightweight_etl_test',
+    type=DatabaseType.ORACLE, user='system', password='oracle', database='understudy_test',
+    host='127.0.0.1', port=1522, serviceName='understudy_test',
     )
 
 

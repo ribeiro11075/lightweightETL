@@ -1,6 +1,6 @@
 import pytest
 
-from lightweight_etl.databaseDialects import ColumnCategory, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, SQLiteDialect
+from understudy_data.databaseDialects import ColumnCategory, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, SQLiteDialect
 
 ALL_COLUMNS = ['id', 'name', 'amount']
 PRIMARY_KEY_COLUMNS = ['id']
@@ -340,7 +340,7 @@ def test_upsert_from_stage_of_a_key_only_table_is_valid_sql(dialect):
 def test_copy_text_escapes_what_the_text_format_treats_specially():
     import datetime
     import decimal
-    from lightweight_etl.databaseDialects import _copyText
+    from understudy_data.databaseDialects import _copyText
 
     stream = _copyText([
         (None, 'a\tb\nc\\d\re', True, False, decimal.Decimal('1.50'), float('nan'), float('-inf'), 2.5),
@@ -354,7 +354,7 @@ def test_copy_text_escapes_what_the_text_format_treats_specially():
 
 def test_copy_text_gives_up_on_a_value_it_cannot_spell():
     import datetime
-    from lightweight_etl.databaseDialects import _copyText
+    from understudy_data.databaseDialects import _copyText
 
     assert _copyText([(1, [1, 2])]) is None
     assert _copyText([(1, datetime.timedelta(days=1))]) is None
@@ -397,7 +397,7 @@ def test_only_postgresql_and_mssql_have_a_bulk_path():
 
 
 def _settings(**overrides):
-    from lightweight_etl.configuration import DatabaseConnectionConfig
+    from understudy_data.configuration import DatabaseConnectionConfig
 
     fields = dict(type='postgresql', user='u', password='secret', database='d', host='h', port=5432)
     fields.update(overrides)
@@ -412,7 +412,7 @@ def test_connect_arguments_add_the_options_to_the_fields():
 
 
 def test_an_option_that_duplicates_a_field_is_refused():
-    from lightweight_etl.configuration import ConfigurationError
+    from understudy_data.configuration import ConfigurationError
 
     with pytest.raises(ConfigurationError, match='options host, password duplicate'):
         PostgreSQLDialect().connectArguments(_settings(options={'host': 'elsewhere', 'password': 'other', 'sslmode': 'require'}))

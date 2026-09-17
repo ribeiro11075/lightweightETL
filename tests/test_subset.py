@@ -2,12 +2,13 @@
 queries against a real SQLite schema and confirming every copied foreign key
 points at a copied row.
 """
+import re
 import sqlite3
 
 import pytest
 
-from lightweight_etl.databaseDialects import ForeignKey
-from lightweight_etl.subset import SubsetError, parseIgnore, planSubset
+from understudy_data.databaseDialects import ForeignKey
+from understudy_data.subset import SubsetError, parseIgnore, planSubset
 
 SCHEMA = '''
 CREATE TABLE regions (id INT PRIMARY KEY, name TEXT);
@@ -22,7 +23,7 @@ CREATE TABLE unrelated (id INT PRIMARY KEY);
 
 
 def foreignKeysOf(connection):
-    from lightweight_etl.databaseDialects import SQLiteDialect
+    from understudy_data.databaseDialects import SQLiteDialect
 
     return SQLiteDialect().foreignKeys(connection.cursor())
 
@@ -185,3 +186,69 @@ def test_no_scope_reuses_an_alias_from_a_scope_enclosing_it(shop):
                 alias = token.split()[2]
                 assert alias not in {alias for _, alias in enclosing}
                 enclosing.append((depth, alias))
+
+
+def _chain(length):
+    return [ForeignKey(table='c{}'.format(index), columns=('parent_id',), referencedTable='c{}'.format(index - 1),
+                       referencedColumns=('id',), name='fk{}'.format(index)) for index in range(1, length)]
+
+
+def _nesting(query):
+    depth = deepest = 0
+    for character in query:
+        depth += {'(': 1, ')': -1}.get(character, 0)
+        deepest = max(deepest, depth)
+    return deepest
+
+
+def test_queries_stay_shallow_and_grow_linearly_with_depth():
+    """Selections used to be pasted into each other, so a 12-table chain gave
+    queries 67 parentheses deep, and PostgreSQL ran out of memory planning one
+    -- restarting the whole server. Each selection is now defined once.
+    """
+    small, large = planSubset(_chain(4), 'c0', 'id < 5'), planSubset(_chain(16), 'c0', 'id < 5')
+
+    assert max(_nesting(query) for query in large.queries.values()) == 3
+    assert max(map(len, large.queries.values())) < 6 * max(map(len, small.queries.values()))
+
+
+def test_each_query_defines_only_the_selections_it_uses_before_using_them():
+    """Rooted at the bottom of a chain and following only parents: the top
+    table's rows are those its kept child references, and so on down.
+    """
+    plan = planSubset(_chain(4), 'c3', 'id < 5', followChildren=False)
+    top, bottom = plan.queries['c0'], plan.queries['c3']
+
+    assert plan.tables == ['c0', 'c1', 'c2', 'c3']
+    assert top.index('subset_kept_4 AS') < top.index('subset_kept_3 AS') < top.index('subset_kept_2 AS') < top.index('subset_kept_1 AS')
+    assert top.endswith('SELECT * FROM subset_kept_1')
+    assert re.fullmatch(r'WITH subset_kept_4 AS \(SELECT \* FROM c3 t\d+ WHERE \(id < 5\)\)\nSELECT \* FROM subset_kept_4', bottom)
+
+
+def test_selections_can_be_materialized():
+    query = planSubset(_chain(3), 'c0', 'id < 5', materialize=True).queries['c1']
+
+    assert query.count(' AS MATERIALIZED (SELECT') == query.count(' AS ')
+    assert ' AS (SELECT' not in query
+
+
+def test_a_subset_too_deep_for_the_databases_is_refused_up_front():
+    planSubset(_chain(16), 'c0', 'id < 5')
+
+    with pytest.raises(SubsetError, match='chains 33 selections'):
+        planSubset(_chain(17), 'c0', 'id < 5')
+
+
+@pytest.mark.parametrize('materialize', [False, True])
+def test_a_deep_chain_selects_the_same_rows_either_way(materialize):
+    connection = sqlite3.connect(':memory:')
+    connection.execute('CREATE TABLE c0 (id INT PRIMARY KEY, parent_id INT)')
+    connection.executemany('INSERT INTO c0 VALUES (?, NULL)', [(index,) for index in range(20)])
+    for level in range(1, 16):
+        connection.execute('CREATE TABLE c{} (id INT PRIMARY KEY, parent_id INT REFERENCES c{}(id))'.format(level, level - 1))
+        connection.executemany('INSERT INTO c{} VALUES (?, ?)'.format(level), [(index, (index * 7) % 20) for index in range(20)])
+
+    plan = planSubset(foreignKeysOf(connection), 'c0', 'id < 5', materialize=materialize)
+
+    assert assertReferentiallyComplete(connection, plan) is None
+    assert len(connection.execute(plan.queries['c0']).fetchall()) == 5

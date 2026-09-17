@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import contextlib
 import copy
 import json
 import logging
-import logging.handlers
-import multiprocessing as mp
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Optional
 
-LOGGER_NAME = 'lightweight_etl'
+LOGGER_NAME = 'understudy_data'
 
 TEXT_FORMAT = '%(asctime)s.%(msecs)03d [%(levelname)s] :: %(message)s [%(filename)s:%(lineno)d]'
 DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
@@ -59,33 +56,64 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
-class _RecordForwarder(logging.handlers.QueueHandler):
-    """Sends a worker process's records to the parent, unformatted.
+def portableRecord(record: logging.LogRecord) -> logging.LogRecord:
+    """A copy of `record` that can be pickled into another process, unformatted.
 
-    The stock QueueHandler formats each record into its message before
-    queueing it, which would bake a text layout into what the parent may want
-    as JSON. This only does what pickling requires: resolves the message's
-    arguments, and turns the exception into text, since a traceback can't
-    cross a process boundary. The parent's formatter renders both --
+    Formatting here would bake a text layout into what the receiving process
+    may want as JSON, so this only does what pickling requires: resolves the
+    message's arguments, and turns the exception into text, since a traceback
+    can't cross a process boundary. The receiver's formatter renders both --
     logging.Formatter appends exc_text by itself, and JsonFormatter reads it.
     """
 
-    def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
+    record = copy.copy(record)
+    if record.exc_info:
+        record.exc_text = logging.Formatter().formatException(record.exc_info)
+    record.msg = record.getMessage()
+    record.args = None
+    record.exc_info = None
 
-        record = copy.copy(record)
-        if record.exc_info:
-            record.exc_text = logging.Formatter().formatException(record.exc_info)
-        record.msg = record.getMessage()
-        record.args = None
-        record.exc_info = None
-
-        return record
+    return record
 
 
-def forwardToQueue(queue: Any, level: int) -> None:
-    """Routes this process's package records to `queue`, and nowhere else.
+class ConnectionForwarder(logging.Handler):
+    """Sends a job process's records to the main process over its own pipe.
 
-    Called in each worker process. A forked worker inherits its parent's
+    One pipe per job, owned by that job alone. A queue shared by every job has
+    a lock shared by every job too, and a job stopped while holding it -- past
+    its timeout, or killed for memory -- would leave every other job unable to
+    log or exit. Nothing here outlives the process that owns it.
+
+    `send` shares the handler's lock, so the job's outcome, sent on the same
+    pipe, never interleaves with a record being written from another thread.
+    """
+
+    def __init__(self, connection: Any) -> None:
+        super().__init__()
+        self.connection = connection
+
+
+    def send(self, kind: str, payload: Any) -> None:
+
+        self.acquire()
+        try:
+            self.connection.send((kind, payload))
+        finally:
+            self.release()
+
+
+    def emit(self, record: logging.LogRecord) -> None:
+
+        try:
+            self.connection.send(('log', portableRecord(record)))
+        except Exception:
+            self.handleError(record)
+
+
+def forwardToConnection(connection: Any, level: int) -> ConnectionForwarder:
+    """Routes this process's package records to `connection`, and nowhere else.
+
+    Called in each job process. A forked process inherits its parent's
     handlers; they are detached (not closed -- the parent still owns them), so
     every record reaches a destination exactly once, through the parent.
     """
@@ -93,42 +121,21 @@ def forwardToQueue(queue: Any, level: int) -> None:
     logger = logging.getLogger(LOGGER_NAME)
     for handler in list(logger.handlers):
         logger.removeHandler(handler)
-    logger.addHandler(_RecordForwarder(queue))
+    forwarder = ConnectionForwarder(connection)
+    logger.addHandler(forwarder)
     logger.setLevel(level)
     logger.propagate = False
 
-
-class _ToPackageLogger(logging.Handler):
-    """Hands a forwarded record to the package logger's current handlers."""
-
-    def emit(self, record: logging.LogRecord) -> None:
-
-        logging.getLogger(LOGGER_NAME).handle(record)
+    return forwarder
 
 
-@contextlib.contextmanager
-def receiveForwardedRecords(context: Any = mp) -> Iterator[Any]:
-    """A queue for workers to log to, drained into this process's handlers.
-
-    So a worker's records get the same destinations, format and levels as the
-    parent's own -- a file, stderr, JSON, --quiet -- whatever the caller set up,
-    without each worker having to be told. Leaving the block waits for every
-    record already queued, so start and stop it around the workers' lifetime.
-
-    `context` is the multiprocessing context the workers are started with; a
-    queue only crosses into processes of the context that made it.
+def handleForwardedRecord(record: logging.LogRecord) -> None:
+    """Writes a record forwarded from a job process with this process's own
+    handlers -- so it gets the same destinations, format and levels as
+    everything else: a file, stderr, JSON, --quiet.
     """
 
-    queue: Any = context.Queue()
-    listener = logging.handlers.QueueListener(queue, _ToPackageLogger())
-    listener.start()
-
-    try:
-        yield queue
-    finally:
-        listener.stop()
-        queue.close()
-        queue.join_thread()
+    logging.getLogger(LOGGER_NAME).handle(record)
 
 
 class Log:
@@ -143,8 +150,8 @@ class Log:
         Handlers are deduplicated on the resolved file path, because the logger is
         process-wide: the CLI and runDataJobs both build a Log for the same file.
         Re-instantiating for an existing destination updates its level and leaves
-        its format alone. Worker processes don't build one at all; their records
-        come back through receiveForwardedRecords.
+        its format alone. Job processes don't build one at all; their records
+        come back through handleForwardedRecord.
 
         logFile is optional so a caller that wants a stream -- the CLI, since a
         container only collects stdout/stderr -- needn't name a file. logFormat is

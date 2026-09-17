@@ -18,10 +18,10 @@ import uuid
 
 import pytest
 
-from lightweight_etl.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from lightweight_etl.database import Database
-from lightweight_etl.runner import _executeDataJob
-from lightweight_etl.schema import clearTables, createStatements, readTable
+from understudy_data.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from understudy_data.database import Database
+from understudy_data.runner import _executeDataJob
+from understudy_data.schema import clearTables, createStatements, readTable
 from servers import SERVERS
 
 pytestmark = pytest.mark.integration

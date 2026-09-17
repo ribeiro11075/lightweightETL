@@ -5,7 +5,7 @@ objects to, and it was the state of this package until now.
 """
 import pytest
 
-from lightweight_etl.configuration import Configuration, ConfigurationError, expandEnvironmentVariables
+from understudy_data.configuration import Configuration, ConfigurationError, expandEnvironmentVariables
 
 
 def test_a_variable_is_replaced_from_the_environment(monkeypatch):
@@ -119,7 +119,7 @@ def test_a_file_reference_can_be_escaped(tmp_path):
 
 
 def _connection(**overrides):
-    from lightweight_etl.configuration import DatabaseConnectionConfig
+    from understudy_data.configuration import DatabaseConnectionConfig
 
     fields = dict(type='postgresql', user='u', database='d', host='h')
     fields.update(overrides)
@@ -150,14 +150,14 @@ def test_a_password_command_may_be_one_string(tmp_path):
     ])
 def test_a_failing_password_command_raises_without_revealing_output(script, message):
     import sys
-    from lightweight_etl.configuration import PasswordCommandError
+    from understudy_data.configuration import PasswordCommandError
 
     with pytest.raises(PasswordCommandError, match=message):
         _connection(passwordCommand=[sys.executable, '-c', script]).plainPassword()
 
 
 def test_a_missing_password_command_raises_a_retryable_error():
-    from lightweight_etl.configuration import PasswordCommandError
+    from understudy_data.configuration import PasswordCommandError
 
     with pytest.raises(PasswordCommandError, match='could not run'):
         _connection(passwordCommand=['/no/such/command']).plainPassword()
@@ -174,8 +174,8 @@ def test_a_network_database_needs_a_password_or_a_command():
 
 
 def test_checking_options_never_runs_the_password_command():
-    from lightweight_etl.database import DIALECTS
-    from lightweight_etl.configuration import DatabaseType
+    from understudy_data.database import DIALECTS
+    from understudy_data.configuration import DatabaseType
 
     settings = _connection(passwordCommand=['/no/such/command'], options={'sslmode': 'require'})
 

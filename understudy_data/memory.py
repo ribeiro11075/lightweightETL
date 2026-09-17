@@ -131,14 +131,13 @@ class MemoryBackend(ABC):
 
 
 def _yamlSafe(value: Any) -> Any:
-    """Coerce a driver's value into something yaml.dump/FullLoader round-trips.
+    """Coerce a driver's value into something yaml.safe_dump/safe_load round-trips.
 
     Dates, ints, floats and strings all survive as themselves. Decimal is the
     one that doesn't -- Oracle hands back every NUMBER as a Decimal, so an
-    integer id column watermarks as Decimal('4711'), which PyYAML can only
-    write as a python/object tag that FullLoader then refuses to load. An
-    integral Decimal becomes an int (exact, no precision lost, which matters for
-    ids beyond float's 53-bit range); a fractional one becomes a float.
+    integer id column watermarks as Decimal('4711'), which safe_dump refuses.
+    An integral Decimal becomes an int (exact, no precision lost, which matters
+    for ids beyond float's 53-bit range); a fractional one becomes a float.
     """
 
     if isinstance(value, decimal.Decimal):
@@ -190,7 +189,7 @@ class FileMemory(MemoryBackend):
 
         try:
             with open(self.memoryFile) as file:
-                document = yaml.load(file, Loader=yaml.FullLoader) or {}
+                document = yaml.safe_load(file) or {}
         except FileNotFoundError:
             document = {}
 
@@ -226,7 +225,9 @@ class FileMemory(MemoryBackend):
                 document[section][job] = value
 
             with open(temporary, 'w') as file:
-                yaml.dump(document, file)
+                # safe_dump refuses a type safe_load couldn't read back, so an
+                # unsupported watermark fails here rather than corrupting the file.
+                yaml.safe_dump(document, file)
                 file.flush()
                 os.fsync(file.fileno())
             os.replace(temporary, self.memoryFile)
@@ -262,7 +263,7 @@ class FileMemory(MemoryBackend):
         self._write('maskingKeys', job, fingerprint)
 
 
-DATABASE_MEMORY_SCHEMA = """CREATE TABLE lightweight_etl_memory (
+DATABASE_MEMORY_SCHEMA = """CREATE TABLE understudy_memory (
     job VARCHAR(255) PRIMARY KEY,
     last_run DOUBLE PRECISION,
     watermark_value VARCHAR(255),
@@ -306,7 +307,7 @@ class DatabaseMemory(MemoryBackend):
     predicate is the same type the source column is compared against.
     """
 
-    def __init__(self, connectionSettings: DatabaseConnectionConfig, table: str = 'lightweight_etl_memory') -> None:
+    def __init__(self, connectionSettings: DatabaseConnectionConfig, table: str = 'understudy_memory') -> None:
         self.connectionSettings = connectionSettings
         self.table = table
 

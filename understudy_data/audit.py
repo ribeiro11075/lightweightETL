@@ -1,4 +1,4 @@
-"""What a set of jobs does with data, for a reviewer -- `lightweight-etl audit`.
+"""What a set of jobs does with data, for a reviewer -- `understudy audit`.
 
 A policy that passes validation can still be a poor one: a column named `email`
 kept as it is, a defaultStrategy of `keep` that lets any new column through, a
@@ -69,6 +69,16 @@ def _auditMaskedJob(name: str, job: DataJobConfig, returned: Optional[Sequence[s
         if fallen:
             findings.append(Finding('info', name, '{} column(s) fall to defaultStrategy {}: {}'.format(
                 len(fallen), defaultStrategy['strategy'], ', '.join(fallen))))
+
+    redacted = sorted(column for column, policy in plan.columns.items() if policy['strategy'] == 'redact')
+    if redacted:
+        findings.append(Finding('info', name, 'redact on {}: identifiers with a recognisable shape are removed, names are not'.format(
+            ', '.join(redacted))))
+
+    lenient = sorted(column for column, policy in plan.columns.items() if policy['strategy'] == 'fpe' and not policy.get('strict'))
+    if lenient:
+        findings.append(Finding('info', name, 'fpe without strict on {}: values too short for FF1 are masked with key instead'.format(
+            ', '.join(lenient))))
 
     if job.watermarkColumn and any(entry['strategy'] == 'shuffle' for entry in columns):
         findings.append(Finding('warning', name, 'shuffle on an incremental job: its small chunks leave values on or near their own rows'))

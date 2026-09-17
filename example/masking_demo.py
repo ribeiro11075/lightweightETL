@@ -10,8 +10,8 @@ example/configuration/masking/ the way the CLI does, and then:
    because both key columns share a domain.
 2. Adds a column to production that the policy doesn't cover, and runs again.
    The job fails before writing anything: new columns never leak by default.
-3. Proposes a policy for the changed table, as `lightweight-etl discover` does.
-4. Plans a referentially complete subset, as `lightweight-etl subset` does.
+3. Proposes a policy for the changed table, as `understudy discover` does.
+4. Plans a referentially complete subset, as `understudy subset` does.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ import yaml
 exampleDirectory = Path(__file__).resolve().parent
 sys.path.append(str(exampleDirectory.parent))
 
-from lightweight_etl import (Configuration, Database, DataJobsFile, FileMemory, expandEnvironmentVariables, planSubset, proposeTable,
+from understudy_data import (Configuration, Database, DataJobsFile, FileMemory, expandEnvironmentVariables, planSubset, proposeTable,
                              runDataJobs)
 
 DEFAULT_WORKING_DIRECTORY = exampleDirectory / 'memory' / 'masking_demo'
@@ -59,7 +59,7 @@ def loadConfiguration(name: str) -> Any:
     """Loads a demo YAML file the same way the CLI does, ${NAME} expansion included."""
 
     with open(DEMO_CONFIGURATION_DIRECTORY / name) as file:
-        return expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader))
+        return expandEnvironmentVariables(yaml.safe_load(file))
 
 
 def printRows(heading: str, rows: Any) -> None:
@@ -134,7 +134,8 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY) -> Dict[str, Any]:
             print('  {:<11} {:<48} # {}'.format(suggestion.column, json.dumps(suggestion.policy), suggestion.reason))
 
         print("\n4. SUBSET: customers in region 'eu', and everything they need")
-        plan = planSubset(prod.getForeignKeys(), root='customers', where="region = 'eu'")
+        plan = planSubset(prod.getForeignKeys(), root='customers', where="region = 'eu'",
+                          materialize=prod.dialect.supportsMaterializedSelections())
         observed['subset'] = {table: len(prod.query(plan.queries[table])) for table in plan.tables}
         for table in plan.tables:
             print('  {:<10} {} row(s), loaded after: {}'.format(table, observed['subset'][table], ', '.join(plan.parents[table]) or '-'))

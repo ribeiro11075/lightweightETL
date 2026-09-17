@@ -6,11 +6,11 @@ network databases in test_integration_masking.py.
 """
 import pytest
 
-from lightweight_etl.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from lightweight_etl.database import Database
-from lightweight_etl.dependencyGraph import JobStatus
-from lightweight_etl.memory import FileMemory
-from lightweight_etl.runner import runDataJobs
+from understudy_data.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from understudy_data.database import Database
+from understudy_data.dependencyGraph import JobStatus
+from understudy_data.memory import FileMemory
+from understudy_data.runner import runDataJobs
 
 KEY = 'an-end-to-end-masking-key'
 

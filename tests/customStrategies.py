@@ -1,5 +1,5 @@
 """A masking strategy defined outside the package, as a policy can name one."""
-from lightweight_etl.masking import Strategy
+from understudy_data.masking import Strategy
 
 
 class Initials(Strategy):

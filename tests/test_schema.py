@@ -5,12 +5,12 @@ import sqlite3
 
 import pytest
 
-from lightweight_etl.configuration import DatabaseConnectionConfig, DatabaseType
-from lightweight_etl.database import Database
-from lightweight_etl.databaseDialects import ColumnDefinition, ForeignKey
-from lightweight_etl.schema import (PortableType, SchemaError, TableDefinition, clearOrder, clearTables, createStatements, orderParentsFirst,
+from understudy_data.configuration import DatabaseConnectionConfig, DatabaseType
+from understudy_data.database import Database
+from understudy_data.databaseDialects import ColumnDefinition, ForeignKey
+from understudy_data.schema import (PortableType, SchemaError, TableDefinition, clearOrder, clearTables, createStatements, orderParentsFirst,
                                     portableType, readTable, renderScript, renderType)
-from lightweight_etl.subset import relatedTables
+from understudy_data.subset import relatedTables
 
 ORACLE = DatabaseType.ORACLE
 POSTGRESQL = DatabaseType.POSTGRESQL

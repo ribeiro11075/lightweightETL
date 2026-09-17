@@ -10,7 +10,7 @@ import logging
 
 import pytest
 
-from lightweight_etl.log import LOGGER_NAME, Log
+from understudy_data.log import LOGGER_NAME, Log
 
 
 def _fileHandlers(logger):

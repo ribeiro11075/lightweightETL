@@ -17,18 +17,18 @@ import pytest
 pytest.importorskip('mysql.connector', reason='mysql-connector-python is not installed (pip install -e ".[mysql]")')
 pytest.importorskip('psycopg2', reason='psycopg2 is not installed (pip install psycopg2-binary, or pip install -e ".[postgresql]")')
 
-from lightweight_etl.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from lightweight_etl.database import Database
-from lightweight_etl.memory import FileMemory
-from lightweight_etl.runner import runDataJobs
+from understudy_data.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from understudy_data.database import Database
+from understudy_data.memory import FileMemory
+from understudy_data.runner import runDataJobs
 
 pytestmark = pytest.mark.integration
 
 MYSQL_SETTINGS = DatabaseConnectionConfig(
-    type=DatabaseType.MYSQL, user='root', password='root', database='lightweight_etl_test', host='127.0.0.1', port=3307,
+    type=DatabaseType.MYSQL, user='root', password='root', database='understudy_test', host='127.0.0.1', port=3307,
     )
 POSTGRESQL_SETTINGS = DatabaseConnectionConfig(
-    type=DatabaseType.POSTGRESQL, user='postgres', password='postgres', database='lightweight_etl_test', host='127.0.0.1', port=5433,
+    type=DatabaseType.POSTGRESQL, user='postgres', password='postgres', database='understudy_test', host='127.0.0.1', port=5433,
     )
 
 
@@ -88,7 +88,7 @@ def test_data_moves_from_mysql_to_postgresql_with_a_transform_applied(postgresql
             'job1': {
                 'active': True, 'sourceDatabase': 'mysql', 'targetDatabase': 'postgresql', 'insertStrategy': 'upsert',
                 'chunkSize': 100, 'targetTableFinal': targetTable,
-                'sourceQueryColumnTransforms': {'amount': ['lightweight_etl.builtinTransforms:currency']},
+                'sourceQueryColumnTransforms': {'amount': ['understudy_data.builtinTransforms:currency']},
                 'sourceQuery': 'select id, name, amount from {} order by id'.format(sourceTable),
                 },
             },

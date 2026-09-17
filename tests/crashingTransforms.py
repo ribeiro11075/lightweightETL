@@ -24,3 +24,13 @@ def hang(value):
     import time
     time.sleep(3600)
     return value
+
+
+def logWithoutPause(value):
+    """Keeps a job busy writing log records, so that stopping it is likely to
+    catch it part-way through sending one.
+    """
+    import logging
+    log = logging.getLogger('understudy_data')
+    while True:
+        log.warning('%s', 'x' * 2000)

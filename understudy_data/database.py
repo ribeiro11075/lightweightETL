@@ -361,7 +361,5 @@ class Database:
         _, targetName = splitTableName(targetTable)
         tempTable = '{}.{}_tmp'.format(stageSchema, targetName) if stageSchema else targetName + '_tmp'
 
-        for query in self.dialect.swapQueries(targetTable=targetTable, stageTable=stageTable, tempTable=tempTable):
-            self.cursor.execute(query)
-
+        self.dialect.swap(self.cursor, targetTable=targetTable, stageTable=stageTable, tempTable=tempTable)
         self.connection.commit()

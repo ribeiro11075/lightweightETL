@@ -5,9 +5,9 @@ transformer is -- by import path -- so nothing here is privileged:
 
     sourceQueryColumnTransforms:
       amount:
-      - lightweight_etl.builtinTransforms:currency
+      - understudy_data.builtinTransforms:currency
       name:
-      - lightweight_etl.builtinTransforms:truncate(50)
+      - understudy_data.builtinTransforms:truncate(50)
 
 Arguments after the column value go in parentheses, as literals. These are the
 transforms that come up in nearly every load. resolveTransformer takes any

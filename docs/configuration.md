@@ -1,6 +1,6 @@
 # Configuration
 
-Everything `lightweight-etl` does is described by YAML. This is the field reference; for *why* things behave as they do, see [design.md](design.md).
+Everything Understudy does is described by YAML. This is the field reference; for *why* things behave as they do, see [design.md](design.md).
 
 `example/configuration/` holds a complete, valid set of these files. It's validated on every test run, so it can't drift from what the code accepts — copying it is the fastest start.
 
@@ -17,7 +17,7 @@ Everything `lightweight-etl` does is described by YAML. This is the field refere
 The CLI looks for a directory holding `database.yaml` and `jobs.yaml`, in this order. `discover`, `subset` and `schema` read only `database.yaml`.
 
 1. `--config DIR`
-2. `$LIGHTWEIGHT_ETL_CONFIG`
+2. `$UNDERSTUDY_CONFIG`
 3. `./configuration`
 
 `--jobs FILE` and `--databases FILE` override either file individually.
@@ -124,10 +124,10 @@ warehouse:
   options:
     sslmode: verify-full
     sslrootcert: /etc/ssl/warehouse-ca.pem
-    application_name: lightweight-etl
+    application_name: understudy
 ```
 
-Settings describe what was asked for; the server decides what happened. `lightweight-etl run --dry-run` and `lightweight-etl audit --connect` report whether each connection is actually encrypted, as the server sees it.
+Settings describe what was asked for; the server decides what happened. `understudy run --dry-run` and `understudy audit --connect` report whether each connection is actually encrypted, as the server sees it.
 
 
 ## `jobs.yaml` — data jobs
@@ -187,17 +187,17 @@ A reference is `module.path:function_name` — any importable function taking th
 ```yaml
 sourceQueryColumnTransforms:
   amount:
-  - lightweight_etl.builtinTransforms:currency
+  - understudy_data.builtinTransforms:currency
   name:
-  - lightweight_etl.builtinTransforms:collapseWhitespace
-  - lightweight_etl.builtinTransforms:truncate(50)
+  - understudy_data.builtinTransforms:collapseWhitespace
+  - understudy_data.builtinTransforms:truncate(50)
   signup_date:
-  - "lightweight_etl.builtinTransforms:parseDate('%d/%m/%Y')"
+  - "understudy_data.builtinTransforms:parseDate('%d/%m/%Y')"
 ```
 
 Quote a reference whose arguments contain `: `, `#` or a leading quote, as YAML would otherwise read them. `validate` checks that each reference imports and that its arguments fit the function, so a missing or misspelled argument fails there rather than on the first row. Only literals are accepted, so a reference can't run code.
 
-These ship with the package, in `lightweight_etl.builtinTransforms`. Every one passes NULL through unchanged, except `defaultIfNull`, and raises on a value it can't convert rather than guessing.
+These ship with the package, in `understudy_data.builtinTransforms`. Every one passes NULL through unchanged, except `defaultIfNull`, and raises on a value it can't convert rather than guessing.
 
 | Transform | Result |
 | --- | --- |
@@ -244,7 +244,7 @@ Transforms apply to **`sourceQuery`'s own result columns**, not the target's —
 | `postTargetAdhocQueries` | optional | SQL run on the target after the load. |
 
 - **`swap`** loads `targetTableStage`, then swaps it with `targetTableFinal` by renaming the two. The target is replaced wholesale. See [how the swap works](design.md#how-a-swap-works) for what renaming means for views and on Oracle.
-- **`upsert`** inserts or updates by the target's declared primary key — from `targetTableStage` if set, otherwise straight from the extract. UNIQUE constraints aren't part of the match. A target without a primary key fails the job before anything is written; `lightweight-etl run --dry-run` checks for one too.
+- **`upsert`** inserts or updates by the target's declared primary key — from `targetTableStage` if set, otherwise straight from the extract. UNIQUE constraints aren't part of the match. A target without a primary key fails the job before anything is written; `understudy run --dry-run` checks for one too.
 
 ### Mask
 
@@ -270,6 +270,6 @@ Masking runs after transforms, on `sourceQuery`'s result columns. **Every column
 
 ## Validation
 
-`lightweight-etl validate` checks everything above without connecting to anything: every field, every alias, every predecessor and that they form no cycle, every transformer reference, and every masking strategy, option and key length. Problems are reported all at once, as `ConfigurationError`, rather than one per run.
+`understudy validate` checks everything above without connecting to anything: every field, every alias, every predecessor and that they form no cycle, every transformer reference, and every masking strategy, option and key length. Problems are reported all at once, as `ConfigurationError`, rather than one per run.
 
-`lightweight-etl run --dry-run` adds the checks that need a connection: that each database is reachable, that target tables exist, that upsert targets have a primary key, and that each masking policy covers every column its query returns.
+`understudy run --dry-run` adds the checks that need a connection: that each database is reachable, that target tables exist, that upsert targets have a primary key, and that each masking policy covers every column its query returns.

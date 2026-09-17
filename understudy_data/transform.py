@@ -18,7 +18,7 @@ class TransformError(Exception):
 
     Two distinct cases surface here, both eagerly rather than as a bare traceback
     deep inside a row loop: (1) columnTransforms names a column that isn't in
-    `columns` at all -- for lightweight-etl's own job-running path (see
+    `columns` at all -- for understudy's own job-running path (see
     runner.py's _executeDataJob), `columns` there is sourceQuery's own result
     columns (from cursor.description -- whatever it actually selected, explicit
     list or `select *` alike), not the target table, since a transform runs on a
@@ -95,11 +95,11 @@ def resolveTransformer(reference: str) -> Transformer:
     """Import a Transformer from a "module.path:function_name" reference.
 
     Lets a job configuration name a function defined anywhere importable --
-    lightweight_etl/builtinTransforms.py, or any module of the user's own -- without the caller
+    understudy_data/builtinTransforms.py, or any module of the user's own -- without the caller
     having to pre-register it in a lookup table.
 
     Arguments after the column value go in parentheses, as literals:
-    "lightweight_etl.builtinTransforms:truncate(50)" calls truncate(value, 50).
+    "understudy_data.builtinTransforms:truncate(50)" calls truncate(value, 50).
     """
 
     modulePath, separator, call = reference.partition(':')

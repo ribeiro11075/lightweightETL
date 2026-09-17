@@ -19,8 +19,8 @@ import uuid
 
 import pytest
 
-from lightweight_etl.configuration import ConfigurationError
-from lightweight_etl.database import Database
+from understudy_data.configuration import ConfigurationError
+from understudy_data.database import Database
 from servers import SERVERS
 
 pytestmark = pytest.mark.integration
@@ -172,14 +172,14 @@ def test_database_history_and_key_fingerprints_work_on_every_server(server):
     """The history table's types, and fingerprint rows in the memory table,
     have to be accepted -- and read back -- by every dialect.
     """
-    from lightweight_etl.dependencyGraph import JobOutcome, JobStatus
-    from lightweight_etl.memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory
-    from lightweight_etl.reporting import DATABASE_HISTORY_SCHEMA, DatabaseHistory
-    from lightweight_etl.runner import RunResult
+    from understudy_data.dependencyGraph import JobOutcome, JobStatus
+    from understudy_data.memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory
+    from understudy_data.reporting import DATABASE_HISTORY_SCHEMA, DatabaseHistory
+    from understudy_data.runner import RunResult
 
     serverName, database, table = server
-    historyTable = table(DATABASE_HISTORY_SCHEMA.split('lightweight_etl_history', 1)[1])
-    memoryTable = table(DATABASE_MEMORY_SCHEMA.split('lightweight_etl_memory', 1)[1])
+    historyTable = table(DATABASE_HISTORY_SCHEMA.split('understudy_history', 1)[1])
+    memoryTable = table(DATABASE_MEMORY_SCHEMA.split('understudy_memory', 1)[1])
     settings = database.connectionSettings
 
     history = DatabaseHistory(settings, table=historyTable)

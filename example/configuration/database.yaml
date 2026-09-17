@@ -6,7 +6,7 @@
 # worth tracking; passwords are not.
 #
 #     export SOURCE_DB_PASSWORD='...'
-#     lightweight-etl run
+#     understudy run
 #
 # An unset variable with no default stops the run before anything connects,
 # rather than expanding to an empty string. ${NAME:-default} supplies a

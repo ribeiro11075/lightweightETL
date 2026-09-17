@@ -31,6 +31,7 @@ import importlib
 import json
 import math
 import random
+import re
 import uuid
 from typing import Any, Callable, ClassVar, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Type
 
@@ -85,7 +86,7 @@ def keyFingerprint(key: str) -> str:
     masks agree; a changed fingerprint means every mask changed.
     """
 
-    return hmac.digest(key.encode('utf-8'), b'lightweight-etl key fingerprint', 'sha256')[:6].hex()
+    return hmac.digest(key.encode('utf-8'), b'understudy key fingerprint', 'sha256')[:6].hex()
 
 
 class KeyedHash:
@@ -176,7 +177,7 @@ class Strategy:
     Subclasses declare the options they accept in OPTIONS, as name -> the
     check applied to the raw configured value, and implement mask() for one
     non-NULL value. validateOptions runs at configuration time, so a bad option
-    fails `lightweight-etl validate` rather than a job.
+    fails `understudy validate` rather than a job.
 
     NULL passes through untouched unless a strategy says otherwise: a NULL
     carries nothing to hide, and replacing it would change what a query like
@@ -956,13 +957,15 @@ class FPEStrategy(Strategy):
     FF1 is only defined for at least a million possible values: six digits,
     five hex characters or four alphanumerics. Shorter values are masked with
     `key`'s permutation instead, which the manifest can't distinguish. The two
-    never collide, since neither changes a value's length.
+    never collide, since neither changes a value's length. With `strict`, a
+    shorter value fails the job instead, for policies that require FF1 for
+    every value.
 
-    Needs the `cryptography` package (`pip install lightweight-etl[fpe]`).
+    Needs the `cryptography` package (`pip install understudy-data[fpe]`).
     """
 
     NAME = 'fpe'
-    OPTIONS = {'charset': _choiceOption(*_FPE_ALPHABETS)}
+    OPTIONS = {'charset': _choiceOption(*_FPE_ALPHABETS), 'strict': _booleanOption}
 
     def __init__(self, keyedHash: KeyedHash, options: Mapping[str, Any]) -> None:
         super().__init__(keyedHash, options)
@@ -980,12 +983,21 @@ class FPEStrategy(Strategy):
         return self._ciphers[radix]
 
 
+    def _tooShort(self, cipher: Any, what: str) -> None:
+        """Raises under `strict`; otherwise the caller falls back to `key`."""
+
+        if self.options.get('strict'):
+            raise MaskingError('the fpe strategy is strict, and FF1 needs at least {} {} in a value; this one has fewer'.format(
+                cipher.minimumLength, what))
+
+
     def _maskInteger(self, value: int) -> int:
 
         digits = [int(character) for character in str(abs(value))]
         cipher = self._cipher(10)
 
         if len(digits) < cipher.minimumLength:
+            self._tooShort(cipher, 'digits')
             return self._short._maskInteger(value)
 
         # Cycle-walk past results with a leading zero, which would shorten the
@@ -1008,6 +1020,7 @@ class FPEStrategy(Strategy):
         cipher = self._cipher(len(alphabet))
 
         if len(positions) < cipher.minimumLength:
+            self._tooShort(cipher, '{} characters'.format(charset))
             return self._short._maskText(text, charset)
 
         masked = set(positions)
@@ -1047,6 +1060,166 @@ class FPEStrategy(Strategy):
         raise MaskingError('the fpe strategy needs an integer or text, got {}'.format(_typeName(value)))
 
 
+def _listOption(*choices: str) -> Callable[[Any], List[str]]:
+
+    def check(value: Any) -> List[str]:
+        if not isinstance(value, list) or not value or any(item not in choices for item in value):
+            raise ValueError('must be a non-empty list of: {}'.format(', '.join(choices)))
+        return list(value)
+
+    return check
+
+
+def _patternsOption(value: Any) -> List[str]:
+
+    if not isinstance(value, list) or not value or not all(isinstance(item, str) and item for item in value):
+        raise ValueError('must be a non-empty list of regular expressions')
+    for pattern in value:
+        try:
+            re.compile(pattern)
+        except re.error as error:
+            raise ValueError('{!r} is not a valid regular expression: {}'.format(pattern, error)) from None
+
+    return list(value)
+
+
+def _luhn(digits: str) -> bool:
+
+    total = 0
+    for position, character in enumerate(reversed(digits)):
+        digit = int(character)
+        if position % 2:
+            digit = digit * 2 - 9 if digit > 4 else digit * 2
+        total += digit
+
+    return total % 10 == 0
+
+
+def _validIban(text: str) -> bool:
+
+    compact = text.replace(' ', '')
+    rearranged = compact[4:] + compact[:4]
+
+    return 15 <= len(compact) <= 34 and int(''.join(str(int(character, 36)) for character in rearranged)) % 97 == 1
+
+
+def _validIpv4(text: str) -> bool:
+
+    return all(int(octet) <= 255 for octet in text.split('.'))
+
+
+_DATE_LIKE = re.compile(r'^(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})$')
+
+
+def _phoneLike(text: str) -> bool:
+    """7 to 15 digits -- E.164's limit -- and not a date, whose separators
+    otherwise make it look like a number.
+    """
+
+    return 7 <= sum(character.isdigit() for character in text) <= 15 and not _DATE_LIKE.match(text.strip())
+
+
+# (kind, pattern, check). Earlier kinds win where matches overlap, so the
+# specific ones -- validated by a checksum or a fixed shape -- come before the
+# loose phone pattern, which would otherwise swallow a card number.
+_DETECTORS: Tuple[Tuple[str, 're.Pattern[str]', Callable[[str], bool]], ...] = (
+    ('email', re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'), lambda text: True),
+    ('iban', re.compile(r'\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b'), _validIban),
+    ('card', re.compile(r'(?<![\d-])\d(?:[ -]?\d){12,18}(?![\d-])'), lambda text: _luhn(re.sub(r'\D', '', text))),
+    ('ssn', re.compile(r'(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])'), lambda text: True),
+    ('ip', re.compile(r'(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\.?\d)'), _validIpv4),
+    ('phone', re.compile(r'(?<![\w+])\+?\(?\d[\d ().-]{5,}\d(?!\w)'), _phoneLike),
+    )
+
+_DETECTOR_KINDS = tuple(kind for kind, _, _ in _DETECTORS)
+
+
+class RedactStrategy(Strategy):
+    """Finds recognisable identifiers inside free text and replaces only those.
+
+    Detected: email addresses, phone numbers, US Social Security numbers, card
+    numbers (Luhn-checked), IBANs (checksum-checked) and IPv4 addresses, plus
+    any `patterns` of your own. `detect` narrows the built-in list.
+
+    `replacement` decides what goes in their place: `label` (the default)
+    writes `[EMAIL]`, `[PHONE]` and so on; `mask` writes a keyed value of the
+    same shape -- the same address always becomes the same masked address, as
+    with the `email` strategy, and a card keeps its last four digits.
+
+    Phone detection is deliberately broad: any run of 7 to 15 digits that
+    isn't a date counts, order numbers included. Leave `phone` out of `detect`
+    where that removes too much.
+
+    **It cannot find names**, or anything else without a recognisable shape:
+    "call Maria about her divorce" passes through untouched. Where text may
+    hold that, `null` is the safe choice.
+    """
+
+    NAME = 'redact'
+    OPTIONS = {'replacement': _choiceOption('label', 'mask'), 'detect': _listOption(*_DETECTOR_KINDS), 'patterns': _patternsOption}
+
+    def __init__(self, keyedHash: KeyedHash, options: Mapping[str, Any]) -> None:
+        super().__init__(keyedHash, options)
+        kinds = set(self.options.get('detect', _DETECTOR_KINDS))
+        self._detectors = [detector for detector in _DETECTORS if detector[0] in kinds]
+        self._detectors += [('pattern', re.compile(pattern), lambda text: True) for pattern in self.options.get('patterns', [])]
+        self._email = EmailStrategy(keyedHash, {})
+        self._digits = DigitsStrategy(keyedHash, {})
+        self._card = DigitsStrategy(keyedHash, {'keepTrailing': 4})
+        self._key = KeyStrategy(keyedHash, {})
+
+
+    def _spans(self, text: str) -> List[Tuple[int, int, str]]:
+        """Non-overlapping (start, end, kind), earlier detectors winning."""
+
+        taken: List[Tuple[int, int, str]] = []
+        for kind, pattern, check in self._detectors:
+            for match in pattern.finditer(text):
+                start, end = match.span()
+                if start == end or not check(match.group(0)):
+                    continue
+                if all(end <= other[0] or start >= other[1] for other in taken):
+                    taken.append((start, end, kind))
+
+        return sorted(taken)
+
+
+    def _replace(self, kind: str, found: str) -> str:
+
+        if self.options.get('replacement', 'label') == 'label':
+            return '[REDACTED]' if kind == 'pattern' else '[{}]'.format(kind.upper())
+
+        if kind == 'email':
+            return str(self._email.mask(found))
+        if kind == 'card':
+            return str(self._card.mask(found))
+        if kind in ('phone', 'ssn'):
+            return str(self._digits.mask(found))
+        if kind == 'iban':
+            return found[:2] + str(self._key.mask(found[2:]))
+        if kind == 'ip':
+            octets = self.keyedHash.digest(found.encode('ascii'), b'ip')
+            return '10.{}.{}.{}'.format(octets[0], octets[1], octets[2])
+
+        return 'redacted-' + self.keyedHash.digest(found.encode('utf-8'), b'pattern').hex()[:12]
+
+
+    def mask(self, value: Any) -> Any:
+
+        if not isinstance(value, str):
+            raise MaskingError('the redact strategy needs text, got {}'.format(_typeName(value)))
+
+        pieces = []
+        position = 0
+        for start, end, kind in self._spans(value):
+            pieces.append(value[position:start])
+            pieces.append(self._replace(kind, value[start:end]))
+            position = end
+        pieces.append(value[position:])
+
+        return ''.join(pieces)
+
+
 class ShuffleStrategy(Strategy):
     """Shuffle the column's values among the rows of each chunk.
 
@@ -1075,7 +1248,7 @@ STRATEGIES: Dict[str, Type[Strategy]] = {
     strategy.NAME: strategy for strategy in (
         KeepStrategy, NullStrategy, ConstantStrategy, HashStrategy, EmailStrategy, DigitsStrategy, NumberStrategy, DateShiftStrategy,
         FakeFirstNameStrategy, FakeLastNameStrategy, FakeNameStrategy, FakeCityStrategy, FakeCompanyStrategy, FakeStreetAddressStrategy,
-        KeyStrategy, FPEStrategy, ShuffleStrategy,
+        KeyStrategy, FPEStrategy, RedactStrategy, ShuffleStrategy,
         )
     }
 
@@ -1102,7 +1275,7 @@ def resolveStrategy(name: Any) -> Type[Strategy]:
         raise ValueError('strategy {!r} could not be imported: {}'.format(name, error)) from None
 
     if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
-        raise ValueError('strategy {!r} is not a subclass of lightweight_etl.masking.Strategy'.format(name))
+        raise ValueError('strategy {!r} is not a subclass of understudy_data.masking.Strategy'.format(name))
 
     return strategy
 

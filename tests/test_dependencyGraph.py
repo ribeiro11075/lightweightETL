@@ -3,8 +3,8 @@ from typing import List, Optional
 
 import pytest
 
-from lightweight_etl.configuration import BaseJobConfig, ConfigurationError
-from lightweight_etl.dependencyGraph import DependencyGraph, JobOutcome, JobStatus
+from understudy_data.configuration import BaseJobConfig, ConfigurationError
+from understudy_data.dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 
 
 def _job(active: bool = True, predecessors: Optional[list] = None, refresh: Optional[int] = None) -> BaseJobConfig:

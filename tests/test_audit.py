@@ -1,8 +1,8 @@
 """The audit report: what it shows for each job, and what it flags."""
 from typing import Any
 
-from lightweight_etl.audit import auditJobs, renderAudit
-from lightweight_etl.configuration import DataJobConfig
+from understudy_data.audit import auditJobs, renderAudit
+from understudy_data.configuration import DataJobConfig
 
 KEY = 'an-audit-test-masking-key'
 
@@ -111,3 +111,9 @@ def test_the_text_report_names_every_column_and_finding():
     assert 'copyOrders (inactive): prod -> staging.customers\n  not masked' in text
     assert 'prod                         encryption unknown' in text
     assert 'WARNING  maskCustomers: column email is kept unmasked, but its name suggests an email address' in text
+
+
+def test_fpe_without_strict_is_noted():
+    report = auditJobs({'maskCustomers': _masked({'id': 'fpe', 'ssn': {'strategy': 'fpe', 'strict': True}})})
+
+    assert _messages(report, 'info') == [('maskCustomers', 'fpe without strict on id: values too short for FF1 are masked with key instead')]

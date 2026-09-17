@@ -55,3 +55,26 @@ These tests have found real bugs the mocked suite couldn't — MySQL leaving unr
 The `postgresql` extra pins the source-built `psycopg2`, the upstream recommendation for production. `psycopg2-binary` is fine for running the tests.
 
 mypy targets Python 3.10, the oldest version the package supports.
+
+
+## Continuous integration and releases
+
+`.github/workflows/ci.yml` runs mypy and the default tests on every supported Python, and the integration suite against the `docker-compose.yml` servers.
+
+`.github/workflows/release.yml` publishes a release when a tag matching the version in `pyproject.toml` is pushed:
+
+```
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+It builds and checks the sdist and wheel, publishes them to PyPI, and pushes a multi-architecture image to `ghcr.io/<owner>/understudy-data` tagged with the version. PyPI publishing uses trusted publishing, so there is no token to store. Set it up once, before the first tag:
+
+1. On PyPI, add a pending trusted publisher for the project `understudy-data`: this repository, workflow `release.yml`, environment `pypi`.
+2. In the repository's settings, create an environment named `pypi`. Requiring a reviewer there makes each release wait for approval.
+
+To check the distributions and the image locally:
+
+```
+python -m build && twine check dist/*
+docker build -t understudy-data:local . && docker run --rm understudy-data:local --help
+```

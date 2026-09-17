@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, NamedTuple, Opt
 from .configuration import ConfigurationError, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, InsertStrategy
 from .database import Database
 from .dependencyGraph import DependencyGraph, JobOutcome, JobStatus
-from .log import LOGGER_NAME, Log, forwardToQueue, receiveForwardedRecords
+from .log import LOGGER_NAME, ConnectionForwarder, Log, forwardToConnection, handleForwardedRecord
 from .masking import BoundMasking, MaskingError, MaskingPlan, buildMaskingManifest, keyFingerprint
 from .memory import MemoryBackend
 from .transform import TransformError, Transformer, TransformResolutionError, resolveTransformer, Transform
@@ -25,12 +25,20 @@ logger = logging.getLogger(LOGGER_NAME)
 SIGNAL_POLL_SECONDS = 1.0
 
 # Jobs run in processes started this way on every platform. `fork` -- Linux's
-# default before Python 3.14 -- copies a parent that is running a log listener
-# thread, which can deadlock the child on a lock that thread held.
+# default before Python 3.14 -- copies whatever locks the parent's threads
+# happen to hold, which can deadlock the child.
 PROCESS_CONTEXT = mp.get_context('spawn')
 
 # How long a timed-out job gets to exit after SIGTERM before it is killed.
 TERMINATE_GRACE_SECONDS = 5.0
+
+# How long a job may take to exit once it has sent its outcome, before it is
+# stopped. It has nothing left to do by then but close its connections.
+EXIT_GRACE_SECONDS = 10.0
+
+# Messages read from one job's pipe before looking at the others, so a job
+# logging without pause can't starve the rest.
+MESSAGES_PER_POLL = 500
 
 
 @contextlib.contextmanager
@@ -404,7 +412,7 @@ def _runDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: Dict[
     return outcome._replace(startedAt=startedAt, finishedAt=time.time())
 
 
-def _initializeWorker(logQueue: Any, logLevel: int) -> None:
+def _initializeWorker(connection: Any, logLevel: int) -> ConnectionForwarder:
     """Runs first in each job's process.
 
     Ctrl-C reaches every process in the terminal's group, so without this a
@@ -414,7 +422,8 @@ def _initializeWorker(logQueue: Any, logLevel: int) -> None:
     """
 
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    forwardToQueue(logQueue, logLevel)
+
+    return forwardToConnection(connection, logLevel)
 
 
 def _logCycleSummary(dependencyGraph: DependencyGraph) -> None:
@@ -461,13 +470,15 @@ def _requireWatermarkCapableMemory(jobsFile: DataJobsFile, memory: MemoryBackend
             'Implement readWatermarks/recordWatermark on it, or use FileMemory.'.format(type(memory).__name__, ', '.join(incrementalJobs)))
 
 
-def _jobProcess(outcomes: Any, logQueue: Any, logLevel: int, job: str, jobConfig: DataJobConfig,
+def _jobProcess(connection: Any, logLevel: int, job: str, jobConfig: DataJobConfig,
                 databaseConfiguration: Dict[str, DatabaseConnectionConfig], memory: MemoryBackend) -> None:
-    """The whole life of one job's process: run the job, send back its outcome."""
+    """The whole life of one job's process: run the job, and send its log
+    records and then its outcome back on `connection`, which it alone writes to.
+    """
 
-    _initializeWorker(logQueue, logLevel)
-    outcomes.send(_runDataJob(job, jobConfig, databaseConfiguration, memory))
-    outcomes.close()
+    forwarder = _initializeWorker(connection, logLevel)
+    forwarder.send('outcome', _runDataJob(job, jobConfig, databaseConfiguration, memory))
+    connection.close()
 
 
 def _requireUnchangedMaskingKeys(jobsFile: DataJobsFile, memory: MemoryBackend, acceptKeyChange: bool) -> None:
@@ -501,7 +512,7 @@ def _requireUnchangedMaskingKeys(jobsFile: DataJobsFile, memory: MemoryBackend, 
 
     raise ConfigurationError(
         'the masking key changed since the last run of upsert job(s) {}. Their targets still hold rows masked under the old key, '
-        'which would no longer match rows masked under the new one. Empty those targets first (lightweight-etl clear, which also '
+        'which would no longer match rows masked under the new one. Empty those targets first (understudy clear, which also '
         'forgets the old key), or acknowledge the change with --accept-key-change'.format(', '.join(changed)))
 
 
@@ -514,20 +525,24 @@ class _JobProcess:
     taking any other job with it. Starting a process costs a fraction of a
     second, which is noise beside a database load.
 
-    The outcome comes back over a pipe whose sending end only the child holds,
-    so a child that dies without sending shows up as end-of-file.
+    Its log records and its outcome come back over a pipe that only this job
+    writes to, so stopping it can't leave anything another job needs in a bad
+    state. The child holds the only sending end, so a child that dies shows up
+    as end-of-file.
     """
 
     def __init__(self, job: str, jobConfig: DataJobConfig, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
-                 memory: MemoryBackend, logQueue: Any, logLevel: int) -> None:
+                 memory: MemoryBackend, logLevel: int) -> None:
         self.job = job
         self.startedAt = time.time()
         self.deadline = self.startedAt + jobConfig.timeoutSeconds if jobConfig.timeoutSeconds else None
+        self._outcome: Optional[JobOutcome] = None
+        self._closed = False
 
-        self._outcomes, sendingEnd = PROCESS_CONTEXT.Pipe(duplex=False)
+        self._connection, sendingEnd = PROCESS_CONTEXT.Pipe(duplex=False)
         self.process = PROCESS_CONTEXT.Process(
-            target=_jobProcess, name='lightweight-etl {}'.format(job), daemon=True,
-            args=(sendingEnd, logQueue, logLevel, job, jobConfig, databaseConfiguration, memory))
+            target=_jobProcess, name='understudy {}'.format(job), daemon=True,
+            args=(sendingEnd, logLevel, job, jobConfig, databaseConfiguration, memory))
         self.process.start()
         sendingEnd.close()
 
@@ -535,7 +550,27 @@ class _JobProcess:
     @property
     def waitables(self) -> List[Any]:
 
-        return [self._outcomes, self.process.sentinel]
+        return [self.process.sentinel] if self._closed else [self._connection, self.process.sentinel]
+
+
+    def _read(self) -> None:
+        """Handles what the job has sent, up to MESSAGES_PER_POLL messages.
+        Marks the pipe closed at end-of-file.
+        """
+
+        for _ in range(MESSAGES_PER_POLL):
+            if self._closed or not self._connection.poll():
+                return
+            try:
+                kind, payload = self._connection.recv()
+            except (EOFError, OSError):
+                self._closed = True
+                self._connection.close()
+                return
+            if kind == 'log':
+                handleForwardedRecord(payload)
+            elif kind == 'outcome':
+                self._outcome = payload
 
 
     def poll(self, now: float) -> Optional[JobOutcome]:
@@ -543,15 +578,21 @@ class _JobProcess:
         and None while it is still running.
         """
 
-        if self._outcomes.poll():
-            try:
-                outcome: JobOutcome = self._outcomes.recv()
-            except EOFError:
-                return self._died()
-            self.process.join()
-            return outcome
+        self._read()
+
+        if self._outcome is not None:
+            # Nothing is left for it to do but exit; don't wait on it forever.
+            self.process.join(EXIT_GRACE_SECONDS)
+            if self.process.is_alive():
+                logger.warning('{} sent its outcome but did not exit; stopping it'.format(self.job))
+                self.stop()
+            self._drain()
+            return self._outcome
 
         if not self.process.is_alive():
+            self._drain()
+            if self._outcome is not None:
+                return self._outcome
             return self._died()
 
         if self.deadline is not None and now >= self.deadline:
@@ -578,6 +619,22 @@ class _JobProcess:
             self.process.kill()
             self.process.join()
 
+        if not self._closed:
+            self._closed = True
+            self._connection.close()
+
+
+    def _drain(self) -> None:
+        """Handles whatever an exited job left in its pipe. Bounded, since an
+        exited job can't write more.
+        """
+
+        while not self._closed:
+            self._read()
+            if not self._closed and not self._connection.poll():
+                self._closed = True
+                self._connection.close()
+
 
     def _died(self) -> JobOutcome:
 
@@ -595,7 +652,7 @@ class _JobProcess:
 
 
 def _runCycle(dependencyGraph: DependencyGraph, workers: int, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
-              memory: MemoryBackend, termination: Dict[str, bool], logQueue: Any, logLevel: int) -> None:
+              memory: MemoryBackend, termination: Dict[str, bool], logLevel: int) -> None:
     """Runs one cycle's jobs to completion, each as soon as its predecessors
     finish and one of the `workers` slots is free.
     """
@@ -609,7 +666,7 @@ def _runCycle(dependencyGraph: DependencyGraph, workers: int, databaseConfigurat
                 dependencyGraph.skipNotStarted('the run was stopped by a signal before this job started')
             else:
                 for job in dependencyGraph.takeReady(limit=workers - len(running)):
-                    running.append(_JobProcess(job, dependencyGraph.activeJobs[job], databaseConfiguration, memory, logQueue, logLevel))  # type: ignore[arg-type]
+                    running.append(_JobProcess(job, dependencyGraph.activeJobs[job], databaseConfiguration, memory, logLevel))  # type: ignore[arg-type]
 
             if not running:
                 # Nothing running and nothing startable means every job is
@@ -671,9 +728,10 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
     Each job runs in a process of its own, at most jobsFile.workers at once,
     so `memory` is pickled and reconstructed in each, per MemoryBackend's
     contract, and so is everything a job's configuration references. Their log
-    records are sent back to this process and written by its handlers -- the
-    ones Log sets up from logFile and logFormat, plus any the caller added --
-    so they share one format and one set of destinations.
+    records are sent back to this process, each job on its own pipe, and
+    written by its handlers -- the ones Log sets up from logFile and logFormat,
+    plus any the caller added -- so they share one format and one set of
+    destinations.
 
     Those processes are started with multiprocessing's `spawn` method, which
     imports the calling script afresh: call this from under
@@ -689,13 +747,13 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
     Log(logFile=logFile, level=logLevel, logFormat=logFormat)
     logger.info('Starting data job runner with {} worker(s)'.format(jobsFile.workers))
 
-    with _terminationHandling() as termination, receiveForwardedRecords(PROCESS_CONTEXT) as logQueue:
+    with _terminationHandling() as termination:
 
         while True:
             dependencyGraph = DependencyGraph(jobs=jobsFile.jobs, memory=memory.read())
             logger.info('Starting cycle with {} active job(s)'.format(len(dependencyGraph.activeJobs)))
 
-            _runCycle(dependencyGraph, jobsFile.workers, databaseConfiguration, memory, termination, logQueue, logLevel)
+            _runCycle(dependencyGraph, jobsFile.workers, databaseConfiguration, memory, termination, logLevel)
             _logCycleSummary(dependencyGraph)
 
             if onCycle is not None:

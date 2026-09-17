@@ -7,7 +7,7 @@ shipping the inverse keeps the key from becoming a way to unmask one.
 
 AES comes from the `cryptography` package, imported only when an FF1 cipher is
 created, so the rest of the package doesn't need it (`pip install
-lightweight-etl[fpe]`).
+understudy-data[fpe]`).
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ class FF1:
         try:
             from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
         except ImportError as error:
-            raise ImportError('the fpe strategy needs the cryptography package: pip install "lightweight-etl[fpe]"') from error
+            raise ImportError('the fpe strategy needs the cryptography package: pip install "understudy-data[fpe]"') from error
 
         if len(key) not in (16, 24, 32):
             raise ValueError('FF1 needs an AES-128, AES-192 or AES-256 key')

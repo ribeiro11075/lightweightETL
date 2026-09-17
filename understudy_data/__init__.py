@@ -22,6 +22,7 @@ from .memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory, FileMemory, MemoryBa
 from .reporting import DATABASE_HISTORY_SCHEMA, DatabaseHistory, FileHistory, RunHistory, notify, pushMetrics, writeMetricsFile
 from .runner import RunResult, runDataJobs
 from .subset import SubsetError, SubsetPlan, planSubset
+from .synthesize import SynthesisError, planTable, synthesizeTable
 from .transform import Transform, Transformer, TransformError, TransformResolutionError, resolveTransformer
 
 __all__ = [
@@ -74,6 +75,9 @@ __all__ = [
     'Strategy',
     'SubsetError',
     'SubsetPlan',
+    'SynthesisError',
+    'synthesizeTable',
+    'planTable',
     'TableProposal',
     'Transform',
     'Transformer',

@@ -1,6 +1,6 @@
 """Creates target tables from source ones, and empties targets before a refresh.
 
-`lightweight-etl schema` reads a table's columns, primary key and foreign keys
+`understudy schema` reads a table's columns, primary key and foreign keys
 from the source catalog and writes CREATE TABLE statements in the *target's*
 dialect. Types go through a small portable vocabulary on the way -- integer,
 decimal, text, timestamp and so on -- because six dialects can't be mapped
@@ -13,7 +13,7 @@ and foreign keys. Indexes, defaults, check constraints, triggers and
 permissions aren't copied -- a non-production copy rarely needs them, and
 translating them across dialects is where schema tools go wrong.
 
-`lightweight-etl clear` empties the target tables of a set of jobs, children
+`understudy clear` empties the target tables of a set of jobs, children
 before parents so foreign keys don't block it.
 """
 from __future__ import annotations

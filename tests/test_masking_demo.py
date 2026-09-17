@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from lightweight_etl.dependencyGraph import JobStatus
+from understudy_data.dependencyGraph import JobStatus
 
 DEMO_PATH = Path(__file__).resolve().parents[1] / 'example' / 'masking_demo.py'
 ENVIRONMENT = ('MASKING_DEMO_PROD_PATH', 'MASKING_DEMO_STAGING_PATH', 'MASKING_KEY')
