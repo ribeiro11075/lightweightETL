@@ -117,3 +117,136 @@ def test_fpe_without_strict_is_noted():
     report = auditJobs({'maskCustomers': _masked({'id': 'fpe', 'ssn': {'strategy': 'fpe', 'strict': True}})})
 
     assert _messages(report, 'info') == [('maskCustomers', 'fpe without strict on id: values too short for FF1 are masked with key instead')]
+
+
+def _customersAndOrders(customerId, orderCustomerId, orderKey=KEY, orderTarget='staging'):
+    return {
+        'maskCustomers': _masked({'id': customerId, 'email': 'email'}, sourceQuery='select id, email from customers'),
+        'maskOrders': _job(sourceQuery='select id, customer_id from orders', targetTableFinal='orders', targetDatabase=orderTarget,
+                           masking={'key': orderKey, 'columns': {'id': 'keep', 'customer_id': orderCustomerId}}),
+        }
+
+
+def _crossJob(report):
+    return [message for job, message in _messages(report, 'warning') if job is None]
+
+
+def test_a_domain_masked_one_way_under_one_key_has_no_findings():
+    customer = {'strategy': 'key', 'domain': 'customer'}
+
+    assert auditJobs(_customersAndOrders(customer, customer))['findings'] == []
+
+
+def test_a_domain_masked_two_ways_is_flagged():
+    report = auditJobs(_customersAndOrders({'strategy': 'key', 'domain': 'customer'}, {'strategy': 'hash', 'domain': 'customer'}))
+
+    assert _crossJob(report) == [
+        'in staging, domain customer is masked 2 different ways, so its masks cannot match across them: '
+        'hash for maskOrders.customer_id; key for maskCustomers.id. '
+        'Mask the domain one way, or give columns that should not match a domain of their own']
+
+
+def test_a_domain_masked_with_different_options_is_flagged():
+    report = auditJobs(_customersAndOrders({'strategy': 'hash', 'domain': 'customer'}, {'strategy': 'hash', 'domain': 'customer', 'length': 20}))
+
+    (message,) = _crossJob(report)
+    assert 'hash for maskCustomers.id; hash (length: 20) for maskOrders.customer_id' in message
+
+
+def test_a_domain_masked_under_two_keys_is_flagged():
+    customer = {'strategy': 'key', 'domain': 'customer'}
+    report = auditJobs(_customersAndOrders(customer, customer, orderKey='another-audit-masking-key'))
+
+    (message,) = _crossJob(report)
+    assert message.startswith('in staging, domain customer is masked under 2 different keys')
+    assert 'maskCustomers.id' in message and 'maskOrders.customer_id' in message
+
+
+def test_copies_in_different_target_databases_may_use_different_keys():
+    customer = {'strategy': 'key', 'domain': 'customer'}
+
+    assert _crossJob(auditJobs(_customersAndOrders(customer, customer, orderKey='another-audit-masking-key', orderTarget='vendor'))) == []
+
+
+def test_default_domains_are_compared_too():
+    report = auditJobs({
+        'maskCustomers': _masked({'name': 'fakeName'}),
+        'maskCompanies': _masked({'name': 'fakeCompany'}, targetTableFinal='companies'),
+        })
+
+    (message,) = _crossJob(report)
+    assert 'domain name is masked 2 different ways' in message
+
+
+def _foreignKey():
+    from understudy_data.databaseDialects import ForeignKey
+
+    return ForeignKey('orders', ('customer_id',), 'customers', ('id',), 'fk_orders_customers')
+
+
+def _connected(jobs, **overrides):
+    arguments = dict(
+        returnedColumns={'maskCustomers': ['id', 'email'], 'maskOrders': ['id', 'customer_id']},
+        targetColumns={'maskCustomers': ['id', 'email'], 'maskOrders': ['id', 'customer_id']},
+        foreignKeys={'staging': [_foreignKey()]})
+    arguments.update(overrides)
+    return auditJobs(jobs, **arguments)
+
+
+def test_a_reference_masked_like_its_key_has_no_findings():
+    customer = {'strategy': 'key', 'domain': 'customer'}
+
+    assert _connected(_customersAndOrders(customer, customer))['findings'] == []
+
+
+def test_a_reference_left_in_its_default_domain_is_flagged():
+    report = _connected(_customersAndOrders('key', 'key'))
+    fingerprint = report['jobs'][0]['keyFingerprint']
+
+    assert _messages(report, 'warning') == [(
+        'maskOrders',
+        'in staging, orders.customer_id is masked with key in domain customer_id under key {0}, but customers.id, which it references, '
+        'is masked with key in domain id under key {0} (by maskCustomers), so the copied references will not match'.format(fingerprint))]
+
+
+def test_a_reference_copied_as_it_is_to_a_masked_key_is_flagged():
+    jobs = _customersAndOrders('key', 'keep')
+
+    (message,) = [message for _, message in _messages(_connected(jobs), 'warning')]
+    assert message.startswith('in staging, orders.customer_id is not masked, but customers.id, which it references, is masked with key')
+
+
+def _references(report):
+    return [message for _, message in _messages(report, 'warning') if 'which it references' in message]
+
+
+def test_a_job_without_masking_counts_as_copying_every_column_as_it_is():
+    jobs = _customersAndOrders('keep', 'keep')
+    jobs['maskOrders'] = _job(sourceQuery='select id, customer_id from orders', targetTableFinal='orders')
+
+    assert _references(_connected(jobs)) == []
+
+    jobs['maskCustomers'] = _masked({'id': 'key', 'email': 'email'}, sourceQuery='select id, email from customers')
+    (message,) = _references(_connected(jobs))
+    assert 'orders.customer_id is not masked' in message
+
+
+def test_a_nulled_reference_cannot_break():
+    assert _connected(_customersAndOrders('key', 'null'))['findings'] == []
+
+
+def test_target_columns_are_matched_to_the_query_by_position():
+    customer = {'strategy': 'key', 'domain': 'customer'}
+    jobs = _customersAndOrders(customer, customer)
+    jobs['maskOrders'] = _job(sourceQuery='select id, owner from orders', targetTableFinal='app.ORDERS',
+                              masking={'key': KEY, 'columns': {'id': 'keep', 'owner': {'strategy': 'hash', 'domain': 'customer'}}})
+
+    report = _connected(jobs, returnedColumns={'maskCustomers': ['id', 'email'], 'maskOrders': ['id', 'owner']})
+
+    assert any('orders.customer_id is masked with hash in domain customer' in message for _, message in _messages(report, 'warning'))
+
+
+def test_a_job_whose_columns_do_not_line_up_is_not_guessed_at():
+    report = _connected(_customersAndOrders('key', 'key'), targetColumns={'maskCustomers': ['id', 'email'], 'maskOrders': ['customer_id']})
+
+    assert _messages(report, 'warning') == []

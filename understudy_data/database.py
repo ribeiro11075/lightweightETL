@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from types import TracebackType
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Type
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple, Type
 
 from .configuration import WATERMARK_PLACEHOLDER, ConfigurationError, DatabaseConnectionConfig, DatabaseType
 from .databaseDialects import ColumnDefinition, DatabaseDialect, ForeignKey, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, \
-    SQLiteDialect, splitTableName
+    SQLiteDialect, quoteIdentifier, splitTableName
 
 DIALECTS: Dict[DatabaseType, DatabaseDialect] = {
     DatabaseType.MYSQL: MySQLDialect(),
@@ -17,6 +17,82 @@ DIALECTS: Dict[DatabaseType, DatabaseDialect] = {
     }
 
 
+class RowStream:
+    """The chunks of one streamed query, and the cursor they come from.
+
+    close() releases the cursor, and any rows left unread on the connection,
+    whether or not iteration ever started -- which a generator's `finally`
+    can't promise, since closing a generator that never started skips it. On
+    MySQL and MariaDB, rows left unread make the connection refuse every
+    later statement. The stream closes itself once exhausted, or when reading
+    fails, and its Database closes it if nothing else has.
+    """
+
+    def __init__(self, database: 'Database', cursor: Any, chunkSize: int, firstChunk: List[Tuple[Any, ...]]) -> None:
+        self._database = database
+        self._cursor = cursor
+        self._chunkSize = chunkSize
+        self._pending: Optional[List[Tuple[Any, ...]]] = firstChunk
+        self.closed = False
+
+
+    def __iter__(self) -> 'RowStream':
+
+        return self
+
+
+    def __next__(self) -> List[Tuple[Any, ...]]:
+
+        if self.closed:
+            raise StopIteration
+
+        if self._pending is not None:
+            chunk, self._pending = self._pending, None
+        else:
+            try:
+                chunk = self._cursor.fetchmany(self._chunkSize)
+            except BaseException:
+                self.close()
+                raise
+
+        if not chunk:
+            self.close()
+            raise StopIteration
+
+        return list(chunk)
+
+
+    def close(self) -> None:
+        """Best-effort: the connection may already be gone, and an error here
+        must not replace whatever error led to the close.
+        """
+
+        if self.closed:
+            return
+        self.closed = True
+        self._pending = None
+        self._database._streams.discard(self)
+
+        try:
+            self._database.dialect.discardRemaining(self._database.connection, self._cursor)
+        except Exception:
+            pass
+        try:
+            self._cursor.close()
+        except Exception:
+            pass
+
+
+    def __enter__(self) -> 'RowStream':
+
+        return self
+
+
+    def __exit__(self, excType: Optional[Type[BaseException]], excValue: Optional[BaseException], traceback: Optional[TracebackType]) -> None:
+
+        self.close()
+
+
 class Database:
 
     def __init__(self, connectionSettings: DatabaseConnectionConfig) -> None:
@@ -24,6 +100,8 @@ class Database:
         self.type = connectionSettings.type
         self.dialect = DIALECTS[self.type]
         self.primaryKeyCache: Dict[str, List[str]] = {}
+        self.columnNameCache: Dict[str, List[str]] = {}
+        self._streams: Set[RowStream] = set()
         self.connect()
 
 
@@ -33,9 +111,18 @@ class Database:
 
 
     def close(self) -> None:
+        """Closes any stream still open first, so its unread rows can't make
+        closing the cursor fail. The connection is closed even if the cursor
+        can't be.
+        """
 
-        self.cursor.close()
-        self.connection.close()
+        for stream in list(self._streams):
+            stream.close()
+
+        try:
+            self.cursor.close()
+        finally:
+            self.connection.close()
 
 
     def __enter__(self) -> 'Database':
@@ -45,7 +132,15 @@ class Database:
 
     def __exit__(self, excType: Optional[Type[BaseException]], excValue: Optional[BaseException], traceback: Optional[TracebackType]) -> None:
 
-        self.close()
+        if excType is None:
+            self.close()
+            return
+
+        # Already failing: a close error would replace the error that matters.
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
     def query(self, query: str) -> List[Tuple[Any, ...]]:
@@ -68,8 +163,9 @@ class Database:
         return WATERMARK_PLACEHOLDER.sub(self.dialect.placeholders(1)[0], query)
 
 
-    def stream(self, query: str, chunkSize: int, parameters: Optional[Sequence[Any]] = None) -> Tuple[List[str], Iterator[List[Tuple[Any, ...]]]]:
-        """Runs `query` and returns (columnNames, chunkIterator).
+    def stream(self, query: str, chunkSize: int, parameters: Optional[Sequence[Any]] = None) -> Tuple[List[str], RowStream]:
+        """Runs `query` and returns (columnNames, chunks), chunks being a
+        RowStream to iterate and, if it isn't read to the end, to close.
 
         The memory ceiling of an extract becomes chunkSize * row width, whatever
         the table's size -- where query()/fetchall() builds Python objects for
@@ -88,10 +184,6 @@ class Database:
         Nothing here commits. A commit would invalidate a PostgreSQL server-side
         cursor mid-iteration; the extract side has nothing to commit anyway.
 
-        The iterator closes its cursor when it's exhausted or abandoned -- the
-        finally runs on GeneratorExit too, so a transform raising part-way
-        through doesn't leak a server-side cursor for the life of the connection.
-
         `parameters` are bound by the driver, not interpolated. One caveat comes
         with them on the %s-paramstyle dialects (mysql, postgresql, mssql): once
         a statement carries parameters, a literal % elsewhere in it (a LIKE
@@ -101,43 +193,22 @@ class Database:
         """
 
         cursor = self.dialect.streamingCursor(self.connection, chunkSize=chunkSize)
+        stream = RowStream(self, cursor, chunkSize, [])
+        self._streams.add(stream)
 
-        if parameters is None:
-            cursor.execute(query)
-        else:
-            cursor.execute(query, tuple(parameters))
+        try:
+            if parameters is None:
+                cursor.execute(query)
+            else:
+                cursor.execute(query, tuple(parameters))
 
-        firstChunk = cursor.fetchmany(chunkSize)
-        columns = [row[0] for row in cursor.description]
+            stream._pending = list(cursor.fetchmany(chunkSize))
+            columns = [row[0] for row in cursor.description]
+        except BaseException:
+            stream.close()
+            raise
 
-        def chunks() -> Iterator[List[Tuple[Any, ...]]]:
-
-            try:
-                chunk = firstChunk
-                while chunk:
-                    yield chunk
-                    chunk = cursor.fetchmany(chunkSize)
-            finally:
-                # Let the dialect release anything still queued before the close:
-                # some drivers (mysql.connector) hold unread rows against the
-                # connection, where closing the cursor alone leaves it unusable
-                # for the next statement.
-                try:
-                    self.dialect.discardRemaining(self.connection, cursor)
-                except Exception:
-                    pass
-                # Best-effort: the connection may already be gone. An abandoned
-                # generator is finalized by the garbage collector, which can run
-                # after Database.__exit__ has closed the connection out from
-                # under it -- and a cursor-close error raised from a finally
-                # during unwinding would replace whatever real exception sent us
-                # here in the first place.
-                try:
-                    cursor.close()
-                except Exception:
-                    pass
-
-        return columns, chunks()
+        return columns, stream
 
 
     def alter(self, query: str) -> None:
@@ -171,6 +242,44 @@ class Database:
         self.cursor.execute(query)
 
         return [row[0] for row in self.cursor.description]
+
+
+    def catalogColumns(self, table: str, columns: Optional[Sequence[str]] = None) -> List[str]:
+        """`columns` as the catalog spells them -- or all of the table's, in its
+        order -- for writing quoted into a statement.
+
+        Quoting is what lets a reserved word (`rank`, `order`) be a column, and
+        it makes a name case-sensitive on Oracle and PostgreSQL, so a
+        configured `job` has to become the catalog's `JOB` first. An exact
+        match wins; otherwise the one match ignoring case. Memoized like the
+        primary key, since a load asks once per chunk.
+        """
+
+        if table not in self.columnNameCache:
+            self.columnNameCache[table] = self.getAllColumnNames(table=table)
+        catalog = self.columnNameCache[table]
+
+        if columns is None:
+            return list(catalog)
+
+        resolved = []
+        for column in columns:
+            if column in catalog:
+                resolved.append(column)
+                continue
+            matches = [name for name in catalog if name.upper() == column.upper()]
+            if not matches:
+                raise ConfigurationError('{} has no column {} (it has: {})'.format(table, column, ', '.join(catalog)))
+            if len(matches) > 1:
+                raise ConfigurationError('{} has columns {} that differ only in case; name the one meant exactly'.format(table, ', '.join(matches)))
+            resolved.append(matches[0])
+
+        return resolved
+
+
+    def quoted(self, columns: Sequence[str]) -> List[str]:
+
+        return [quoteIdentifier(self.type, column) for column in columns]
 
 
     def getPrimaryColumnNames(self, table: str) -> List[str]:
@@ -231,10 +340,8 @@ class Database:
         """
 
         columns, chunks = self.stream(query=query, chunkSize=rows)
-        try:
+        with chunks:
             firstChunk = next(chunks, [])
-        finally:
-            chunks.close()  # type: ignore[attr-defined]
 
         return columns, list(firstChunk)
 
@@ -273,7 +380,7 @@ class Database:
         ConfigurationError, so the job fails once instead of being retried.
         """
 
-        allColumns = columns if columns is not None else self.getAllColumnNames(table=table)
+        allColumns = self.catalogColumns(table=table, columns=columns)
         primaryColumns = self.getPrimaryColumnNames(table=table)
 
         if not primaryColumns:
@@ -306,7 +413,7 @@ class Database:
         mid-job failure.
         """
 
-        resolvedColumns = columns if columns is not None else self.getAllColumnNames(table=table)
+        resolvedColumns = self.quoted(self.catalogColumns(table=table, columns=columns))
         query = 'INSERT INTO {} ({}) VALUES ({})'.format(table, ', '.join(resolvedColumns), ', '.join(self.dialect.placeholders(len(resolvedColumns))))
 
         for batch in self._batches(data, chunkSize):
@@ -325,11 +432,13 @@ class Database:
         """
 
         allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=table, columns=columns)
-        query = self.dialect.upsertQuery(table=table, allColumns=allColumns, primaryKeyColumns=primaryKeyColumns, nonPrimaryKeyColumns=nonPrimaryKeyColumns)
 
         normalizedColumns = [column.upper() for column in allColumns]
         keyIndexes = [normalizedColumns.index(column.upper()) for column in primaryKeyColumns if column.upper() in normalizedColumns]
         canCollapse = len(keyIndexes) == len(primaryKeyColumns)
+
+        allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self.quoted(allColumns), self.quoted(primaryKeyColumns), self.quoted(nonPrimaryKeyColumns)
+        query = self.dialect.upsertQuery(table=table, allColumns=allColumns, primaryKeyColumns=primaryKeyColumns, nonPrimaryKeyColumns=nonPrimaryKeyColumns)
 
         for batch in self._batches(data, chunkSize):
             loaded = False
@@ -343,7 +452,7 @@ class Database:
 
     def upsertFromStage(self, targetTable: str, stageTable: str, columns: Optional[List[str]] = None) -> None:
 
-        allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=targetTable, columns=columns)
+        allColumns, primaryKeyColumns, nonPrimaryKeyColumns = (self.quoted(bucket) for bucket in self._getColumnBuckets(table=targetTable, columns=columns))
         query = self.dialect.upsertFromStageQuery(targetTable=targetTable, stageTable=stageTable, allColumns=allColumns,
                                                     primaryKeyColumns=primaryKeyColumns, nonPrimaryKeyColumns=nonPrimaryKeyColumns)
         self.alter(query=query)

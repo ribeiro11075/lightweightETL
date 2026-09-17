@@ -73,9 +73,9 @@ A NULL stays NULL under every strategy except `constant` and `null`.
 | `constant` | `value` in every row, NULLs included. | `value` (required) |
 | `hash` | An opaque hex token, e.g. `cust_9f86d081884c7d65`. | `length` (12–64, default 16), `prefix` |
 | `email` | Still an email address, e.g. `u9f86d081884c@example.test`. Keyed on the lower-cased address. | `length` (8–40, default 12), `mailDomain` (default `example.test`), `keepDomain` |
-| `digits` | Each digit replaced, everything else kept: `+1 (555) 010-9999` → `+1 (831) 402-5517`. Keyed on the digits alone, so formatting doesn't matter. Integers keep their digit count. | `keepLeading`, `keepTrailing` (e.g. `4` for a card number) |
-| `number` | A number of the same type and precision, either within `variance` of the original (default `0.1`) or within `min`–`max`. | `min` + `max`, or `variance` (0–1); `decimals` |
-| `dateShift` | Moved by a keyed number of whole days, never zero. Times of day are kept. ISO 8601 text, which is how SQLite stores dates, is written back in the same format. | `maxDays` (default 30) |
+| `digits` | Each digit replaced, everything else kept: `+1 (555) 010-9999` → `+1 (831) 402-5517`. Keyed on the digits alone, so formatting doesn't matter. Integers keep their digit count. Digits in any script (full-width `１２３`, Arabic-Indic `١٢٣`) are masked too, and written back in their own script. | `keepLeading`, `keepTrailing` (e.g. `4` for a card number) |
+| `number` | A number of the same type and precision, either within `variance` of the original (default `0.1`) or within `min`–`max`. A value the variance would round back to itself, such as a small integer, moves one step instead; zero stays zero. | `min` + `max`, or `variance` (0–1); `decimals` |
+| `dateShift` | Moved by a keyed number of whole days, never zero. Times of day are kept. ISO 8601 text, which is how SQLite stores dates, is written back in the same format. `0001-01-01` and `9999-12-31` are kept, since they mean "no date" or "forever"; a date near either is shifted away from it. | `maxDays` (default 30) |
 | `key` | A one-to-one mapping, safe for primary and foreign keys. See below. | `charset`: `alphanumeric` (default), `digits`, `hex` |
 | `fpe` | Like `key`, but using NIST's FF1 format-preserving encryption, for policies that must name a standard. See below. | `charset`: `alphanumeric` (default), `digits`, `hex`; `strict` |
 | `fakeName`, `fakeFirstName`, `fakeLastName`, `fakeCity`, `fakeCompany`, `fakeStreetAddress` | Realistic values from bundled lists. Not unique. | `maxLength`; `locale`, below |
@@ -96,6 +96,10 @@ The output has the same shape as the input:
 
 `charset` is set once per column rather than detected from each value, because detection could give two different shapes the same output.
 
+**Only ASCII letters and digits are masked**, so a value with letters or digits in another script fails the job rather than being copied through: `Дмитрий`, `王伟`, `José` or `١٢٣` under `alphanumeric`, and digits outside 0-9 under `digits` or `hex`. Other characters (spaces, punctuation, `€`) are kept as they are. Use `hash`, a `fake*` strategy or `null` for names in any script, and the `digits` strategy for numbers written in other digits.
+
+**Values are limited to 256 characters**, or 256 digits for an integer. `key` is for identifiers, and its cost grows with the square of a value's length; a longer value fails the job with a suggestion of `hash`, `redact` or `null`. The same limits apply to `fpe`.
+
 `number` handles ordinary numeric columns. `key` is for identifiers, whose values have to stay distinct.
 
 ### `fpe`
@@ -105,7 +109,7 @@ The output has the same shape as the input:
 - It keeps shapes the way `key` does: integers keep sign and digit count, text keeps its length and every character outside `charset`. With `alphanumeric`, letters and digits share one alphabet, so a letter may become a digit; `key` keeps each character's class.
 - The masking key is turned into an AES key per domain, and the domain goes into FF1's tweak.
 - **FF1 needs at least a million possible values**: six digits, five hex characters or four alphanumerics. Shorter values are masked with `key`'s permutation instead, and still never collide with longer ones, since lengths are kept. **`strict: true`** fails the job on a shorter value instead, for policies that require FF1 for every value; the error gives the minimum length, never the value. `audit` notes each `fpe` column without `strict`.
-- It is about half as fast as `key`: roughly 20,000 values a second per worker.
+- It is slower than `key`: roughly 20,000 distinct values a second per worker. Repeated values are remembered, as described under [speed](#speed).
 
 Only encryption is implemented. Nothing in the package can reverse a mask.
 
@@ -161,6 +165,14 @@ columns:
 ```
 
 Derive anything random from `self.keyedHash` (`digest`, `below`, `unit`, `permute`), so the mask stays keyed, consistent within its domain, and reproducible. `validate` imports the class and checks its options; the module must also be importable wherever jobs run. The manifest records the strategy by the name the policy used.
+
+If `mask()` depends on nothing but the value, set `CACHEABLE = True` on the class, and repeated values are remembered rather than masked again. It's off by default, since a strategy could depend on something else.
+
+### Speed
+
+Masking is pure Python, a column at a time. `hash`, `email`, `digits` and the `fake*` strategies manage hundreds of thousands of values a second on one core, and `key` and `fpe` a few tens of thousands, since each value takes several rounds of HMAC or AES.
+
+Those six strategies remember what they've masked, up to 16,384 values per column: text of up to 256 characters, integers and UUIDs, which are the types whose equal values always mask the same way. A foreign key or a low-cardinality column repeats values constantly, so this makes them many times faster; a column of unique values, such as a primary key, gains nothing. A column's cache holds a few megabytes at most, and nothing that isn't already in the job's memory.
 
 
 ## Domains: keeping joins intact
@@ -297,7 +309,7 @@ understudy run --manifest audit/manifest.json
 understudy verify-manifest audit/manifest.json
 ```
 
-`verify-manifest` exits 0 for an intact manifest (saying whether it was signed), and 1 if it was altered or its signature doesn't match. A signed manifest records its key's fingerprint; verifying it without that key exits 2 rather than half-answering. `--manifest-key-variable` reads the key from another variable, on both commands.
+`verify-manifest` exits 0 for an intact manifest (saying whether it was signed), and 1 if it was altered or its signature doesn't match. With `UNDERSTUDY_MANIFEST_KEY` set, an unsigned manifest exits 1 too: otherwise an edited manifest could pass by dropping its signature and recomputing its digest. A signed manifest records its key's fingerprint; verifying it without that key exits 2 rather than half-answering. `--manifest-key-variable` reads the key from another variable, on both commands.
 
 
 ## Reviewing policies: `audit`
@@ -318,9 +330,13 @@ understudy audit --connect --strict   # also asks the databases; fails on warnin
 | warning | A job copies from a database without masking while other jobs mask what they read from it. |
 | warning | A masked job reads over a connection that isn't encrypted, as the server reports it (`--connect`). |
 | warning | `shuffle` on an incremental job, whose small chunks leave values near their own rows. |
+| warning | A domain is masked two ways, or under two keys, in one target database, so its masks won't match across the columns that share it. Copies in different target databases may use different keys. |
+| warning | A foreign-key column isn't masked exactly like the key it references (strategy, options, domain and key), so the copied references won't match (`--connect`). |
 | note | Columns that fall to `defaultStrategy`, by name (`--connect`). |
 
 Without `--connect`, columns are shown as declared. With it, each masked query is run for a single row, discarded unexamined, to list the columns it really returns and the policy each one gets.
+
+The foreign-key check reads the foreign keys of each target database and of the sources copied into it, since a copy often declares none. A key's tables are matched to jobs by `targetTableFinal`'s name, without its schema, and a masked job's target columns to its query's columns by position, as the load matches them. A job that doesn't mask copies every column as it is, and so does `keep`; a reference masked with `null` points at nothing, so it can't break.
 
 `audit` exits 1 on an error, and with `--strict` on a warning too, so it can gate a CI pipeline. `--format json` writes the same report for other tools, and `--output FILE` writes it to a file. `--job` narrows it.
 
@@ -446,7 +462,7 @@ customers: 1000 row(s)
   sample: {'id': 1, 'email': 'u5e9bbb2e91df@example.test', 'first_name': 'Hugo', ...}
 ```
 
-- **Keys are unique.** Integer keys continue after the table's current maximum; text keys run `S1`, `S2`, ... after the current row count; UUID keys are generated.
+- **Keys are unique.** Integer keys continue after the table's current maximum; text keys run `S1`, `S2`, ... after the current row count (`S0001`, `S0002`, ... in a fixed-width column, so each stays distinct at full width); UUID keys are generated.
 - **Foreign keys resolve.** Values are drawn from the parent's existing rows, so parents are filled first; `--table` order doesn't matter. A table whose key is made only of foreign keys gets as many rows as its parents allow, which may be fewer than asked.
 - **Names drive realism.** Columns whose names suggest personal data (email, names, phone, postal code, birth date, city, company, address...) get realistic values, from the same rules `discover` uses. Everything else is random within its type: numbers within their precision, text within its length, dates since 2015. Nullable columns are NULL about one time in ten.
 - **Reproducible.** The same `--seed` on the same starting tables makes the same rows.
@@ -458,6 +474,7 @@ customers: 1000 row(s)
 ## Limits
 
 - **Free text** can hold personal data anywhere in it. `null` or `constant` remove it all. `redact` keeps the text and removes identifiers with a recognisable shape, but not names. `hash` would only replace the text with an opaque token, and `keep` would copy it as it is.
+- **Scripts other than Latin.** `key` and `fpe` refuse letters and digits outside ASCII rather than copy them; `digits` and `redact` handle digits in any script. `redact` finds only email addresses written in ASCII.
 - **Unique columns** need enough bits to avoid collisions. `hash` enforces a minimum length for that reason. The `fake*` strategies are never unique. For a unique column, use `key`, which never collides.
 - **`number` with `variance`** keeps magnitudes realistic, which also reveals them roughly. Use `min`/`max` if the magnitude itself is sensitive.
 - **`dateShift`** is keyed on the date, so everyone born on the same day still shares a birthday after masking. That's what keeps the data consistent, and it means dates are shifted, not randomized.

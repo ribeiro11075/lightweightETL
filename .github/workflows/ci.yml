@@ -38,21 +38,42 @@ jobs:
       - name: Test
         run: pytest -q
 
+  # The unit job above takes the newest versions pyproject.toml allows. This
+  # runs against real databases with the versions the container image ships,
+  # and with the oldest ones pyproject.toml allows, on the oldest Python.
   integration:
-    name: Integration tests against real databases
+    name: Integration tests against real databases, ${{ matrix.versions }} versions
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - versions: image
+            python: '3.14'
+            constraints: constraints/image.txt
+          - versions: lowest
+            python: '3.10'
+            constraints: constraints/lowest.txt
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          python-version: ${{ matrix.python }}
           cache: pip
       - name: Start the databases
         run: docker compose up -d --wait --wait-timeout 600
       - name: Install
         # psycopg2-binary rather than the extra's psycopg2, which needs
-        # PostgreSQL's build tools; the tests exercise the same driver.
-        run: python -m pip install -e ".[mysql,oracle,mssql,fpe,dev]" psycopg2-binary
+        # PostgreSQL's build tools; the tests exercise the same driver, at the
+        # version the constraints pin.
+        run: |
+          psycopg2=$(sed -n 's/^psycopg2==//p' ${{ matrix.constraints }})
+          python -m pip install --constraint ${{ matrix.constraints }} -e ".[mysql,oracle,mssql,fpe,dev]" "psycopg2-binary==$psycopg2"
+      - name: Type-check and unit test
+        if: matrix.versions == 'lowest'
+        run: |
+          mypy
+          pytest -q
       - name: Test
         run: pytest -q -m integration
       - name: Database logs

@@ -237,3 +237,26 @@ def test_a_backend_without_fingerprint_support_reports_none():
     memory.recordKeyFingerprint('job', 'abc')
 
     assert memory.readKeyFingerprints() == {}
+
+
+@pytest.mark.parametrize('value', [b'\x00\x00\x07\xd1', decimal.Decimal('12.50'), datetime.time(10, 30, 5), datetime.datetime(2026, 9, 17, 8, 0),
+                                   datetime.date(2026, 9, 17), 4711, 3.5, 'abc'])
+def test_database_memory_gives_a_watermark_back_as_the_type_it_was(tmp_path, value):
+    """The next run binds it against the source column, which a string doesn't
+    compare with the way a SQL Server rowversion's bytes do.
+    """
+    import sqlite3
+
+    from understudy_data.configuration import DatabaseConnectionConfig
+    from understudy_data.memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory
+
+    path = tmp_path / 'memory.db'
+    connection = sqlite3.connect(path)
+    connection.execute(DATABASE_MEMORY_SCHEMA)
+    connection.close()
+    memory = DatabaseMemory(DatabaseConnectionConfig(type='sqlite', database=str(path)))
+
+    memory.recordWatermark('job1', value)
+    read = memory.readWatermarks()['job1']
+
+    assert type(read) is type(value) and read == value

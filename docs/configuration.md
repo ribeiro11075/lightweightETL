@@ -66,7 +66,7 @@ warehouse:
 | `database` | required | The database name. For `sqlite`, a file path or `:memory:`. |
 | `host`, `user` | required except for `sqlite` | SQLite is a local file with no server or authentication, so these are omitted for it. |
 | `password` | required except for `sqlite`, unless `passwordCommand` is set | Held as a secret, so it never appears in a log line or a traceback. |
-| `passwordCommand` | optional | A command whose output is the password, run at every connection. For credentials that expire; see [passwords that expire](#passwords-that-expire). |
+| `passwordCommand` | optional | A command whose output is the password, run at every connection. A string is split as a shell would split it, without a shell; `validate` rejects one that names no program or has an unterminated quote. For credentials that expire; see [passwords that expire](#passwords-that-expire). |
 | `port` | optional | The driver's standard port when omitted. |
 | `serviceName` / `sid` | oracle only | Exactly one is required for `type: oracle`. |
 | `currentSchema` | optional, postgresql and oracle only | The schema unqualified table names, and every key and column lookup, resolve in. PostgreSQL sets `search_path` to this schema alone; Oracle sets `CURRENT_SCHEMA`. On the other databases, qualify names as `schema.table` instead. |
@@ -161,7 +161,7 @@ jobs:
 | `refresh` | optional | Minimum minutes between runs. Applies across separate invocations too. A predecessor inside its own refresh window is **not** waited for — see [refresh and predecessors](design.md#refresh-and-predecessors). |
 | `predecessors` | optional | Jobs that must complete first. A job whose predecessor fails is **skipped**. Predecessors that form a cycle are a validation error. |
 | `retries` | optional, `0` | Extra attempts after a failure, with exponential backoff. See [retries](design.md#retries). |
-| `retryDelaySeconds` | optional, `5.0` | The first backoff delay; each subsequent one doubles. |
+| `retryDelaySeconds` | optional, `5.0` | The first backoff delay; each subsequent one doubles, up to five minutes. |
 | `timeoutSeconds` | optional | The most the job may take, retries included. Past it, the job's process is stopped, the job fails, and its dependents are skipped. See [workers](design.md#workers). |
 
 ### Extract
@@ -170,7 +170,7 @@ jobs:
 | --- | --- | --- |
 | `sourceDatabase` | required | An alias from `database.yaml`. |
 | `sourceQuery` | required | The query to extract with. |
-| `chunkSize` | required | Rows per batch. Extracts stream, so this is the **memory dial**: peak memory is about `chunkSize` × row width however large the source is. |
+| `chunkSize` | required, at least 1 | Rows per batch. Extracts stream, so this is the **memory dial**: peak memory is about `chunkSize` × row width however large the source is. |
 | `watermarkColumn` | optional | Makes the job incremental. See [incremental loads](design.md#incremental-loads). |
 | `watermarkInitial` | required with `watermarkColumn` | The value bound on the first run, before anything is stored. |
 
@@ -238,7 +238,7 @@ Transforms apply to **`sourceQuery`'s own result columns**, not the target's —
 | `targetDatabase` | required | An alias from `database.yaml`. |
 | `targetTableFinal` | required | The table to load: `table`, or `schema.table` for one outside the connection's current schema. |
 | `insertStrategy` | required | `swap` or `upsert` — below. |
-| `targetTableStage` | required for `swap` | A staging table with the same shape. For `swap`, it must be in the same schema as `targetTableFinal`. |
+| `targetTableStage` | required for `swap` | A staging table with the same shape, emptied before each load, so it must be a different table from `targetTableFinal` (compared ignoring case). For `swap`, it must be in the same schema as `targetTableFinal`. |
 | `targetColumns` | optional | Target column names matching `sourceQuery`'s SELECT list **by position**. |
 | `preTargetAdhocQueries` | optional | SQL run on the target before any write, the stage load included. |
 | `postTargetAdhocQueries` | optional | SQL run on the target after the load. |
@@ -265,7 +265,9 @@ Masking runs after transforms, on `sourceQuery`'s result columns. **Every column
 
 ### Load details
 
-**`targetColumns` is purely positional.** Left unset, `sourceQuery` must select every column of `targetTableFinal` in that table's own order. Real column names in the wrong order load data into the wrong columns *without any error*, since both sides are valid; a wrong name or count fails at the database.
+**`targetColumns` is purely positional.** Left unset, `sourceQuery` must select every column of `targetTableFinal` in that table's own order. Real column names in the wrong order load data into the wrong columns *without any error*, since both sides are valid; a wrong count fails at the database.
+
+**Column names are quoted** in the statements a load writes, so a reserved word such as `rank` or `order` works as a column. Each name is first matched to the target's own spelling, ignoring case, so `targetColumns: [job]` still finds Oracle's `JOB`; a name the table doesn't have fails the job before anything is written, and so does one that matches two columns differing only in case, until it's spelled exactly. Table names are written as given.
 
 
 ## Validation

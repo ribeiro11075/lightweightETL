@@ -157,10 +157,8 @@ class DatabaseHistory(RunHistory):
             query += ' ORDER BY finished_at DESC, job'
 
             _, chunks = database.stream(query=query, chunkSize=limit, parameters=parameters)
-            try:
+            with chunks:
                 rows = next(chunks, [])
-            finally:
-                chunks.close()  # type: ignore[attr-defined]
 
         records = []
         for runId, name, status, rowCount, attempts, startedAt, finishedAt, error in rows:

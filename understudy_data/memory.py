@@ -319,10 +319,17 @@ class DatabaseMemory(MemoryBackend):
             return value.isoformat(), 'datetime'
         if isinstance(value, datetime.date):
             return value.isoformat(), 'date'
+        if isinstance(value, datetime.time):
+            return value.isoformat(), 'time'
         if isinstance(value, int) and not isinstance(value, bool):
             return str(value), 'int'
         if isinstance(value, float):
             return repr(value), 'float'
+        if isinstance(value, decimal.Decimal):
+            return str(value), 'decimal'
+        # SQL Server's rowversion, the usual way to track changes there.
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return bytes(value).hex(), 'bytes'
 
         return str(value), 'str'
 
@@ -338,6 +345,12 @@ class DatabaseMemory(MemoryBackend):
             return int(text)
         if typeTag == 'float':
             return float(text)
+        if typeTag == 'time':
+            return datetime.time.fromisoformat(text)
+        if typeTag == 'decimal':
+            return decimal.Decimal(text)
+        if typeTag == 'bytes':
+            return bytes.fromhex(text)
 
         return text
 

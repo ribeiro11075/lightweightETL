@@ -207,3 +207,42 @@ def test_the_deepest_subset_allowed_runs_on_every_server(server):
                 database.alter('DROP TABLE {}'.format(name))
             except Exception:
                 database.connection.rollback()
+
+
+def _maskedJob(source, target, policy):
+    return Configuration.validateJobConfiguration({'workers': 1, 'jobs': {'mask': {
+        'active': True, 'sourceDatabase': 'db', 'targetDatabase': 'db', 'sourceQuery': 'SELECT * FROM {}'.format(source),
+        'targetTableFinal': target, 'insertStrategy': 'upsert', 'chunkSize': 5, 'masking': {'key': KEY, 'columns': policy}}}}, DataJobsFile)
+
+
+def test_checking_a_masked_query_leaves_the_connection_usable(schema):
+    """Reading one row and closing the rest unread used to leave MySQL and
+    MariaDB connections refusing the close itself, so --dry-run and
+    audit --connect called every such job uncheckable.
+    """
+    from understudy_data.cli import _sourceQueryColumns
+
+    settings, database, names = schema
+    jobsFile = _maskedJob(names['customers'], names['customers_copy'], {'id': 'keep'})
+
+    columns = _sourceQueryColumns(jobsFile.jobs['mask'], {'db': settings})
+
+    assert [column.lower() for column in columns] == ['id', 'email', 'tier', 'balance', 'born']
+
+
+def test_a_policy_that_misses_a_column_fails_once_and_names_it(schema, tmp_path):
+    """The MaskingError used to be replaced by the stream's InternalError on
+    MySQL, retried as if temporary, and the column never named.
+    """
+    settings, database, names = schema
+    jobsFile = _maskedJob(names['customers'], names['customers_copy'], {'id': 'keep', 'email': 'email', 'tier': 'keep', 'balance': 'null'})
+    jobsFile.jobs['mask'].retries = 2
+    jobsFile.jobs['mask'].retryDelaySeconds = 0
+
+    result = runDataJobs(jobsFile=jobsFile, databaseConfiguration={'db': settings}, memory=FileMemory(tmp_path / 'memory.yaml'),
+                         logFile=tmp_path / 'runner.log')
+
+    (outcome,) = result.outcomes
+    assert outcome.status == JobStatus.FAILED and outcome.attempts == 1
+    assert outcome.error.startswith('MaskingError:') and 'born' in outcome.error.lower()
+    assert database.query('SELECT count(*) FROM {}'.format(names['customers_copy']))[0][0] == 0

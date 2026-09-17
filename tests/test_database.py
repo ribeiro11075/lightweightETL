@@ -21,6 +21,8 @@ def _mockedDatabase(dbType: DatabaseType) -> Database:
     database.cursor = MagicMock()
     database.connection = MagicMock()
     database.primaryKeyCache = {}
+    database._streams = set()
+    database.columnNameCache = {}
     database.getAllColumnNames = MagicMock(return_value=['id', 'name'])
     database.getPrimaryColumnNames = MagicMock(return_value=['id'])
 
@@ -153,7 +155,7 @@ def test_postgresql_inserts_through_copy_one_batch_at_a_time():
     database.insert(table='people', data=[(1, 'a'), (2, 'b'), (3, 'c')], chunkSize=2, columns=['id', 'name'])
 
     copies = database.cursor.copy_expert.call_args_list
-    assert [call.args[0] for call in copies] == ['COPY people (id, name) FROM STDIN'] * 2
+    assert [call.args[0] for call in copies] == ['COPY people ("id", "name") FROM STDIN'] * 2
     assert [call.args[1].getvalue() for call in copies] == ['1\ta\n2\tb\n', '3\tc\n']
     database.cursor.executemany.assert_not_called()
     assert database.connection.commit.call_count == 2
@@ -171,8 +173,45 @@ def test_a_copied_upsert_sends_only_the_last_row_of_each_key():
     assert copy.args[1].getvalue() == '1\tc\n2\tb\n'
     statements = [call.args[0] for call in database.cursor.execute.call_args_list]
     assert statements[0].startswith('CREATE TEMPORARY TABLE IF NOT EXISTS understudy_upsert_')
-    assert 'ON COMMIT DELETE ROWS AS SELECT id, name FROM people WITH NO DATA' in statements[0]
-    assert statements[1].startswith('INSERT INTO people (id, name) SELECT id, name FROM understudy_upsert_')
+    assert 'ON COMMIT DELETE ROWS AS SELECT "id", "name" FROM people WITH NO DATA' in statements[0]
+    assert statements[1].startswith('INSERT INTO people ("id", "name") SELECT "id", "name" FROM understudy_upsert_')
+    assert statements[1].endswith('ON CONFLICT("id") DO UPDATE SET "name"=excluded."name"')
+
+
+@pytest.mark.parametrize('dbType,quoted', [(DatabaseType.MYSQL, '`rank`'), (DatabaseType.MSSQL, '[rank]'), (DatabaseType.ORACLE, '"RANK"')])
+def test_loads_quote_column_names_as_the_catalog_spells_them(dbType, quoted):
+    """A reserved word can be a column, and a configured `rank` still finds
+    Oracle's RANK, since the name is resolved before it is quoted.
+    """
+    database = _mockedDatabase(dbType)
+    database.getAllColumnNames = MagicMock(return_value=['ID', 'RANK'] if dbType == DatabaseType.ORACLE else ['id', 'rank'])
+
+    database.insert(table='scores', data=[(1, 2)], columns=['id', 'rank'])
+
+    (statement,) = {call.args[0] for call in database.cursor.executemany.call_args_list} | {
+        call.args[0] for call in database.cursor.execute.call_args_list}
+    assert quoted in statement
+
+
+def test_a_configured_column_the_table_lacks_is_a_configuration_error():
+    from understudy_data.configuration import ConfigurationError
+
+    database = _mockedDatabase(DatabaseType.MYSQL)
+
+    with pytest.raises(ConfigurationError, match='people has no column nmae'):
+        database.insert(table='people', data=[(1, 'a')], columns=['id', 'nmae'])
+
+
+def test_columns_differing_only_in_case_must_be_named_exactly():
+    from understudy_data.configuration import ConfigurationError
+
+    database = _mockedDatabase(DatabaseType.POSTGRESQL)
+    database.getAllColumnNames = MagicMock(return_value=['id', 'Name', 'NAME'])
+
+    with pytest.raises(ConfigurationError, match='differ only in case'):
+        database.insert(table='people', data=[(1, 'a')], columns=['id', 'name'])
+
+    database.insert(table='people', data=[(1, 'a')], columns=['id', 'Name'])
 
 
 def test_chunk_insert_splits_data_into_multiple_batches():
@@ -282,3 +321,73 @@ def test_upsert_of_an_empty_result_set_issues_no_statement():
 
     assert database.cursor.executemany.call_count == 0
     assert database.connection.commit.call_count == 0
+
+
+def _streamingDatabase(dbType=DatabaseType.MYSQL):
+    database = _mockedDatabase(dbType)
+    streamCursor = MagicMock()
+    streamCursor.fetchmany.side_effect = [[(1,)], [(2,)], []]
+    streamCursor.description = [('id',)]
+    database.dialect = MagicMock(wraps=database.dialect)
+    database.dialect.streamingCursor.return_value = streamCursor
+    return database, streamCursor
+
+
+def test_closing_a_stream_that_was_never_read_releases_its_rows():
+    """A generator closed before it starts skips its `finally`, which left
+    MySQL's connection refusing every later statement.
+    """
+    database, streamCursor = _streamingDatabase()
+
+    columns, chunks = database.stream('SELECT id FROM t', chunkSize=1)
+    chunks.close()
+
+    assert columns == ['id']
+    database.dialect.discardRemaining.assert_called_once_with(database.connection, streamCursor)
+    streamCursor.close.assert_called_once()
+    assert list(chunks) == []
+
+
+def test_a_stream_read_to_the_end_closes_itself():
+    database, streamCursor = _streamingDatabase()
+
+    _, chunks = database.stream('SELECT id FROM t', chunkSize=1)
+
+    assert list(chunks) == [[(1,)], [(2,)]]
+    streamCursor.close.assert_called_once()
+    assert database._streams == set()
+
+
+def test_closing_the_database_closes_an_open_stream_first():
+    database, streamCursor = _streamingDatabase()
+    order = []
+    streamCursor.close.side_effect = lambda: order.append('stream')
+    database.cursor.close.side_effect = lambda: order.append('cursor')
+
+    database.stream('SELECT id FROM t', chunkSize=1)
+    database.close()
+
+    assert order == ['stream', 'cursor']
+    database.connection.close.assert_called_once()
+
+
+def test_a_failure_to_close_does_not_replace_the_error_that_ended_the_block():
+    database = _mockedDatabase(DatabaseType.MYSQL)
+    database.cursor.close.side_effect = RuntimeError('Unread result found')
+
+    with pytest.raises(ValueError, match='the policy does not cover email'):
+        with database:
+            raise ValueError('the policy does not cover email')
+
+    database.connection.close.assert_called_once()
+
+
+def test_a_query_that_fails_closes_its_stream():
+    database, streamCursor = _streamingDatabase()
+    streamCursor.execute.side_effect = RuntimeError('syntax')
+
+    with pytest.raises(RuntimeError):
+        database.stream('SELEC id FROM t', chunkSize=1)
+
+    streamCursor.close.assert_called_once()
+    assert database._streams == set()

@@ -32,10 +32,29 @@ import json
 import math
 import random
 import re
+import unicodedata
 import uuid
 from typing import Any, Callable, ClassVar, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Type
 
 KEY_MINIMUM_LENGTH = 16
+
+# Masks remembered per column, for strategies that can be. A foreign key or a
+# low-cardinality column repeats values, and `key` and `fpe` cost tens of
+# microseconds a value. The bound, with MASK_CACHE_MAXIMUM_TEXT, keeps a
+# column's cache to a few megabytes; the values it holds are in the job's
+# memory anyway.
+MASK_CACHE_SIZE = 16384
+MASK_CACHE_MAXIMUM_TEXT = 256
+
+# The types whose equal values always mask the same way. Equal Decimals,
+# floats and datetimes can differ in scale, sign of zero or time zone, which
+# some strategies keep, so they aren't cached; nor is bool, which equals 1.
+_CACHEABLE_TYPES = frozenset({str, int, uuid.UUID})
+
+# The longest value `key` and `fpe` mask, in characters or digits. They are
+# for identifiers, and their cost grows with the square of a value's length:
+# well under a millisecond here, but seconds for a document-sized value.
+MAXIMUM_KEY_LENGTH = 256
 
 # Feistel rounds for the `key` strategy's permutation. FF1 and FF3-1 use 10 and
 # 8; 10 is the conservative end, at a cost measured in microseconds per value.
@@ -171,6 +190,70 @@ class KeyedHash:
                 return result
 
 
+def _asciiDigits(text: str) -> str:
+    """`text` with every decimal digit, in any script, written as 0-9."""
+
+    if text.isascii():
+        return text
+
+    return ''.join(str(unicodedata.decimal(character)) if unicodedata.decimal(character, None) is not None else character for character in text)
+
+
+def _inScriptOf(original: str, masked: str) -> str:
+    """`masked`, which has 0-9 where `original` has a decimal digit, with each
+    of those digits written back in the script of the digit it replaced.
+    """
+
+    if original.isascii():
+        return masked
+
+    characters = []
+    for before, after in zip(original, masked):
+        value = unicodedata.decimal(before, None)
+        characters.append(chr(ord(before) - value + int(after)) if value is not None else after)
+
+    return ''.join(characters)
+
+
+def _digitCount(value: int) -> int:
+    """How many digits an integer has, without writing it out -- which Python
+    refuses past 4,300 digits."""
+
+    magnitude = abs(value)
+    if magnitude >= 10 ** MAXIMUM_KEY_LENGTH:
+        return MAXIMUM_KEY_LENGTH + 1
+
+    return len(str(magnitude))
+
+
+def _requireIdentifierLength(strategy: str, length: int) -> None:
+
+    if length > MAXIMUM_KEY_LENGTH:
+        raise MaskingError('the {} strategy masks identifiers of up to {} characters or digits, and this value is longer; '
+                           'use hash, redact or null for long values'.format(strategy, MAXIMUM_KEY_LENGTH))
+
+
+def _requireAsciiCharset(strategy: str, text: str, charset: str) -> None:
+    """Refuses text holding letters or digits the charset can't mask.
+
+    `key` and `fpe` mask ASCII letters and digits only, and keep every other
+    character, so a name in Cyrillic or an id in Arabic-Indic digits would be
+    copied as it is while the manifest says it was masked. With `digits` or
+    `hex`, letters are deliberately kept, so only digits count.
+    """
+
+    if text.isascii():
+        return
+
+    if charset == 'alphanumeric':
+        if any(not character.isascii() and character.isalnum() for character in text):
+            raise MaskingError('the {} strategy masks only ASCII letters and digits, and this value has letters or digits in another script, '
+                               'which it would copy unmasked; use hash, a fake strategy or null for such text'.format(strategy))
+    elif any(not character.isascii() and character.isdigit() for character in text):
+        raise MaskingError('the {} strategy masks only the digits 0-9, and this value has digits in another script, '
+                           'which it would copy unmasked; use the digits strategy for such text'.format(strategy))
+
+
 class Strategy:
     """How one column is masked.
 
@@ -190,10 +273,15 @@ class Strategy:
     # Whether the strategy consults the key at all. keep/null/constant don't,
     # and the manifest records that rather than implying a keyed transformation.
     KEYED: ClassVar[bool] = True
+    # Whether mask() depends on nothing but the value -- and the key and
+    # options -- so its results can be remembered. A custom strategy is not
+    # assumed to; set it where that holds.
+    CACHEABLE: ClassVar[bool] = False
 
     def __init__(self, keyedHash: KeyedHash, options: Mapping[str, Any]) -> None:
         self.keyedHash = keyedHash
         self.options = dict(options)
+        self._cache: Dict[Tuple[type, Any], Any] = {}
 
 
     @classmethod
@@ -232,7 +320,35 @@ class Strategy:
 
     def maskColumn(self, values: Sequence[Any], chunkIndex: int) -> List[Any]:
 
-        return [None if value is None else self.mask(value) for value in values]
+        if not self.CACHEABLE:
+            return [None if value is None else self.mask(value) for value in values]
+
+        return [None if value is None else self._maskRemembered(value) for value in values]
+
+
+    def _maskRemembered(self, value: Any) -> Any:
+        """mask(), from the cache where the value's type allows. A value that
+        fails to mask raises every time, since nothing is stored for it.
+        """
+
+        kind = type(value)
+        if kind not in _CACHEABLE_TYPES or (kind is str and len(value) > MASK_CACHE_MAXIMUM_TEXT):
+            return self.mask(value)
+
+        cacheKey = (kind, value)
+        try:
+            return self._cache[cacheKey]
+        except KeyError:
+            pass
+
+        masked = self.mask(value)
+        if len(self._cache) >= MASK_CACHE_SIZE:
+            # Emptied rather than evicted one at a time: the hot values are
+            # back within a chunk, and a dict needs no bookkeeping per hit.
+            self._cache.clear()
+        self._cache[cacheKey] = masked
+
+        return masked
 
 
     def mask(self, value: Any) -> Any:
@@ -344,6 +460,7 @@ class HashStrategy(Strategy):
     """
 
     NAME = 'hash'
+    CACHEABLE = True
     OPTIONS = {'length': _integerOption(12, 64), 'prefix': lambda value: '' if value is None else str(value)}
 
     def mask(self, value: Any) -> Any:
@@ -364,6 +481,7 @@ class EmailStrategy(Strategy):
     """
 
     NAME = 'email'
+    CACHEABLE = True
     OPTIONS = {'length': _integerOption(8, 40), 'mailDomain': _textOption, 'keepDomain': _booleanOption}
 
     @classmethod
@@ -399,6 +517,7 @@ class DigitsStrategy(Strategy):
     """
 
     NAME = 'digits'
+    CACHEABLE = True
     OPTIONS = {'keepLeading': _integerOption(0), 'keepTrailing': _integerOption(0)}
 
     def _maskDigits(self, digits: str) -> str:
@@ -434,13 +553,21 @@ class DigitsStrategy(Strategy):
         if not isinstance(value, str):
             raise MaskingError('the digits strategy needs text or an integer, got {}'.format(_typeName(value)))
 
-        digits = ''.join(character for character in value if '0' <= character <= '9')
+        if any(not character.isascii() and character.isdigit() and unicodedata.decimal(character, None) is None for character in value):
+            raise MaskingError('the digits strategy masks decimal digits, and this value has other digit characters '
+                               '(superscript or circled, say), which it would copy unmasked')
+
+        # Digits in any script are keyed as 0-9, so a number masks the same way
+        # whichever digits it was written in, and are written back in their own.
+        normalized = _asciiDigits(value)
+        digits = ''.join(character for character in normalized if '0' <= character <= '9')
         if not digits:
             return value
 
         replacement = iter(self._maskDigits(digits))
+        masked = ''.join(next(replacement) if '0' <= character <= '9' else character for character in normalized)
 
-        return ''.join(next(replacement) if '0' <= character <= '9' else character for character in value)
+        return _inScriptOf(value, masked)
 
 
 class NumberStrategy(Strategy):
@@ -449,7 +576,10 @@ class NumberStrategy(Strategy):
     Either within a fixed range (`min` and `max`), or within `variance` of the
     original -- 0.1 by default, so 200.00 becomes something in [180.00, 220.00].
     Variance keeps magnitudes realistic, and so does leak them roughly; use a
-    range when the magnitude itself is sensitive.
+    range when the magnitude itself is sensitive. A value that the variance
+    would round back to itself -- any integer from 1 to 5, at 10% -- moves by
+    one step of its precision instead, so no non-zero value is kept. Zero
+    stays zero, having no magnitude to vary.
 
     The type is preserved: an int stays an int, a float a float, and a Decimal
     -- how PostgreSQL, MySQL and SQL Server return NUMERIC -- keeps its own
@@ -500,6 +630,17 @@ class NumberStrategy(Strategy):
         return min(max(number, low), high)
 
 
+    def _moved(self, value: decimal.Decimal, masked: decimal.Decimal, step: decimal.Decimal, message: bytes) -> decimal.Decimal:
+        """`masked`, or one step from `value` if the variance rounded it back to
+        `value`. The direction is keyed too.
+        """
+
+        if 'min' in self.options or masked != value or value == 0:
+            return masked
+
+        return value + step if self.keyedHash.unit(message, b'step') >= 0.5 else value - step
+
+
     def mask(self, value: Any) -> Any:
 
         if isinstance(value, bool) or not isinstance(value, (int, float, decimal.Decimal)):
@@ -513,7 +654,7 @@ class NumberStrategy(Strategy):
             if isinstance(value, int):
                 step = decimal.Decimal(1)
                 masked = self._clamp(self._target(decimal.Decimal(value), message).quantize(step, rounding=decimal.ROUND_HALF_EVEN), step)
-                return int(masked)
+                return int(self._moved(decimal.Decimal(value), masked, step, message))
 
             if isinstance(value, float):
                 if not math.isfinite(value):
@@ -521,7 +662,8 @@ class NumberStrategy(Strategy):
                 target = self._target(decimal.Decimal(repr(value)), message)
                 if 'decimals' in self.options:
                     step = decimal.Decimal(1).scaleb(-self.options['decimals'])
-                    return float(self._clamp(target.quantize(step, rounding=decimal.ROUND_HALF_EVEN), step))
+                    masked = self._clamp(target.quantize(step, rounding=decimal.ROUND_HALF_EVEN), step)
+                    return float(self._moved(decimal.Decimal(repr(value)), masked, step, message))
                 return float(target)
 
             if not value.is_finite():
@@ -530,7 +672,13 @@ class NumberStrategy(Strategy):
             exponent = -self.options['decimals'] if 'decimals' in self.options else min(0, int(value.as_tuple().exponent))
             step = decimal.Decimal(1).scaleb(exponent)
 
-            return self._clamp(self._target(value, message).quantize(step, rounding=decimal.ROUND_HALF_EVEN), step)
+            masked = self._clamp(self._target(value, message).quantize(step, rounding=decimal.ROUND_HALF_EVEN), step)
+
+            return self._moved(value, masked, step, message)
+
+
+_CALENDAR_ENDS = frozenset({datetime.date.min.toordinal(), datetime.date.max.toordinal()})
+_CALENDAR_INSIDE = range(datetime.date.min.toordinal() + 1, datetime.date.max.toordinal())
 
 
 class DateShiftStrategy(Strategy):
@@ -540,6 +688,11 @@ class DateShiftStrategy(Strategy):
     everyone born on the same day still shares a birthday after masking.
     ISO 8601 text -- how SQLite stores dates -- is parsed and written back in
     the same shape.
+
+    The calendar's first and last days, 0001-01-01 and 9999-12-31, are kept:
+    they stand for "no date" or "forever", not for anyone's data, and
+    applications compare against them. A date whose shift would leave the
+    calendar, or land on one of them, is shifted the other way instead.
     """
 
     NAME = 'dateShift'
@@ -553,10 +706,24 @@ class DateShiftStrategy(Strategy):
         return datetime.timedelta(days=days + 1 if days >= 0 else days)
 
 
+    def _shift(self, value: Any) -> Any:
+        """`value`, a date or datetime, moved by its offset."""
+
+        ordinal = value.toordinal()
+        if ordinal in _CALENDAR_ENDS:
+            return value
+
+        offset = self._offset(value)
+        if ordinal + offset.days not in _CALENDAR_INSIDE:
+            offset = -offset
+
+        return value + offset
+
+
     def mask(self, value: Any) -> Any:
 
         if isinstance(value, datetime.date):
-            return value + self._offset(value)
+            return self._shift(value)
 
         if not isinstance(value, str):
             raise MaskingError('the dateShift strategy needs a date, a timestamp or ISO 8601 text, got {}'.format(_typeName(value)))
@@ -566,13 +733,13 @@ class DateShiftStrategy(Strategy):
         try:
             if len(text) == 10:
                 parsed: datetime.date = datetime.date.fromisoformat(text)
-                return (parsed + self._offset(parsed)).isoformat()
+                return self._shift(parsed).isoformat()
 
             parsedTimestamp = datetime.datetime.fromisoformat(text)
         except ValueError:
             raise MaskingError('the dateShift strategy could not read a text value as an ISO 8601 date') from None
 
-        shifted = parsedTimestamp + self._offset(parsedTimestamp)
+        shifted = self._shift(parsedTimestamp)
         separator = 'T' if 'T' in text else ' '
         timespec = 'microseconds' if '.' in text else ('seconds' if text.count(':') >= 2 else 'minutes')
 
@@ -739,6 +906,7 @@ class _FakeStrategy(Strategy):
     without it, the lists are an international mix.
     """
 
+    CACHEABLE = True
     OPTIONS = {'maxLength': _integerOption(1), 'locale': _choiceOption(*sorted(LOCALES))}
 
     @property
@@ -849,10 +1017,12 @@ class KeyStrategy(Strategy):
     """
 
     NAME = 'key'
+    CACHEABLE = True
     OPTIONS = {'charset': _choiceOption('alphanumeric', 'digits', 'hex')}
 
     def _maskInteger(self, value: int) -> int:
 
+        _requireIdentifierLength('key', _digitCount(value))
         magnitude = abs(value)
         digitCount = len(str(magnitude))
         # Zero belongs to the non-negative one-digit range only; letting a
@@ -882,6 +1052,8 @@ class KeyStrategy(Strategy):
 
     def _maskText(self, text: str, charset: str) -> str:
 
+        _requireIdentifierLength('key', len(text))
+        _requireAsciiCharset('key', text, charset)
         alphabets = self._alphabets(text, charset)
         lowered = text.lower() if charset == 'hex' else text
 
@@ -965,6 +1137,7 @@ class FPEStrategy(Strategy):
     """
 
     NAME = 'fpe'
+    CACHEABLE = True
     OPTIONS = {'charset': _choiceOption(*_FPE_ALPHABETS), 'strict': _booleanOption}
 
     def __init__(self, keyedHash: KeyedHash, options: Mapping[str, Any]) -> None:
@@ -993,6 +1166,7 @@ class FPEStrategy(Strategy):
 
     def _maskInteger(self, value: int) -> int:
 
+        _requireIdentifierLength('fpe', _digitCount(value))
         digits = [int(character) for character in str(abs(value))]
         cipher = self._cipher(10)
 
@@ -1014,6 +1188,8 @@ class FPEStrategy(Strategy):
 
     def _maskText(self, text: str, charset: str) -> str:
 
+        _requireIdentifierLength('fpe', len(text))
+        _requireAsciiCharset('fpe', text, charset)
         alphabet = _FPE_ALPHABETS[charset]
         lowered = text.lower() if charset == 'hex' else text
         positions = [index for index, character in enumerate(lowered) if character in alphabet]
@@ -1124,7 +1300,7 @@ def _phoneLike(text: str) -> bool:
 # loose phone pattern, which would otherwise swallow a card number.
 _DETECTORS: Tuple[Tuple[str, 're.Pattern[str]', Callable[[str], bool]], ...] = (
     ('email', re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'), lambda text: True),
-    ('iban', re.compile(r'\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b'), _validIban),
+    ('iban', re.compile(r'\b[A-Z]{2}\d{2}(?: ?[A-Z\d]){11,30}\b'), _validIban),
     ('card', re.compile(r'(?<![\d-])\d(?:[ -]?\d){12,18}(?![\d-])'), lambda text: _luhn(re.sub(r'\D', '', text))),
     ('ssn', re.compile(r'(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])'), lambda text: True),
     ('ip', re.compile(r'(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\.?\d)'), _validIpv4),
@@ -1173,13 +1349,16 @@ class RedactStrategy(Strategy):
         """Non-overlapping (start, end, kind), earlier detectors winning."""
 
         taken: List[Tuple[int, int, str]] = []
+        # One byte per character, set once a span claims it: checking a match
+        # against it costs the match's length, not the number of spans so far.
+        occupied = bytearray(len(text))
         for kind, pattern, check in self._detectors:
             for match in pattern.finditer(text):
                 start, end = match.span()
-                if start == end or not check(match.group(0)):
+                if start == end or occupied.find(1, start, end) != -1 or not check(match.group(0)):
                     continue
-                if all(end <= other[0] or start >= other[1] for other in taken):
-                    taken.append((start, end, kind))
+                occupied[start:end] = b'\x01' * (end - start)
+                taken.append((start, end, kind))
 
         return sorted(taken)
 
@@ -1196,9 +1375,12 @@ class RedactStrategy(Strategy):
         if kind in ('phone', 'ssn'):
             return str(self._digits.mask(found))
         if kind == 'iban':
-            return found[:2] + str(self._key.mask(found[2:]))
+            # The detectors accept digits in any script; the key strategy
+            # doesn't, so they're masked as 0-9 and written back in their own.
+            rest = found[2:]
+            return found[:2] + _inScriptOf(rest, str(self._key.mask(_asciiDigits(rest))))
         if kind == 'ip':
-            octets = self.keyedHash.digest(found.encode('ascii'), b'ip')
+            octets = self.keyedHash.digest(_asciiDigits(found).encode('ascii'), b'ip')
             return '10.{}.{}.{}'.format(octets[0], octets[1], octets[2])
 
         return 'redacted-' + self.keyedHash.digest(found.encode('utf-8'), b'pattern').hex()[:12]

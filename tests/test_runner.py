@@ -945,6 +945,19 @@ def test_retry_backoff_grows_between_attempts(monkeypatch, tmp_path):
     assert delays == [2.0, 4.0, 8.0]
 
 
+def test_retry_backoff_stops_growing_at_five_minutes(monkeypatch, tmp_path):
+    delays = []
+    monkeypatch.setattr('understudy_data.runner.time.sleep', lambda seconds: delays.append(seconds))
+
+    def alwaysFails():
+        raise OSError('down')
+
+    _runRetryWorker(monkeypatch, tmp_path, alwaysFails, jobConfig=_retryJobConfig(retries=40, retryDelaySeconds=5.0))
+
+    assert delays[:7] == [5.0, 10.0, 20.0, 40.0, 80.0, 160.0, 300.0]
+    assert set(delays[6:]) == {300.0} and len(delays) == 40
+
+
 def test_the_stored_watermark_is_read_again_on_each_attempt(monkeypatch):
     """A memory backend kept in a database fails transiently like any other
     database, so reading it belongs inside the retried attempt.

@@ -172,15 +172,40 @@ class PasswordCommandError(RuntimeError):
     """
 
 
+def splitPasswordCommand(command: Union[str, List[str]]) -> List[str]:
+    """The program and arguments a passwordCommand runs. A list is taken as it
+    is; a string is split like a shell would split it, but no shell is involved.
+
+    Raises ValueError for a command with no program, or a string a shell
+    couldn't split, such as one with an unterminated quote.
+    """
+
+    if isinstance(command, str):
+        try:
+            arguments = shlex.split(command)
+        except ValueError as error:
+            raise ValueError('passwordCommand cannot be split into a program and arguments: {}'.format(error)) from None
+    else:
+        arguments = list(command)
+
+    if not arguments or not arguments[0].strip():
+        raise ValueError('passwordCommand names no program to run')
+
+    return arguments
+
+
 def runPasswordCommand(command: Union[str, List[str]]) -> str:
     """Runs a passwordCommand and returns what it printed, stripped.
 
-    A list runs as it is; a string is split like a shell would split it, but
-    no shell is involved. The output is never put in an error message, since
-    it is the secret.
+    The output is never put in an error message, since it is the secret. A
+    command that can't be split is a ConfigurationError, since running it
+    again won't help; configuration validation normally catches it first.
     """
 
-    arguments = shlex.split(command) if isinstance(command, str) else list(command)
+    try:
+        arguments = splitPasswordCommand(command)
+    except ValueError as error:
+        raise ConfigurationError(str(error)) from None
 
     try:
         completed = subprocess.run(arguments, capture_output=True, text=True, timeout=PASSWORD_COMMAND_TIMEOUT_SECONDS)
@@ -262,6 +287,9 @@ class DatabaseConnectionConfig(BaseModel):
 
         if self.password is not None and self.passwordCommand is not None:
             raise ValueError('set password or passwordCommand, not both')
+
+        if self.passwordCommand is not None:
+            splitPasswordCommand(self.passwordCommand)
 
         if self.type != DatabaseType.SQLITE and (self.user is None or self.host is None or (self.password is None and not self.passwordCommand)):
             raise ValueError('user, host, and a password or passwordCommand are required for every database type except sqlite')
@@ -347,7 +375,7 @@ class DataJobConfig(BaseJobConfig):
     targetTableStage: Optional[str] = None
     targetTableFinal: str
     insertStrategy: InsertStrategy
-    chunkSize: int
+    chunkSize: int = Field(ge=1)
     watermarkColumn: Optional[str] = None
     watermarkInitial: Optional[Any] = None
     retries: int = 0
@@ -356,6 +384,21 @@ class DataJobConfig(BaseJobConfig):
     masking: Optional[MaskingConfig] = None
     preTargetAdhocQueries: CleanedStringList = Field(default_factory=list)
     postTargetAdhocQueries: CleanedStringList = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _requireSeparateStageTable(self) -> 'DataJobConfig':
+        """A job truncates its stage table before loading it, so a stage table
+        naming the target would empty the target first. Identifiers here are
+        unquoted, so case doesn't tell two names apart. A qualified and an
+        unqualified name can still be the same table; `run --dry-run` can't
+        tell either, so name the stage table distinctly.
+        """
+
+        if self.targetTableStage is not None and self.targetTableStage.upper() == self.targetTableFinal.upper():
+            raise ValueError('targetTableStage must be a different table from targetTableFinal: the stage table is emptied before each load')
+
+        return self
+
 
     @model_validator(mode='after')
     def _requireStageTableForSwap(self) -> 'DataJobConfig':

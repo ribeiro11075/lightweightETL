@@ -25,7 +25,7 @@ import hashlib
 import uuid
 from typing import Any, Callable, Dict, Iterator, List, NamedTuple, Optional, Sequence, Set, Tuple
 
-from .databaseDialects import ColumnDefinition, ForeignKey
+from .databaseDialects import ColumnDefinition, ForeignKey, quoteIdentifier
 from .discovery import NAME_RULES, nameWords
 from .masking import STRATEGIES, KeyedHash
 from .schema import INTEGER_BOOLEAN_NOTE, PortableType, portableType
@@ -243,8 +243,14 @@ def _offset(generator: Generator, offset: int) -> Generator:
 
 
 def _textKeys(existing: int, width: int, fixed: bool) -> Generator:
+    """S1, S2, ... -- or, for a fixed-width column, S0001, S0002, ..., padded
+    between the S and the number, so every key is distinct at full width.
+    """
 
-    return lambda row: 'S{}'.format(existing + row + 1).ljust(width if fixed else 0, '0')
+    if fixed:
+        return lambda row: 'S' + str(existing + row + 1).zfill(width - 1)
+
+    return lambda row: 'S{}'.format(existing + row + 1)
 
 
 def _integerKind(portable: PortableType) -> bool:
@@ -314,7 +320,7 @@ def planTable(database: Any, table: str, rows: int, seed: int = 0, foreignKeys: 
         portable = portableType(database.type, definition)
         name = definition.name
         if _integerKind(portable):
-            current = database.query('SELECT max({}) FROM {}'.format(name, table))[0][0]
+            current = database.query('SELECT max({}) FROM {}'.format(quoteIdentifier(database.type, name), table))[0][0]
             start = int(current or 0) + 1
             generators[name.upper()] = _sequential(start)
             plans[name.upper()] = ColumnPlan(name, 'primary key', 'sequential, from {}'.format(start))
@@ -330,7 +336,7 @@ def planTable(database: Any, table: str, rows: int, seed: int = 0, foreignKeys: 
             if len('S{}'.format(existing + rows)) > width:
                 raise SynthesisError('{}.{} holds only {} characters, too few for {} unique keys'.format(table, name, width, rows))
             generators[name.upper()] = _textKeys(existing, width, portable.kind == 'fixedText')
-            plans[name.upper()] = ColumnPlan(name, 'primary key', 'unique text, S{} onwards'.format(existing + 1))
+            plans[name.upper()] = ColumnPlan(name, 'primary key', 'unique text, {} onwards'.format(generators[name.upper()](0)))
         else:
             raise SynthesisError('{}.{} is a {} primary key, which synthesize can\'t make unique'.format(table, name, portable.kind))
 

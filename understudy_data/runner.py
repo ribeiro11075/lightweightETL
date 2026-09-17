@@ -15,6 +15,7 @@ from .dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 from .log import LOGGER_NAME, ConnectionForwarder, Log, forwardToConnection, handleForwardedRecord
 from .masking import BoundMasking, MaskingError, MaskingPlan, buildMaskingManifest, keyFingerprint
 from .memory import MemoryBackend
+from .scrubbing import describeError
 from .transform import TransformError, Transformer, TransformResolutionError, resolveTransformer, Transform
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -35,6 +36,11 @@ TERMINATE_GRACE_SECONDS = 5.0
 # How long a job may take to exit once it has sent its outcome, before it is
 # stopped. It has nothing left to do by then but close its connections.
 EXIT_GRACE_SECONDS = 10.0
+
+# The longest wait between two attempts at a job. Backoff doubles from
+# retryDelaySeconds, so without a ceiling `retries: 12` would wait 5.7 hours in
+# all, with nothing but timeoutSeconds to end it.
+MAXIMUM_RETRY_DELAY_SECONDS = 300.0
 
 # Messages read from one job's pipe before looking at the others, so a job
 # logging without pause can't starve the rest.
@@ -323,7 +329,7 @@ PERMANENT_ERRORS = (ConfigurationError, TransformError, TransformResolutionError
 
 def _executeWithRetries(jobConfig: DataJobConfig, job: str, attempt: Callable[[], JobOutcome]) -> JobOutcome:
     """Runs `attempt` up to 1 + jobConfig.retries times, backing off
-    exponentially, and returns its outcome -- a FAILED one, carrying the last
+    exponentially up to MAXIMUM_RETRY_DELAY_SECONDS, and returns its outcome -- a FAILED one, carrying the last
     error, if no attempt succeeded.
 
     Retrying a whole data job is safe because both insert strategies converge on
@@ -340,12 +346,12 @@ def _executeWithRetries(jobConfig: DataJobConfig, job: str, attempt: Callable[[]
 
             if isinstance(error, PERMANENT_ERRORS) or attemptNumber > jobConfig.retries:
                 logger.error('Failed to complete {} due to error {}'.format(job, error), exc_info=error)
-                return JobOutcome(job=job, status=JobStatus.FAILED, error='{}: {}'.format(type(error).__name__, error), attempts=attemptNumber)
+                return JobOutcome(job=job, status=JobStatus.FAILED, error=describeError(error), attempts=attemptNumber)
 
-            delay = jobConfig.retryDelaySeconds * (2 ** (attemptNumber - 1))
+            delay = min(MAXIMUM_RETRY_DELAY_SECONDS, jobConfig.retryDelaySeconds * (2 ** min(attemptNumber - 1, 32)))
             logger.warning(
-                'Attempt {} of {} for {} failed ({}: {}); retrying in {:.1f}s'.format(
-                    attemptNumber, jobConfig.retries + 1, job, type(error).__name__, error, delay),
+                'Attempt {} of {} for {} failed ({}); retrying in {:.1f}s'.format(
+                    attemptNumber, jobConfig.retries + 1, job, describeError(error), delay),
                 extra={'job': job, 'attempt': attemptNumber, 'retryDelaySeconds': delay})
             time.sleep(delay)
 
@@ -760,7 +766,7 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
                 try:
                     onCycle(RunResult(outcomes=list(dependencyGraph.outcomes), interrupted=termination['terminating']))
                 except Exception as error:
-                    logger.error('Reporting on the cycle failed: {}: {}'.format(type(error).__name__, error), exc_info=error)
+                    logger.error('Reporting on the cycle failed: {}'.format(describeError(error)), exc_info=error)
 
             if not runForever or termination['terminating']:
                 break

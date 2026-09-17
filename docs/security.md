@@ -19,7 +19,7 @@ What Understudy protects, how, and what it does not. Written for the security or
 
 - Masking is **deterministic and keyed**: the same value, in the same domain, under the same key, always gives the same mask. That is what keeps joins working, and it makes the output **pseudonymized, not anonymized**. Under GDPR and similar laws, a masked copy is still personal data.
 - Protection rests on **the masking key staying secret** and being **long and random**. Anyone holding the key can confirm guesses; anyone with a weak key's fingerprint can search for it offline.
-- Unmasked values exist only in the memory of the process running a job. They are never written to the target, the stage table, logs, errors, the manifest, history, metrics or notifications, **with one exception: error messages written by database drivers**, which can quote values.
+- Unmasked values exist only in the memory of the process running a job. They are never written to the target, the stage table, logs, errors, the manifest, history, metrics or notifications. Database drivers quote values in their error messages; those values are **removed before an error is reported**, for every message format the tests know (see [driver errors](#where-unmasked-data-goes)).
 - The strategies differ in what they hide. `null`, `constant` and `redact` remove information; `key`, `fpe`, `hash` and `email` replace it one-to-one or nearly so; `number`, `dateShift` and `shuffle` deliberately keep some of it.
 
 
@@ -42,7 +42,7 @@ production --(TLS, if configured)--> job process memory --(masked)--> target sta
 
 - **In memory only.** A job streams rows a chunk at a time (`chunkSize`), transforms them, masks them, and only then writes them. Unmasked rows are never written to the target, not even to its stage table.
 - **Logs and errors.** Masking errors name the column and the value's type, never the value. Transform errors do the same and drop the transformer's own message, which often quotes the value. Run history, metrics, the manifest and notifications carry job names, counts and error text.
-- **The exception: driver errors.** A database driver's error message is reported as it is, and some quote data. PostgreSQL's `duplicate key value violates unique constraint ... Key (email)=(...)` is the usual example. On a masked job, the values quoted are normally from the target, and so already masked, **unless the column is `keep`**. These messages reach logs, run history and webhook notifications.
+- **Driver errors are scrubbed.** Every server but SQLite quotes data in its error messages: the duplicate key, the text that wasn't a number, the row that broke a constraint, and PostgreSQL's `COPY` context lines. When the failing statement is a `sourceQuery`, those are production values that were never masked. Before an error reaches a log, a traceback, run history, a notification or an `audit` report, each quoted value is replaced with `<redacted>`, keeping the rest of the message (which constraint, which column). The patterns cover the messages PostgreSQL 16, MySQL 8.4, MariaDB 11, Oracle 23ai and SQL Server 2022 were seen to write for constraint, conversion and truncation failures, including values containing quotes and newlines, and the integration suite checks them against those servers. Where a server quotes the statement around an error (PostgreSQL's `LINE 1:`, MySQL's `near '...'`), the whole quote is removed, since drivers write values into statement text. **A message in a format not covered passes through unchanged**, and some drivers can also log through their own loggers, outside the package's.
 - **Process boundaries.** Job processes send log records and outcomes to the main process over private pipes; neither carries row data.
 - **Transport.** Connections are encrypted only if configured to be (see [driver options and TLS](configuration.md#driver-options-and-tls)). `run --dry-run` and `audit --connect` report what each server says about its connection, and `audit` warns when a masked job reads over an unencrypted one.
 
@@ -83,7 +83,7 @@ These follow from masking being deterministic and shape-preserving. They are why
 
 - **Equality and frequency.** Equal values get equal masks in a domain, so counts survive. In a low-cardinality column (a status, a department) or a skewed one (surnames), frequency analysis against known distributions can recover values. Every deterministic strategy keeps these frequencies, `fake*` included; use `null` or `constant` where the distribution itself is sensitive.
 - **Linkage across tables and runs.** Masks agree across tables in a domain and across runs under one key; that's the purpose. A copy made for one audience can be joined to another copy made under the same key.
-- **Shape.** Lengths, formats, sign and digit counts, and characters outside the charset are kept.
+- **Shape.** Lengths, formats, sign and digit counts, and characters outside the charset are kept. `key` and `fpe` refuse letters and digits outside ASCII rather than keep them.
 - **Magnitude and dates.** `number` with `variance` and `dateShift` reveal approximate values by design: a salary within 10%, a birth date within `maxDays`.
 - **Kept columns.** `keep` copies values as they are. Combinations of kept quasi-identifiers (postal code, birth year, gender) can identify people. `audit` flags kept columns whose names suggest personal data, but names can mislead.
 - **`shuffle`.** Every real value remains in the table; a small chunk (the tail of a load, a small incremental run) barely moves them, and a one-row chunk not at all.
@@ -104,7 +104,7 @@ These follow from masking being deterministic and shape-preserving. They are why
 
 - **Contents.** What was masked, how, under which key fingerprint, from which jobs file (with its SHA-256), with which tool version. Never a value, never a key.
 - **Integrity.** A SHA-256 digest of the manifest's content (canonical JSON) catches accidental changes. Anyone can recompute it, so it proves nothing about origin.
-- **Authenticity.** With `UNDERSTUDY_MANIFEST_KEY` set, the manifest is also signed with HMAC-SHA256. This is symmetric: anyone who can verify a manifest can also create one. It shows a manifest came from a holder of the signing key, not which holder. Where that distinction matters, keep the signing key with the auditors' process, not with the team running the jobs.
+- **Authenticity.** With `UNDERSTUDY_MANIFEST_KEY` set, the manifest is also signed with HMAC-SHA256, and `verify-manifest` requires a signature, so removing one doesn't make an edited manifest pass. This is symmetric: anyone who can verify a manifest can also create one. It shows a manifest came from a holder of the signing key, not which holder. Where that distinction matters, keep the signing key with the auditors' process, not with the team running the jobs.
 
 
 ## Credentials and transport
@@ -146,6 +146,6 @@ Keep the configuration directory writable only by the people who may run jobs ag
 4. `null` for free text that may hold names; `redact` only where the text is needed and names are acceptable.
 5. Encrypted connections, confirmed by `run --dry-run`.
 6. Manifests signed with a key held apart from the operators, and checked with `verify-manifest`.
-7. Webhook notifications and run history treated as sensitive, since they carry driver error text.
+7. Webhook notifications and run history treated as sensitive: driver error text is scrubbed of the values it quotes in known formats, not all formats.
 8. The configuration directory, run state and history writable only by the operators.
 9. Masked copies handled as personal data: pseudonymized, not anonymized.

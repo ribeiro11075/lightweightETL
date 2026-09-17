@@ -1,0 +1,22 @@
+# Every package the container image installs, pinned: the image is a
+# deployment, so it ships one tested set rather than whatever resolves on the
+# day it's built. CI's integration job runs against these. After changing a
+# version, regenerate the rest with:
+#
+#   uv pip compile pyproject.toml --extra all -c <this file's direct pins> \
+#       --python-version 3.14 --python-platform linux --no-header --no-annotate
+#
+# tests/test_packaging.py checks every pin here is within pyproject.toml's ranges.
+annotated-types==0.8.0
+cffi==2.1.1
+cryptography==50.0.1
+mysql-connector-python==26.7.0
+oracledb==4.0.2
+psycopg2==2.9.12
+pycparser==3.0
+pydantic==2.13.5
+pydantic-core==2.46.5
+pymssql==2.4.0
+pyyaml==6.0.3
+typing-extensions==4.16.0
+typing-inspection==0.4.4

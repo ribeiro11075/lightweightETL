@@ -124,3 +124,24 @@ def test_the_plan_says_what_each_column_gets(database):
     assert described['customer_id'] == ('foreign key', 'an existing customers key')
     assert described['total'] == ('type', 'a number, sometimes NULL')
     assert makeRow(0)[1] == 1
+
+
+def test_fixed_width_text_keys_stay_distinct_across_runs(database):
+    """Padding after the number made row 0, 9 and 99 all S1000."""
+    from understudy_data.synthesize import _textKeys
+
+    keys = _textKeys(0, 5, fixed=True)
+    assert [keys(row) for row in (0, 9, 99, 999)] == ['S0001', 'S0010', 'S0100', 'S1000']
+
+    database.alter('CREATE TABLE codes (code CHAR(5) PRIMARY KEY, "rank" INTEGER)')
+    assert synthesizeTable(database, 'codes', 150) == 150
+    assert synthesizeTable(database, 'codes', 150) == 150
+    assert database.query('SELECT count(DISTINCT code), min(code), max(code) FROM codes') == [(300, 'S0001', 'S0300')]
+
+
+def test_an_integer_key_named_with_a_reserved_word_continues(database):
+    database.alter('CREATE TABLE ranks ("order" INTEGER PRIMARY KEY, label TEXT)')
+
+    _fill(database, ('ranks', 3), ('ranks', 3))
+
+    assert [row[0] for row in database.query('SELECT "order" FROM ranks ORDER BY 1')] == list(range(1, 7))

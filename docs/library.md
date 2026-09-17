@@ -201,7 +201,7 @@ with Database(connectionSettings=databases['prod']) as database:
 | `relatedTables(foreignKeys, roots, followChildren=True)` | Every table a subset from `roots` would copy. |
 | `schema.readTable`, `schema.createStatements`, `schema.renderScript` | A table's shape, CREATE TABLE statements for a target dialect, and the script form. |
 | `schema.clearTables(database, tables)` | Empties tables children-first, in one transaction. |
-| `planSubset(foreignKeys, root, where, followChildren=True, ignore=(), materialize=False)` | A `SubsetPlan`: tables in load order, a query for each, each table's parents, and the foreign keys ignored. Raises `SubsetError` on a cycle, or on a chain deeper than 16 tables. Pass `materialize=database.dialect.supportsMaterializedSelections()`. |
+| `planSubset(foreignKeys, root, where, followChildren=True, ignore=(), materialize=False, quote=None)` | A `SubsetPlan`: tables in load order, a query for each, each table's parents, and the foreign keys ignored. Raises `SubsetError` on a cycle, or on a chain deeper than 16 tables. Pass `materialize=database.dialect.supportsMaterializedSelections()`, and `quote=lambda name: quoteIdentifier(database.type, name)` (from `understudy_data.databaseDialects`) so reserved-word columns work. |
 | `synthesizeTable(database, table, rows, seed=0)`, `planTable(...)` | Fill a table with generated rows, returning how many; or just describe how, with a row generator. Raise `SynthesisError`. |
 
 
@@ -216,7 +216,7 @@ with Database(connectionSettings=databases['app']) as database:
         ...
 ```
 
-`stream` returns the column names and an iterator of row lists, using each dialect's non-buffering cursor. The cursor is closed when the iterator is exhausted or abandoned.
+`stream` returns the column names and a `RowStream`: an iterator of row lists, using each dialect's non-buffering cursor. It closes itself when exhausted; one you stop reading early, close with `chunks.close()` or a `with chunks:` block. Closing the `Database` closes any stream still open.
 
 To bind parameters, pass `parameters=` and use the dialect's own placeholder. On the `%s` dialects — mysql, postgresql and mssql — a literal `%` in a query that binds parameters must then be written `%%`.
 

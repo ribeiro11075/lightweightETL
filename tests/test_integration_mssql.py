@@ -245,6 +245,41 @@ def test_run_data_jobs_with_database_backed_memory(liveDatabase, peopleTable, me
     assert 'job1' in memory.read()
 
 
+def test_a_rowversion_watermark_survives_database_backed_memory(liveDatabase, memoryTable, tmp_path):
+    """rowversion is how SQL Server tracks changes, and arrives as bytes. Stored
+    as text, the second run compared binary with a string and failed.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    source, target = 'rv_source_{}'.format(suffix), 'rv_target_{}'.format(suffix)
+    liveDatabase.alter('CREATE TABLE {} (id INT PRIMARY KEY, name NVARCHAR(20), rv ROWVERSION)'.format(source))
+    liveDatabase.alter('CREATE TABLE {} (id INT PRIMARY KEY, name NVARCHAR(20), source_version VARBINARY(8))'.format(target))
+    try:
+        liveDatabase.alter("INSERT INTO {} (id, name) VALUES (1, 'a'), (2, 'b')".format(source))
+        jobsFile = Configuration.validateJobConfiguration({'workers': 1, 'jobs': {'job1': {
+            'active': True, 'sourceDatabase': 'db', 'targetDatabase': 'db', 'insertStrategy': 'upsert', 'chunkSize': 10,
+            'sourceQuery': 'SELECT id, name, rv FROM {} WHERE rv > {{{{ watermark }}}}'.format(source), 'watermarkColumn': 'rv',
+            'watermarkInitial': 0, 'targetTableFinal': target,
+            }}}, DataJobsFile)
+        memory = DatabaseMemory(connectionSettings=CONNECTION_SETTINGS, table=memoryTable)
+
+        def run():
+            result = runDataJobs(jobsFile=jobsFile, databaseConfiguration={'db': CONNECTION_SETTINGS}, logFile=tmp_path / 'runner.log',
+                                 memory=memory, runForever=False)
+            (outcome,) = result.outcomes
+            assert outcome.error is None
+            return outcome.rowCount
+
+        assert run() == 2
+        assert isinstance(memory.readWatermarks()['job1'], bytes)
+        liveDatabase.alter("UPDATE {} SET name = 'B' WHERE id = 2".format(source))
+        assert run() == 1
+        assert liveDatabase.query('SELECT id, name FROM {} ORDER BY id'.format(target)) == [(1, 'a'), (2, 'B')]
+        assert memory.readWatermarks()['job1'] == liveDatabase.query('SELECT MAX(rv) FROM {}'.format(source))[0][0]
+    finally:
+        for table in (source, target):
+            liveDatabase.alter('DROP TABLE {}'.format(table))
+
+
 def test_stream_returns_real_columns_and_bounded_chunks(liveDatabase, peopleTable):
     """Database.stream against this dialect's real driver and cursor.
 

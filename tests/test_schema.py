@@ -119,10 +119,20 @@ def test_statements_create_parents_first_with_keys_and_constraints():
     statements = createStatements(POSTGRESQL, MSSQL, [ORDERS, CUSTOMERS])
 
     assert [statement.table for statement in statements] == ['customers', 'orders']
-    assert 'id INT NOT NULL' in statements[0].sql
-    assert 'email NVARCHAR(MAX)' in statements[0].sql
-    assert 'PRIMARY KEY (id)' in statements[0].sql
-    assert 'CONSTRAINT orders_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES customers (id)' in statements[1].sql
+    assert '[id] INT NOT NULL' in statements[0].sql
+    assert '[email] NVARCHAR(MAX)' in statements[0].sql
+    assert 'PRIMARY KEY ([id])' in statements[0].sql
+    assert 'CONSTRAINT orders_customer_id_fkey FOREIGN KEY ([customer_id]) REFERENCES customers ([id])' in statements[1].sql
+
+
+@pytest.mark.parametrize('target,expected', [
+    (DatabaseType.ORACLE, '"RANK" NUMBER(10)'), (POSTGRESQL, '"rank" INTEGER'), (DatabaseType.MYSQL, '`Rank` INT'), (MSSQL, '[Rank] INT'),
+    ])
+def test_column_names_are_quoted_as_the_target_would_store_them_unquoted(target, expected):
+    """So a reserved word works, and the column still answers to its unquoted name."""
+    definition = table('scores', [('Rank', 'integer', True)], primaryKey=[])
+
+    assert expected in createStatements(POSTGRESQL, target, [definition])[0].sql
 
 
 def test_a_foreign_key_to_a_table_not_being_created_is_left_out_and_noted():
@@ -142,7 +152,7 @@ def test_stage_tables_have_the_key_but_no_foreign_keys():
     statements = createStatements(POSTGRESQL, POSTGRESQL, [CUSTOMERS, ORDERS], stageSuffix='_stage')
 
     assert [statement.table for statement in statements] == ['customers', 'customers_stage', 'orders', 'orders_stage']
-    assert 'PRIMARY KEY (id)' in statements[3].sql
+    assert 'PRIMARY KEY ("id")' in statements[3].sql
     assert 'FOREIGN KEY' not in statements[3].sql
 
 
@@ -155,7 +165,7 @@ def test_stages_only_skips_the_tables_themselves():
 def test_a_primary_key_column_is_never_nullable():
     definition = table('t', [('id', 'integer', True)], primaryKey=['id'])
 
-    assert 'id INTEGER NOT NULL' in createStatements(POSTGRESQL, POSTGRESQL, [definition])[0].sql
+    assert '"id" INTEGER NOT NULL' in createStatements(POSTGRESQL, POSTGRESQL, [definition])[0].sql
 
 
 def test_constraint_names_are_made_safe_for_every_dialect():

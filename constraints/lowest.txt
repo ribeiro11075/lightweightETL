@@ -1,0 +1,11 @@
+# The oldest dependency versions pyproject.toml allows, pinned. CI's
+# lowest-dependencies job installs with these on the oldest supported Python,
+# so a lower bound that no longer works fails there rather than for a user.
+# tests/test_packaging.py keeps this file in step with pyproject.toml.
+pyyaml==6.0.1
+pydantic==2.6.0
+mysql-connector-python==8.4.0
+psycopg2==2.9.6
+oracledb==2.5.0
+pymssql==2.3.5
+cryptography==42.0.0

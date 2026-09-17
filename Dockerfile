@@ -15,8 +15,11 @@ RUN apt-get update \
 
 WORKDIR /src
 COPY pyproject.toml README.md LICENSE ./
+COPY constraints/image.txt ./constraints.txt
 COPY understudy_data ./understudy_data
-RUN pip wheel --no-cache-dir --wheel-dir /wheels ".[all]"
+# Pinned, so the image holds the versions CI tested rather than the newest
+# ones pyproject.toml's ranges allow.
+RUN pip wheel --no-cache-dir --wheel-dir /wheels --constraint constraints.txt ".[all]"
 
 
 FROM python:3.14-slim

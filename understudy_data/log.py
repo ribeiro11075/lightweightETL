@@ -6,6 +6,8 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .scrubbing import scrubText
+
 LOGGER_NAME = 'understudy_data'
 
 TEXT_FORMAT = '%(asctime)s.%(msecs)03d [%(levelname)s] :: %(message)s [%(filename)s:%(lineno)d]'
@@ -54,6 +56,48 @@ class JsonFormatter(logging.Formatter):
             payload['exception'] = record.exc_text
 
         return json.dumps(payload, default=str)
+
+
+class ScrubbingFilter(logging.Filter):
+    """Removes quoted data values from a record's message and exception text.
+
+    A filter on the package logger, rather than on its handlers, so it covers
+    handlers a caller adds too, and records forwarded from job processes, which
+    Logger.handle filters again on arrival. The exception is rendered to text
+    here, since its message is what quotes the values; formatters print
+    exc_text when there is no exc_info.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+
+        try:
+            message = record.getMessage()
+        except Exception:
+            # A malformed call is the handler's to report, as it would be without this.
+            return True
+
+        record.msg = scrubText(message)
+        record.args = None
+
+        if record.exc_info:
+            record.exc_text = scrubText(logging.Formatter().formatException(record.exc_info))
+            record.exc_info = None
+        elif record.exc_text:
+            record.exc_text = scrubText(record.exc_text)
+
+        return True
+
+
+def _installScrubbing() -> None:
+
+    logger = logging.getLogger(LOGGER_NAME)
+    if not any(isinstance(existing, ScrubbingFilter) for existing in logger.filters):
+        logger.addFilter(ScrubbingFilter())
+
+
+# At import, so a job process -- which imports this and builds no Log -- scrubs
+# its records before they are forwarded.
+_installScrubbing()
 
 
 def portableRecord(record: logging.LogRecord) -> logging.LogRecord:

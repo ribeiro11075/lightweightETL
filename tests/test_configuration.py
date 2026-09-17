@@ -296,3 +296,38 @@ def test_connection_options_are_kept_out_of_the_models_repr():
 def test_timeout_seconds_must_be_positive(timeout):
     with pytest.raises(ConfigurationError, match='timeoutSeconds'):
         Configuration.validateJobConfiguration({'workers': 1, 'jobs': {'j': _job(timeoutSeconds=timeout)}}, DataJobsFile)
+
+
+def _validateJob(**overrides):
+    return Configuration.validateJobConfiguration({'workers': 1, 'jobs': {'job': _job(**overrides)}}, DataJobsFile)
+
+
+@pytest.mark.parametrize('chunkSize', [0, -1])
+def test_a_chunk_size_below_one_is_rejected(chunkSize):
+    """A chunk of zero rows read nothing, and a swap then replaced the target with it."""
+    with pytest.raises(ConfigurationError, match='chunkSize'):
+        _validateJob(chunkSize=chunkSize, insertStrategy='swap', targetTableStage='t_stage')
+
+
+@pytest.mark.parametrize('strategy', ['upsert', 'swap'])
+@pytest.mark.parametrize('stage', ['t', 'T'])
+def test_a_stage_table_that_is_the_target_is_rejected(strategy, stage):
+    """The stage table is emptied first, so it would empty the target."""
+    with pytest.raises(ConfigurationError, match='different table from targetTableFinal'):
+        _validateJob(insertStrategy=strategy, targetTableStage=stage)
+
+
+@pytest.mark.parametrize('command', ['', '   ', 'token "unterminated', [], ['  ']])
+def test_a_password_command_that_names_no_program_is_rejected(command):
+    raw = {'warehouse': {'type': 'postgresql', 'database': 'w', 'host': 'h', 'user': 'u', 'passwordCommand': command}}
+
+    with pytest.raises(ConfigurationError, match='passwordCommand'):
+        Configuration.validateDatabaseConfiguration(raw)
+
+
+def test_running_a_malformed_password_command_is_a_configuration_error():
+    from understudy_data.configuration import runPasswordCommand
+
+    for command in ('  ', 'echo "x'):
+        with pytest.raises(ConfigurationError, match='passwordCommand'):
+            runPasswordCommand(command)

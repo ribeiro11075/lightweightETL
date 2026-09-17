@@ -78,7 +78,7 @@ understudy verify-manifest  check a manifest is unaltered, and who signed it
 | Exit code | Meaning |
 | --- | --- |
 | `0` | every job completed |
-| `1` | a job failed, or was skipped because a predecessor failed |
+| `1` | a job failed, or was skipped because a predecessor failed, or the command failed on a database error |
 | `2` | invalid configuration or usage |
 | `130` | interrupted by a signal: running jobs finished, the rest were skipped |
 
@@ -118,7 +118,7 @@ understudy verify-manifest  check a manifest is unaltered, and who signed it
 
 | | |
 | --- | --- |
-| `understudy_data/` | the package: `cli.py`, `configuration.py`, `database.py` with per-dialect SQL in `databaseDialects.py`, `dependencyGraph.py`, `runner.py`, `transform.py`, `builtinTransforms.py`, `masking.py`, `fpe.py`, `audit.py`, `reporting.py`, `discovery.py`, `subset.py`, `synthesize.py`, `schema.py`, `memory.py` and `log.py` |
+| `understudy_data/` | the package: `cli.py`, `configuration.py`, `database.py` with per-dialect SQL in `databaseDialects.py`, `dependencyGraph.py`, `runner.py`, `transform.py`, `builtinTransforms.py`, `masking.py`, `fpe.py`, `audit.py`, `reporting.py`, `scrubbing.py`, `discovery.py`, `subset.py`, `synthesize.py`, `schema.py`, `memory.py` and `log.py` |
 | `example/` | runnable demos and a complete sample configuration — see [its README](example/README.md) |
 | `docs/` | the documentation above |
 | `tests/` | the test suite |

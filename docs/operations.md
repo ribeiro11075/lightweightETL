@@ -19,7 +19,7 @@ Running `understudy` unattended: where its state lives, and how to know what it 
 | Another file | `--memory FILE` | It should live somewhere else, such as a mounted volume. |
 | A database table | `--memory-database ALIAS` | Nothing persists: containers without a volume, several machines. |
 
-The table for `--memory-database` must exist first. Its shape is `DATABASE_MEMORY_SCHEMA`; adjust the types for your database if needed:
+The table for `--memory-database` must exist first. Watermarks are stored as text with a type beside them, and read back as the same type: dates, timestamps, times, integers, floats, decimals, and bytes such as SQL Server's `rowversion`. Its shape is `DATABASE_MEMORY_SCHEMA`; adjust the types for your database if needed:
 
 ```sql
 CREATE TABLE understudy_memory (
@@ -116,7 +116,7 @@ A job that isn't part of a cycle, because it's inside its `refresh` window, keep
 }
 ```
 
-Slack, Mattermost and Microsoft Teams incoming webhooks show `text` as it is; anything else can read the rest. The URL usually carries a token, so prefer the environment variable to the flag. Error messages come from the database drivers and can quote values from the target; keep that in mind when choosing the channel.
+Slack, Mattermost and Microsoft Teams incoming webhooks show `text` as it is; anything else can read the rest. The URL usually carries a token, so prefer the environment variable to the flag. Error messages come from the database drivers. Values they quote are replaced with `<redacted>` for every message format the tests know, but not every format a driver can write (see [the security model](security.md#where-unmasked-data-goes)); keep that in mind when choosing the channel.
 
 History, metrics and notifications never affect a run's outcome. If one fails, the failure is logged and the run carries on.
 

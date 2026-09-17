@@ -161,7 +161,7 @@ Processes are started with Python's `spawn` method on every platform, so a progr
 
 ## Retries
 
-A data job with `retries: 3` gets up to four attempts. The delay starts at `retryDelaySeconds` and doubles, so a database that's down isn't hit at a fixed interval while it recovers.
+A data job with `retries: 3` gets up to four attempts. The delay starts at `retryDelaySeconds` and doubles, so a database that's down isn't hit at a fixed interval while it recovers, up to five minutes between attempts.
 
 Retrying a whole job is safe because both strategies converge on a re-run: `swap` restages and re-swaps, and `upsert` reapplies existing rows as a no-op.
 

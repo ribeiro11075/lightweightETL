@@ -22,7 +22,7 @@ import re
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from .configuration import DatabaseType
-from .databaseDialects import ColumnDefinition, ForeignKey
+from .databaseDialects import ColumnDefinition, ForeignKey, quoteFolded
 
 
 class SchemaError(Exception):
@@ -344,17 +344,20 @@ def _createTable(sourceType: DatabaseType, targetType: DatabaseType, table: Tabl
     lines = []
     notes = []
 
+    def quoted(names: Iterable[str]) -> str:
+        return ', '.join(quoteFolded(targetType, name) for name in names)
+
     for column in table.columns:
         portable = portableType(sourceType, column)
         rendered, renderNote = renderType(targetType, portable, column.name.upper() in keyColumns)
         nullable = column.nullable and column.name.upper() not in {key.upper() for key in table.primaryKey}
-        lines.append('{} {}{}'.format(column.name, rendered, '' if nullable else ' NOT NULL'))
+        lines.append('{} {}{}'.format(quoteFolded(targetType, column.name), rendered, '' if nullable else ' NOT NULL'))
         for note in (portable.note, renderNote):
             if note:
                 notes.append('{}: {}'.format(column.name, note))
 
     if table.primaryKey:
-        lines.append('PRIMARY KEY ({})'.format(', '.join(table.primaryKey)))
+        lines.append('PRIMARY KEY ({})'.format(quoted(table.primaryKey)))
 
     if includeForeignKeys:
         for foreignKey in table.foreignKeys:
@@ -363,8 +366,8 @@ def _createTable(sourceType: DatabaseType, targetType: DatabaseType, table: Tabl
                     ', '.join(foreignKey.columns), foreignKey.referencedTable, foreignKey.referencedTable))
                 continue
             lines.append('CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})'.format(
-                _constraintName(targetType, foreignKey.name), ', '.join(foreignKey.columns), foreignKey.referencedTable,
-                ', '.join(foreignKey.referencedColumns)))
+                _constraintName(targetType, foreignKey.name), quoted(foreignKey.columns), foreignKey.referencedTable,
+                quoted(foreignKey.referencedColumns)))
 
     sql = 'CREATE TABLE {} (\n    {}\n)'.format(name, ',\n    '.join(lines))
 

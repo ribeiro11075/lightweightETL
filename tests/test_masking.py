@@ -7,6 +7,7 @@ for numbers -- so these tests state the property and check it over many values.
 import datetime
 import decimal
 import re
+import unicodedata
 import uuid
 
 import pytest
@@ -809,3 +810,206 @@ def test_redact_options_are_checked(policy, message):
 def test_redact_needs_text():
     with pytest.raises(MaskingError, match='redact strategy needs text, got int'):
         _redact('redact', [5])
+
+
+# --- remembered masks -------------------------------------------------------
+
+CACHED_CASES = [
+    ('hash', {}, ['a', 'b', 'a', 7, 7, 'x' * 300, 'x' * 300]),
+    ('email', {}, ['Ann@Corp.com', 'ann@corp.com', 'Ann@Corp.com']),
+    ('digits', {'keepTrailing': 2}, ['+1 555 010 9999', 5550109999, '+1 555 010 9999', -42, -42]),
+    ('fakeName', {'maxLength': 8}, ['ann', 'bob', 'ann', 3, 3]),
+    ('key', {}, [41, 42, 41, 'AB-12', 'AB-12', uuid.UUID(int=5), uuid.UUID(int=5), decimal.Decimal('41'), decimal.Decimal('41.0')]),
+    ('fpe', {}, [1234567, 1234567, 'AB12-CD34', 'AB12-CD34', 12, 12]),
+    ]
+
+
+@pytest.mark.parametrize('name,options,values', CACHED_CASES, ids=[case[0] for case in CACHED_CASES])
+def test_remembered_masks_are_the_masks_themselves(name, options, values):
+    if name == 'fpe':
+        pytest.importorskip('cryptography')
+    remembered = strategy(name, **options)
+    fresh = [strategy(name, **options).mask(value) for value in values]
+
+    first = remembered.maskColumn(values, 0)
+    second = remembered.maskColumn(values, 1)
+
+    assert first == second == fresh
+    assert [type(value) for value in first] == [type(value) for value in fresh]
+
+
+def test_only_values_whose_equals_always_mask_alike_are_remembered():
+    remembered = strategy('hash')
+
+    remembered.maskColumn([41, True, decimal.Decimal('41'), 41.0, datetime.date(2020, 1, 1), 'x' * 257, 'short', uuid.UUID(int=1), None], 0)
+
+    assert sorted((kind.__name__, value) for kind, value in remembered._cache) == [('UUID', uuid.UUID(int=1)), ('int', 41), ('str', 'short')]
+
+
+def test_the_cache_is_bounded(monkeypatch):
+    import understudy_data.masking as masking
+
+    monkeypatch.setattr(masking, 'MASK_CACHE_SIZE', 10)
+    remembered = strategy('hash')
+
+    for start in range(0, 100, 7):
+        assert remembered.maskColumn(list(range(start, start + 7)), 0) == [maskOne('hash', value) for value in range(start, start + 7)]
+        assert len(remembered._cache) <= 10
+
+
+def test_a_value_that_fails_fails_every_time():
+    remembered = strategy('email')
+
+    for _ in range(2):
+        with pytest.raises(MaskingError):
+            remembered.maskColumn([12345], 0)
+    assert remembered._cache == {}
+
+
+def test_a_custom_strategy_is_not_assumed_to_be_cacheable():
+    from understudy_data.masking import resolveStrategy
+
+    custom = resolveStrategy('customStrategies:Initials')
+    instance = custom(KeyedHash(KEY, 'name'), {})
+
+    assert custom.CACHEABLE is False
+    assert instance.maskColumn(['Ann Lee', 'Ann Lee'], 0)[0] == instance.maskColumn(['Ann Lee'], 0)[0]
+    assert instance._cache == {}
+
+
+def test_strategies_that_depend_on_more_than_the_value_are_not_cached():
+    assert not any(STRATEGIES[name].CACHEABLE for name in ('shuffle', 'number', 'dateShift', 'redact', 'keep', 'null', 'constant'))
+
+
+# --- text beyond ASCII ------------------------------------------------------
+
+NON_LATIN = ['Дмитрий Иванов', '王伟', 'محمد', 'José', '１２３４５６', '٣٤٥٦٧٨٩', 'x²']
+
+
+@pytest.mark.parametrize('name', ['key', 'fpe'])
+@pytest.mark.parametrize('value', NON_LATIN)
+def test_key_and_fpe_refuse_letters_and_digits_they_cannot_mask(name, value):
+    """They mask ASCII only, and used to copy anything else as it was while
+    the manifest said the column was masked.
+    """
+    if name == 'fpe':
+        pytest.importorskip('cryptography')
+
+    with pytest.raises(MaskingError, match='another script') as raised:
+        maskOne(name, value)
+    assert value not in str(raised.value)
+
+
+@pytest.mark.parametrize('charset', ['digits', 'hex'])
+def test_key_with_a_digit_charset_refuses_only_other_scripts_digits(charset):
+    assert maskOne('key', 'Дмитрий-12', charset=charset).startswith('Дмитрий-')
+
+    with pytest.raises(MaskingError, match='digits in another script'):
+        maskOne('key', 'AB-١٢', charset=charset)
+
+
+def test_key_and_fpe_still_keep_non_letters_outside_ascii():
+    assert maskOne('key', 'ab–12 €')[2:3] == '–' and maskOne('key', 'ab–12 €').endswith(' €')
+
+
+@pytest.mark.parametrize('value', ['１２３４５６', '٣٤٥-٦٧-٨٩٠١', '+٩٦٦ ٥٠ ١٢٣ ٤٥٦٧', '電話 ０３-１２３４-５６７８'])
+def test_digits_masks_digits_in_any_script_and_keeps_the_script(value):
+    masked = maskOne('digits', value)
+
+    assert masked != value and len(masked) == len(value)
+    for before, after in zip(value, masked):
+        if unicodedata.decimal(before, None) is None:
+            assert after == before
+        else:
+            assert unicodedata.decimal(after) is not None and ord(after) - unicodedata.decimal(after) == ord(before) - unicodedata.decimal(before)
+
+
+def test_digits_masks_a_number_alike_whichever_digits_it_is_written_in():
+    ascii, arabicIndic = maskOne('digits', '555-0199'), maskOne('digits', '٥٥٥-٠١٩٩')
+
+    assert ''.join(str(unicodedata.decimal(character)) if character.isdigit() else character for character in arabicIndic) == ascii
+
+
+def test_digits_refuses_digit_characters_it_cannot_write_back():
+    with pytest.raises(MaskingError, match='superscript or circled'):
+        maskOne('digits', 'call ①②③')
+
+
+@pytest.mark.parametrize('text,kind', [
+    ('card ４１１１ １１１１ １１１１ １１１１', 'card'), ('ssn ١٢٣-٤٥-٦٧٨٩', 'ssn'), ('call +٩٦٦ ٥٠ ١٢٣ ٤٥٦٧', 'phone'),
+    ('ip ١٩٢.١٦٨.١.١', 'ip'), ('iban DE٨٩٣٧٠٤٠٠٤٤٠٥٣٢٠١٣٠٠٠', 'iban'),
+    ])
+def test_redact_masks_identifiers_written_in_other_digits(text, kind):
+    label = maskOne('redact', text)
+    masked = maskOne('redact', text, replacement='mask')
+
+    assert '[{}]'.format(kind.upper()) in label
+    assert masked != text
+    ascii = ''.join(str(unicodedata.decimal(character)) if unicodedata.decimal(character, None) is not None else character for character in text)
+    if kind in ('ip', 'iban'):
+        assert maskOne('redact', ascii, replacement='mask').split()[-1] == ''.join(
+            str(unicodedata.decimal(character)) if unicodedata.decimal(character, None) is not None else character for character in masked.split()[-1])
+
+
+# --- how big a value may be -------------------------------------------------
+
+@pytest.mark.parametrize('name', ['key', 'fpe'])
+def test_key_and_fpe_refuse_values_longer_than_an_identifier(name):
+    if name == 'fpe':
+        pytest.importorskip('cryptography')
+    from understudy_data.masking import MAXIMUM_KEY_LENGTH
+
+    assert len(maskOne(name, 'a1' * (MAXIMUM_KEY_LENGTH // 2))) == MAXIMUM_KEY_LENGTH
+    assert maskOne(name, 10 ** (MAXIMUM_KEY_LENGTH - 1)) >= 10 ** (MAXIMUM_KEY_LENGTH - 1)
+    for value in ('a' * (MAXIMUM_KEY_LENGTH + 1), 10 ** MAXIMUM_KEY_LENGTH, -10 ** 5000):
+        with pytest.raises(MaskingError, match='identifiers of up to'):
+            maskOne(name, value)
+
+
+def test_redact_takes_time_in_proportion_to_the_text():
+    import time
+
+    def seconds(count):
+        text = ' '.join('u{}@corp.com call 555-010-{:04d}'.format(index, index % 10000) for index in range(count))
+        started = time.perf_counter()
+        maskOne('redact', text)
+        return time.perf_counter() - started
+
+    seconds(100)
+    assert seconds(16000) < 40 * max(seconds(1000), 0.001)
+
+
+def test_redact_keeps_earlier_detectors_winning_where_matches_overlap():
+    assert maskOne('redact', 'card 4111 1111 1111 1111 and 555-010-9999') == 'card [CARD] and [PHONE]'
+
+
+# --- dateShift at the calendar's ends, number near zero ----------------------
+
+@pytest.mark.parametrize('value', [datetime.date.max, datetime.date.min, datetime.datetime(9999, 12, 31, 23, 59, 59),
+                                   datetime.datetime(1, 1, 1, tzinfo=datetime.timezone.utc), '9999-12-31', '0001-01-01 00:00:00'])
+def test_date_shift_keeps_the_calendars_ends(value):
+    assert maskOne('dateShift', value) == value
+
+
+@pytest.mark.parametrize('value', [datetime.date(9999, 12, 30), datetime.date(1, 1, 2), datetime.datetime(9999, 12, 20, 12, 0),
+                                   '9999-12-25'])
+def test_date_shift_turns_back_rather_than_leave_the_calendar(value):
+    for domain in range(30):
+        masked = strategy('dateShift', domain=str(domain), maxDays=30).mask(value)
+        parsed = datetime.date.fromisoformat(masked) if isinstance(masked, str) else masked
+        original = datetime.date.fromisoformat(value) if isinstance(value, str) else value
+        assert parsed != original
+        assert parsed.toordinal() not in (datetime.date.min.toordinal(), datetime.date.max.toordinal())
+        assert abs(parsed.toordinal() - original.toordinal()) <= 30
+
+
+@pytest.mark.parametrize('value', [1, 2, 5, -3, 10, decimal.Decimal('1.00'), decimal.Decimal('7')])
+def test_number_never_gives_a_non_zero_value_back_unchanged(value):
+    masks = [strategy('number', domain=str(domain)).mask(value) for domain in range(200)]
+
+    assert value not in masks
+    assert len(set(masks)) > 1
+
+
+def test_number_keeps_zero():
+    assert {strategy('number', domain=str(domain)).mask(0) for domain in range(20)} == {0}

@@ -9,7 +9,7 @@ Exit codes, because for anything that schedules work the exit code *is* the
 interface:
 
     0    every active job completed
-    1    at least one job failed or was skipped
+    1    at least one job failed or was skipped, or the command itself failed
     2    invalid configuration, or a usage error
     130  interrupted
 
@@ -33,11 +33,13 @@ import yaml
 
 from .configuration import Configuration, ConfigurationError, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, expandEnvironmentVariables
 from .database import DIALECTS, Database
+from .databaseDialects import ForeignKey, quoteIdentifier
 from .dependencyGraph import DependencyGraph
 from .log import Log
 from .masking import MaskingError, keyFingerprint, sealManifest, verifyManifest
 from .memory import DatabaseMemory, FileMemory, MemoryBackend, RunInProgressError, exclusiveRun
 from .runner import RunResult, runDataJobs
+from .scrubbing import describeError
 
 EXIT_SUCCESS = 0
 EXIT_JOBS_DID_NOT_SUCCEED = 1
@@ -157,7 +159,7 @@ def _cycleReporter(arguments: argparse.Namespace, databaseConfiguration: Dict[st
         try:
             step()
         except Exception as error:
-            log.logging.error('Could not {}: {}: {}'.format(what, type(error).__name__, error))
+            log.logging.error('Could not {}: {}'.format(what, describeError(error)))
 
     def report(result: RunResult) -> None:
         if history is not None:
@@ -358,6 +360,13 @@ def _commandVerifyManifest(arguments: argparse.Namespace, log: Log) -> int:
         return EXIT_JOBS_DID_NOT_SUCCEED
 
     if not verification.signed:
+        if signingKey is not None:
+            # With a key to check against, a signature is expected, and a
+            # missing one is how an edited manifest would pass: strip it,
+            # recompute the digest.
+            log.logging.error('{}: not signed, though ${} is set to verify a signature -- a signed manifest may have had its '
+                              'signature removed'.format(path, arguments.manifest_key_variable))
+            return EXIT_JOBS_DID_NOT_SUCCEED
         print('{}: intact. It is not signed, so this shows only that it is unchanged, not who wrote it.'.format(path))
         return EXIT_SUCCESS
 
@@ -426,7 +435,7 @@ def _dryRunDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Dat
                 encrypted = {True: 'encrypted', False: 'NOT encrypted', None: 'encryption unknown'}[database.isEncrypted()]
                 log.logging.info('{}: connected ({}, {})'.format(alias, databaseConfiguration[alias].type.value, encrypted))
         except Exception as error:
-            problems.append('{}: cannot connect -- {}: {}'.format(alias, type(error).__name__, error))
+            problems.append('{}: cannot connect -- {}'.format(alias, describeError(error)))
 
     for name, job in jobsFile.jobs.items():
         if any(problem.startswith(job.targetDatabase + ':') for problem in problems):
@@ -439,7 +448,7 @@ def _dryRunDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Dat
                 if job.insertStrategy.value == 'upsert' and not database.getPrimaryColumnNames(table=job.targetTableFinal):
                     problems.append('{}: target {} has no primary key, so insertStrategy: upsert cannot match rows'.format(name, job.targetTableFinal))
         except Exception as error:
-            problems.append('{}: target {} is not readable -- {}: {}'.format(name, job.targetTableFinal, type(error).__name__, error))
+            problems.append('{}: target {} is not readable -- {}'.format(name, job.targetTableFinal, describeError(error)))
 
         if job.masking is not None and not any(problem.startswith(job.sourceDatabase + ':') for problem in problems):
             problem = _checkMaskingCoverage(name, job, databaseConfiguration, log)
@@ -471,9 +480,16 @@ def _sourceQueryColumns(job: DataJobConfig, databaseConfiguration: Dict[str, Dat
             query = database.substituteWatermarkPlaceholder(query)
             parameters = (job.watermarkInitial,)
         columns, chunks = database.stream(query=query, chunkSize=1, parameters=parameters)
-        chunks.close()  # type: ignore[attr-defined]
+        chunks.close()
 
     return columns
+
+
+def _targetColumns(job: DataJobConfig, databaseConfiguration: Dict[str, DatabaseConnectionConfig]) -> List[str]:
+    """The target's columns, in the order a load fills them."""
+
+    with Database(connectionSettings=databaseConfiguration[job.targetDatabase]) as database:
+        return database.getAllColumnNames(table=job.targetTableFinal)
 
 
 def _checkMaskingCoverage(name: str, job: Any, databaseConfiguration: Dict[str, DatabaseConnectionConfig], log: Log) -> Optional[str]:
@@ -489,7 +505,7 @@ def _checkMaskingCoverage(name: str, job: Any, databaseConfiguration: Dict[str, 
     except MaskingError as error:
         return '{}: {}'.format(name, error)
     except Exception as error:
-        return '{}: sourceQuery could not be checked against the masking policy -- {}: {}'.format(name, type(error).__name__, error)
+        return '{}: sourceQuery could not be checked against the masking policy -- {}'.format(name, describeError(error))
 
     return None
 
@@ -608,7 +624,8 @@ def _commandSubset(arguments: argparse.Namespace, log: Log) -> int:
 
         try:
             plan = planSubset(foreignKeys, root=arguments.root, where=arguments.where, followChildren=not arguments.no_children,
-                              ignore=arguments.ignore_foreign_key or [], materialize=database.dialect.supportsMaterializedSelections())
+                              ignore=arguments.ignore_foreign_key or [], materialize=database.dialect.supportsMaterializedSelections(),
+                              quote=lambda name: quoteIdentifier(database.type, name))
         except SubsetError as error:
             raise UsageError(str(error)) from error
 
@@ -686,8 +703,8 @@ def _commandSchema(arguments: argparse.Namespace, log: Log) -> int:
             try:
                 target.alter(statement.sql)
             except Exception as error:
-                raise UsageError('could not create {} ({} created before it): {}: {}'.format(
-                    statement.table, created, type(error).__name__, error)) from error
+                raise UsageError('could not create {} ({} created before it): {}'.format(
+                    statement.table, created, describeError(error))) from error
             log.logging.info('{}: created'.format(statement.table))
             created += 1
 
@@ -798,7 +815,7 @@ def _commandClear(arguments: argparse.Namespace, log: Log) -> int:
             except SchemaError as error:
                 raise UsageError('{}: {}'.format(alias, error)) from error
             except Exception as error:
-                log.logging.error('{}: nothing was cleared -- {}: {}'.format(alias, type(error).__name__, error))
+                log.logging.error('{}: nothing was cleared -- {}'.format(alias, describeError(error)))
                 return EXIT_JOBS_DID_NOT_SUCCEED
 
         for table, rows in cleared:
@@ -830,28 +847,51 @@ def _commandAudit(arguments: argparse.Namespace, log: Log) -> int:
     jobsFile, databaseConfiguration = _loadDataJobs(arguments)
     jobs = _selectJobs(jobsFile.jobs, arguments.job, log)
     returnedColumns: Dict[str, List[str]] = {}
+    targetColumns: Dict[str, List[str]] = {}
     unreachable: Dict[str, str] = {}
     encryption: Dict[str, Optional[bool]] = {}
+    foreignKeys: Dict[str, List[ForeignKey]] = {}
 
     if arguments.connect:
         for name, job in jobs.items():
             if job.masking is not None:
                 try:
                     returnedColumns[name] = _sourceQueryColumns(job, databaseConfiguration)
+                    targetColumns[name] = job.targetColumns or _targetColumns(job, databaseConfiguration)
                 except Exception as error:
-                    unreachable[name] = '{}: {}'.format(type(error).__name__, error)
+                    unreachable[name] = describeError(error)
 
+        keysByAlias: Dict[str, List[ForeignKey]] = {}
         for alias in sorted({job.sourceDatabase for job in jobs.values()} | {job.targetDatabase for job in jobs.values()}):
-            if databaseConfiguration[alias].type.value == 'sqlite':
-                continue
+            isSqlite = databaseConfiguration[alias].type.value == 'sqlite'
             try:
                 with Database(connectionSettings=databaseConfiguration[alias]) as database:
-                    encryption[alias] = database.isEncrypted()
+                    if not isSqlite:
+                        encryption[alias] = database.isEncrypted()
+                    try:
+                        keysByAlias[alias] = database.getForeignKeys()
+                    except Exception as error:
+                        log.logging.warning('{}: could not read foreign keys -- {}'.format(alias, describeError(error)))
             except Exception as error:
-                log.logging.warning('{}: could not connect to check encryption -- {}: {}'.format(alias, type(error).__name__, error))
-                encryption[alias] = None
+                log.logging.warning('{}: could not connect to check encryption and foreign keys -- {}'.format(alias, describeError(error)))
+                if not isSqlite:
+                    encryption[alias] = None
 
-    report = auditJobs(jobs, returnedColumns=returnedColumns, encryption=encryption, unreachable=unreachable)
+        # The keys that apply to a copy are the target's own and those of the
+        # sources it is copied from, which a target often doesn't declare.
+        # Both are matched to jobs by table name.
+        for target in {job.targetDatabase for job in jobs.values()}:
+            sources = {job.sourceDatabase for job in jobs.values() if job.targetDatabase == target}
+            unique: Dict[Any, ForeignKey] = {}
+            for alias in [target] + sorted(sources):
+                for foreignKey in keysByAlias.get(alias, []):
+                    folded = (foreignKey.table.upper(), tuple(column.upper() for column in foreignKey.columns),
+                              foreignKey.referencedTable.upper(), tuple(column.upper() for column in foreignKey.referencedColumns))
+                    unique.setdefault(folded, foreignKey)
+            foreignKeys[target] = list(unique.values())
+
+    report = auditJobs(jobs, returnedColumns=returnedColumns, encryption=encryption, unreachable=unreachable,
+                       targetColumns=targetColumns, foreignKeys=foreignKeys)
     _writeOutput(json.dumps(report, indent=2, default=str) + '\n' if arguments.format == 'json' else renderAudit(report), arguments.output)
 
     if report['summary']['error'] or (arguments.strict and report['summary']['warning']):
@@ -970,9 +1010,9 @@ def _addRunArguments(parser: argparse.ArgumentParser) -> None:
 
 def _addGeneratorArguments(parser: argparse.ArgumentParser) -> None:
 
-    parser.add_argument('--sample', type=int, default=1000, help='rows sampled per table to classify columns (default: 1000)')
+    parser.add_argument('--sample', type=_positiveInteger, default=1000, help='rows sampled per table to classify columns (default: 1000)')
     parser.add_argument('--key-variable', default='MASKING_KEY', help='environment variable the generated jobs read the masking key from')
-    parser.add_argument('--chunk-size', type=int, default=5000, help='chunkSize for the generated jobs (default: 5000)')
+    parser.add_argument('--chunk-size', type=_positiveInteger, default=5000, help='chunkSize for the generated jobs (default: 5000)')
     parser.add_argument('--output', help='write the generated jobs here instead of stdout; must not already exist')
 
 
@@ -1106,6 +1146,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except KeyboardInterrupt:
         log.logging.warning('Interrupted')
         return EXIT_INTERRUPTED
+    except Exception as error:
+        # Logged, rather than left to Python's own traceback, so a driver
+        # error's quoted values are scrubbed on the way out.
+        log.logging.error('Failed: {}'.format(describeError(error)), exc_info=error)
+        return EXIT_JOBS_DID_NOT_SUCCEED
 
 
 if __name__ == '__main__':

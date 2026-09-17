@@ -23,7 +23,7 @@ mypy
 
 ## Integration tests
 
-Six files run the same operations against real servers: `tests/test_integration_{mysql,postgresql,oracle,mssql,mariadb}.py`, plus `test_integration_cross_database.py`, which extracts from MySQL, applies a transform, and loads into PostgreSQL in one job. `test_integration_masking.py` runs against all five servers: foreign-key discovery (composite keys included), subset queries, and masked jobs over each driver's own numeric and date types. `test_integration_schema.py` runs `schema` and a copy for every pair of the six databases, 36 in all, plus `clear` under live foreign keys. `test_integration_keys.py` checks primary-key lookups against a same-named table in another schema, upserts beside UNIQUE constraints and into key-only tables, and swaps of schema-qualified tables. `test_integration_connections.py` asks each server whether driver options arrived, whether the connection is encrypted, and where `currentSchema` sends unqualified names. `test_integration_postgresql.py` also round-trips every value type through `COPY`, and `test_integration_mssql.py` through SQL Server's multi-row statements. `tests/test_fpe.py` checks FF1 against NIST's published sample vectors.
+Six files run the same operations against real servers: `tests/test_integration_{mysql,postgresql,oracle,mssql,mariadb}.py`, plus `test_integration_cross_database.py`, which extracts from MySQL, applies a transform, and loads into PostgreSQL in one job. `test_integration_masking.py` runs against all five servers: foreign-key discovery (composite keys included), subset queries, and masked jobs over each driver's own numeric and date types. `test_integration_schema.py` runs `schema` and a copy for every pair of the six databases, 36 in all, plus `clear` under live foreign keys. `test_integration_keys.py` checks primary-key lookups against a same-named table in another schema, upserts beside UNIQUE constraints and into key-only tables, and swaps of schema-qualified tables. `test_integration_scrubbing.py` makes each server fail on duplicates and bad values, and checks that no value reaches an error, an outcome or a log. `test_integration_connections.py` asks each server whether driver options arrived, whether the connection is encrypted, and where `currentSchema` sends unqualified names. `test_integration_postgresql.py` also round-trips every value type through `COPY`, and `test_integration_mssql.py` through SQL Server's multi-row statements. `tests/test_fpe.py` checks FF1 against NIST's published sample vectors.
 
 They cover schema introspection, chunked inserts, both upsert paths, swap, truncate, streaming (including abandoning a stream part-way), the full `runDataJobs` path through real job processes, and `DatabaseMemory`.
 
@@ -52,14 +52,24 @@ These tests have found real bugs the mocked suite couldn't — MySQL leaving unr
 
 ## Notes
 
-The `postgresql` extra pins the source-built `psycopg2`, the upstream recommendation for production. `psycopg2-binary` is fine for running the tests.
+The `postgresql` extra requires the source-built `psycopg2`, the upstream recommendation for production. `psycopg2-binary` is fine for running the tests.
 
 mypy targets Python 3.10, the oldest version the package supports.
 
 
+## Dependency versions
+
+`pyproject.toml` gives ranges, not pins, so the package installs beside other tools that have their own. Two files in `constraints/` pin them:
+
+- **`lowest.txt`** is the bottom of every range. CI installs it on Python 3.10 and runs everything, the integration suite included, so a lower bound that stops working fails there first.
+- **`image.txt`** is every package the container image installs. The Dockerfile builds with it, and CI's other integration run uses it, so the image ships what was tested.
+
+`tests/test_packaging.py` checks that `lowest.txt` matches the lower bounds and that `image.txt` is within the ranges. To raise a lower bound, change both `pyproject.toml` and `lowest.txt`. To move the image to newer versions, edit the direct pins in `image.txt` and regenerate the rest with the command at its top.
+
+
 ## Continuous integration and releases
 
-`.github/workflows/ci.yml` runs mypy and the default tests on every supported Python, and the integration suite against the `docker-compose.yml` servers.
+`.github/workflows/ci.yml` runs mypy and the default tests on every supported Python, with the newest dependency versions the ranges allow. It runs the integration suite against the `docker-compose.yml` servers twice: with the image's versions on Python 3.14, and with the lowest versions on Python 3.10.
 
 `.github/workflows/release.yml` publishes a release when a tag matching the version in `pyproject.toml` is pushed:
 

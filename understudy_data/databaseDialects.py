@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
-from .configuration import ConfigurationError, DatabaseConnectionConfig
+from .configuration import IDENTIFIER, ConfigurationError, DatabaseConnectionConfig, DatabaseType
 
 
 class ForeignKey(NamedTuple):
@@ -121,6 +121,38 @@ def _mergeUpdateInsertClause(targetAlias: str, sourceAlias: str, allColumns: Lis
         whenMatched = 'WHEN MATCHED THEN UPDATE SET {} '.format(updateClause)
 
     return 'ON ({}) {}WHEN NOT MATCHED THEN INSERT ({}) VALUES ({})'.format(onClause, whenMatched, insertColumns, insertValues)
+
+
+# How each database quotes an identifier, where it isn't with double quotes.
+_IDENTIFIER_QUOTES = {DatabaseType.MYSQL: ('`', '`'), DatabaseType.MARIADB: ('`', '`'), DatabaseType.MSSQL: ('[', ']')}
+
+# How a database folds an unquoted identifier, where it doesn't keep it as
+# written. The others compare identifiers case-insensitively anyway.
+_UNQUOTED_CASE = {DatabaseType.ORACLE: str.upper, DatabaseType.POSTGRESQL: str.lower}
+
+
+def quoteIdentifier(databaseType: DatabaseType, name: str) -> str:
+    """`name`, quoted, so a reserved word (`rank`, `order`) works as a column
+    name. Quoting makes the name case-sensitive on Oracle and PostgreSQL, so
+    `name` must be spelled as the catalog spells it.
+    """
+
+    opening, closing = _IDENTIFIER_QUOTES.get(databaseType, ('"', '"'))
+
+    return opening + name.replace(closing, closing * 2) + closing
+
+
+def quoteFolded(databaseType: DatabaseType, name: str) -> str:
+    """`name` quoted as the database would store it unquoted -- upper case on
+    Oracle, lower case on PostgreSQL -- for a column being created, which
+    then answers to the same unquoted name it would have without quotes.
+    """
+
+    fold = _UNQUOTED_CASE.get(databaseType)
+    if fold is not None and IDENTIFIER.match(name):
+        name = fold(name)
+
+    return quoteIdentifier(databaseType, name)
 
 
 class DatabaseDialect(ABC):

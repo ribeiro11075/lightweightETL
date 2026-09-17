@@ -24,7 +24,7 @@ reported, and the caller breaks each one by ignoring a foreign key.
 """
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, NamedTuple, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from .configuration import findCycle
 from .databaseDialects import ForeignKey
@@ -82,9 +82,10 @@ class _Builder:
     three levels deep and grows linearly.
     """
 
-    def __init__(self, names: Dict[str, str], materialize: bool) -> None:
+    def __init__(self, names: Dict[str, str], materialize: bool, quote: Callable[[str], str]) -> None:
         self.names = names
         self.materialize = materialize
+        self.quote = quote
         self.counter = 0
         self.bodies: Dict[str, str] = {}
         self.dependencies: Dict[str, List[str]] = {}
@@ -105,7 +106,8 @@ class _Builder:
         """
 
         inner = self.alias('s')
-        conditions = ' AND '.join('{}.{} = {}.{}'.format(inner, innerColumn, outerAlias, outerColumn) for innerColumn, outerColumn in pairs)
+        conditions = ' AND '.join('{}.{} = {}.{}'.format(inner, self.quote(innerColumn), outerAlias, self.quote(outerColumn))
+                                  for innerColumn, outerColumn in pairs)
         dependencies.append(selection)
 
         return 'EXISTS (SELECT 1 FROM {} {} WHERE {})'.format(selection, inner, conditions)
@@ -207,7 +209,7 @@ def relatedTables(foreignKeys: Sequence[ForeignKey], roots: Iterable[str], follo
 
 
 def planSubset(foreignKeys: Sequence[ForeignKey], root: str, where: str, followChildren: bool = True,
-               ignore: Iterable[str] = (), materialize: bool = False) -> SubsetPlan:
+               ignore: Iterable[str] = (), materialize: bool = False, quote: Optional[Callable[[str], str]] = None) -> SubsetPlan:
     """The per-table queries for a subset rooted at `root`, filtered by `where`.
 
     `where` is SQL in the root table's own terms, and is embedded verbatim --
@@ -223,6 +225,12 @@ def planSubset(foreignKeys: Sequence[ForeignKey], root: str, where: str, followC
 
     A subset whose selections would nest deeper than MAX_SELECTION_DEPTH raises
     SubsetError before any query is written.
+
+    `quote` quotes a column name for the source database, so a reserved word
+    works as a foreign-key column: pass
+    `lambda name: quoteIdentifier(database.type, name)`. The names are the
+    catalog's, so quoting keeps them meaning the same columns. Without it,
+    names are written as they are.
     """
 
     ignoreSet = parseIgnore(ignore)
@@ -247,7 +255,7 @@ def planSubset(foreignKeys: Sequence[ForeignKey], root: str, where: str, followC
                           'ignored column is nullable or masked'.format(described))
 
     order = _topologicalOrder(included, parentEdges)
-    builder = _Builder(names, materialize)
+    builder = _Builder(names, materialize, quote or (lambda name: name))
     downSelection = {table: 'subset_down_{}'.format(position) for position, table in enumerate(order, start=1)}
     keptSelection = {table: 'subset_kept_{}'.format(position) for position, table in enumerate(order, start=1)}
 

@@ -14,6 +14,8 @@ Parametrized over the five servers in docker-compose.yml; any that isn't
 reachable, or whose driver isn't installed, is skipped with a reason. Run with
 `pytest -m integration`.
 """
+import datetime
+import decimal
 import importlib
 import uuid
 
@@ -200,4 +202,42 @@ def test_database_history_and_key_fingerprints_work_on_every_server(server):
 
     assert memory.readKeyFingerprints() == {'a': 'abc123'}
     assert memory.readWatermarks() == {'a': 5}
+
+    watermarks = {'bytes': b'\x00\x00\x07\xd1', 'decimal': decimal.Decimal('12.50'), 'time': datetime.time(10, 30, 5)}
+    for job, value in watermarks.items():
+        memory.recordWatermark(job, value)
+    read = memory.readWatermarks()
+    assert {job: (type(read[job]), read[job]) for job in watermarks} == {job: (type(value), value) for job, value in watermarks.items()}
     assert set(memory.read()) == {'a'}
+
+
+def test_a_reserved_word_column_loads_and_upserts(server):
+    """`rank` and `order` are reserved on at least one server each; the column
+    is created as `understudy schema` would, and loaded through both paths.
+    """
+    from understudy_data.databaseDialects import quoteFolded
+
+    name, database, table = server
+    quoted = {column: quoteFolded(database.type, column) for column in ('id', 'rank', 'order')}
+    target = table('({id} INT PRIMARY KEY, {rank} INT, {order} VARCHAR(20))'.format(**quoted))
+
+    database.insert(table=target, data=[(1, 10, 'a'), (2, 20, 'b')], chunkSize=10, columns=['id', 'rank', 'order'])
+    database.upsert(table=target, data=[(2, 21, 'B'), (3, 30, 'c')], chunkSize=10, columns=['ID', 'Rank', 'order'])
+
+    rows = database.query('SELECT {id}, {rank}, {order} FROM {table} ORDER BY {id}'.format(table=target, **quoted))
+    assert [tuple(row) for row in rows] == [(1, 10, 'a'), (2, 21, 'B'), (3, 30, 'c')]
+
+
+def test_a_mixed_case_column_created_quoted_loads(server):
+    """On Oracle and PostgreSQL, a column created as "CustomerId" only answers
+    to that exact spelling; an unquoted load used to miss it.
+    """
+    from understudy_data.databaseDialects import quoteIdentifier
+
+    name, database, table = server
+    column = quoteIdentifier(database.type, 'CustomerId')
+    target = table('(id INT PRIMARY KEY, {} INT)'.format(column))
+
+    database.upsert(table=target, data=[(1, 5)], chunkSize=10, columns=['id', 'customerid'])
+
+    assert [tuple(row) for row in database.query('SELECT id, {} FROM {}'.format(column, target))] == [(1, 5)]

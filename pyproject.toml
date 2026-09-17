@@ -32,9 +32,12 @@ classifiers = [
     "Topic :: Software Development :: Testing",
     "Typing :: Typed",
     ]
+# Ranges, not pins: this installs beside other tools (Airflow, Dagster, dbt)
+# that have their own. The lower bounds are tested in CI (constraints/lowest.txt),
+# and the container image pins everything (constraints/image.txt).
 dependencies = [
-    "pyyaml==6.0.3",
-    "pydantic==2.13.5",
+    "pyyaml>=6.0.1,<7",
+    "pydantic>=2.6,<3",
     ]
 
 [project.urls]
@@ -46,18 +49,18 @@ Issues = "https://github.com/ribeiro11075/understudy/issues"
 understudy = "understudy_data.cli:main"
 
 [project.optional-dependencies]
-mysql = ["mysql-connector-python==26.7.0"]
-postgresql = ["psycopg2==2.9.12"]
-oracle = ["oracledb==4.0.2"]
-mssql = ["pymssql==2.4.0"]
+mysql = ["mysql-connector-python>=8.4"]
+postgresql = ["psycopg2>=2.9.6"]
+oracle = ["oracledb>=2.5"]
+mssql = ["pymssql>=2.3.5"]
 # MariaDB speaks MySQL's wire protocol, and MariaDBDialect reuses MySQLDialect's
 # connect() wholesale -- same driver package, no separate extra needed
-mariadb = ["mysql-connector-python==26.7.0"]
+mariadb = ["mysql-connector-python>=8.4"]
 # sqlite3 is Python's standard library -- no extra to install at all, this exists
 # only so `understudy-data[all]` and the pattern below stay uniform
 sqlite = []
 # The fpe masking strategy's AES; oracledb already depends on it
-fpe = ["cryptography==50.0.1"]
+fpe = ["cryptography>=42"]
 all = ["understudy-data[mysql,postgresql,oracle,mssql,mariadb,sqlite,fpe]"]
 dev = ["pytest==9.1.1", "mypy==2.3.1", "types-PyYAML==6.0.12.20260815", "build==1.6.1", "twine==7.0.0"]
 
