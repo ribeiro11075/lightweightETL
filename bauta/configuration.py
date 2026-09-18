@@ -7,7 +7,7 @@ import subprocess
 from enum import Enum
 from typing import Annotated, Any, Dict, List, Mapping, Optional, Sequence, Set, Type, TypeVar, Union
 
-from pydantic import BaseModel, BeforeValidator, Field, SecretStr, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, SecretStr, ValidationError, field_validator, model_validator
 
 from .masking import validateColumnPolicy, validateKey
 
@@ -422,12 +422,119 @@ class DataJobConfig(BaseJobConfig):
         return self
 
 
+class NameRuleConfig(BaseModel):
+    """A discovery.yaml rule on column names."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    words: List[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+    # A strategy name alone, or a mapping with a `strategy`, as in jobs.yaml.
+    policy: Dict[str, Any]
+    reason: Optional[str] = Field(default=None, min_length=1)
+
+    @field_validator('words')
+    @classmethod
+    def _wordsHaveLetters(cls, words: List[str]) -> List[str]:
+
+        empty = [word for word in words if not re.search(r'[A-Za-z0-9]', word)]
+        if empty:
+            raise ValueError('a word needs a letter or digit: {}'.format(', '.join(repr(word) for word in empty)))
+
+        return words
+
+    @field_validator('policy', mode='before')
+    @classmethod
+    def _policyIsValid(cls, policy: Any) -> Dict[str, Any]:
+
+        return validateColumnPolicy(policy)
+
+
+class ValueRuleConfig(BaseModel):
+    """A discovery.yaml rule on sampled values: a regular expression the whole
+    value must match.
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    pattern: str = Field(min_length=1)
+    # A strategy name alone, or a mapping with a `strategy`, as in jobs.yaml.
+    policy: Dict[str, Any]
+    reason: Optional[str] = Field(default=None, min_length=1)
+
+    @field_validator('pattern')
+    @classmethod
+    def _patternCompiles(cls, pattern: str) -> str:
+
+        try:
+            re.compile(pattern)
+        except re.error as error:
+            raise ValueError('not a valid regular expression: {}'.format(error)) from error
+
+        return pattern
+
+    @field_validator('policy', mode='before')
+    @classmethod
+    def _policyIsValid(cls, policy: Any) -> Dict[str, Any]:
+
+        return validateColumnPolicy(policy)
+
+
+class DiscoveryRulesFile(BaseModel):
+    """discovery.yaml: rules of your own for what personal data looks like,
+    checked before the built-in ones in builtinDiscovery.
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    builtins: bool = True
+    exclude: List[str] = Field(default_factory=list)
+    names: List[NameRuleConfig] = Field(default_factory=list)
+    values: List[ValueRuleConfig] = Field(default_factory=list)
+    personalTables: List[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+
+    @field_validator('exclude')
+    @classmethod
+    def _excludeNamesBuiltins(cls, exclude: List[str]) -> List[str]:
+
+        from .builtinDiscovery import RULE_NAMES
+
+        unknown = sorted(set(exclude) - RULE_NAMES)
+        if unknown:
+            raise ValueError('no built-in rule named {}. Built-in rules: {}'.format(', '.join(unknown), ', '.join(sorted(RULE_NAMES))))
+
+        return exclude
+
+
+class TableLocation(BaseModel):
+    """A table in one of database.yaml's aliases, to keep run state, history or
+    manifests in rather than a file. `table` defaults per use.
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    database: str = Field(min_length=1)
+    table: Optional[str] = Field(default=None, min_length=1)
+
+
+# A file, relative to the jobs file, or a table.
+StorageLocation = Union[Annotated[str, Field(min_length=1)], TableLocation]
+
+
 class DataJobsFile(BaseModel):
     workers: int = Field(ge=1)
     cycleSleepSeconds: float = 0.5
-    # Where the CLI keeps run state, relative to this file; see cli._resolveMemoryPath.
-    memory: Optional[str] = Field(default=None, min_length=1)
+    # Where the CLI keeps run state, records history and writes the masking
+    # manifest; command-line flags override each. See cli._resolveLocation.
+    memory: Optional[StorageLocation] = None
+    history: Optional[StorageLocation] = None
+    manifest: Optional[StorageLocation] = None
     jobs: Dict[str, DataJobConfig]
+
+    def tableLocations(self) -> Dict[str, TableLocation]:
+        """The settings that name a table, by setting."""
+
+        return {name: location for name, location in (('memory', self.memory), ('history', self.history), ('manifest', self.manifest))
+                if isinstance(location, TableLocation)}
 
 
 def findCycle(predecessors: Mapping[str, Sequence[str]]) -> Optional[List[str]]:
@@ -494,6 +601,13 @@ class Configuration:
     def validateJobConfiguration(rawConfiguration: Any, schema: Type[T]) -> T:
 
         return Configuration._validate(schema, rawConfiguration, schema.__name__)
+
+
+    @staticmethod
+    def validateDiscoveryRules(rawConfiguration: Any, sourceDescription: str = 'discovery.yaml') -> DiscoveryRulesFile:
+        """An empty file is no rules of your own, not an error."""
+
+        return Configuration._validate(DiscoveryRulesFile, rawConfiguration or {}, sourceDescription)
 
 
     @staticmethod

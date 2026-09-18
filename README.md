@@ -10,7 +10,7 @@
 - **Fast:** ten million rows of six masked columns in under two minutes on one core with the optional native masker, and under eight without. Either way the masks are the same.
 - **Incremental loads:** extract only what changed since the last successful run.
 - **A dependency graph:** jobs run in order, concurrently where they can, each in its own process with an optional timeout.
-- **Operable:** run history, Prometheus metrics, webhook alerts, run state in a file or a table, and passwords from a command for cloud IAM tokens.
+- **Operable:** webhook alerts; run state, history and manifests each in a file or a table; and passwords from a command for cloud IAM tokens.
 - **No infrastructure:** a `pip install`, some YAML, and a command you run from cron.
 
 
@@ -25,31 +25,27 @@ pip install "bauta[postgresql,oracle]"
 | Extra | Installs | Needs besides pip |
 | --- | --- | --- |
 | `mysql`, `mariadb` | mysql-connector-python | nothing |
-| `postgresql` | psycopg2, built from source | a C compiler and PostgreSQL's client library (below) |
+| `postgresql` | psycopg 3, with its own libpq | nothing |
 | `oracle` | oracledb, in thin mode | nothing — no Oracle client |
 | `mssql` | pymssql | nothing |
 | `sqlite` | Python's own `sqlite3` | nothing |
 | `fpe` | cryptography, for the `fpe` masking strategy | nothing; `oracle` already brings it |
 | `native` | `bauta-rs`, the native masker (below) | nothing on Linux (x86-64, ARM) or macOS; elsewhere, [Rust](https://rustup.rs) 1.83 or newer |
-| `all` | every driver above | as for `postgresql` |
-
-**Building psycopg2.** pip compiles it, so it needs a compiler and `pg_config`:
-
-- macOS: `xcode-select --install`, then `brew install libpq` and `export PATH="$(brew --prefix libpq)/bin:$PATH"` (Homebrew doesn't put libpq on the path by itself).
-- Debian or Ubuntu: `apt install build-essential libpq-dev`.
-
-To skip the build, leave `postgresql` (and `all`) out and install the prebuilt driver beside the other extras: `pip install "bauta[mysql,oracle,mssql]" psycopg2-binary`. psycopg2's maintainers recommend the source build for production.
+| `all` | every driver above | nothing |
 
 **The native masker (optional).** `bauta-rs` masks in Rust: four to five times the throughput, identical masks, nothing to configure. `pip install "bauta[postgresql,native]"` installs the version that matches, which is the only one Bauta uses. Without it, everything works, only slower. See [the native masker](docs/masking.md#the-native-masker).
 
 
 ## Quickstart
 
+Start from the configuration in [`example/starter/configuration/`](example/starter/configuration/), from a clone or downloaded from GitHub:
+
 ```
-bauta init
+mkdir configuration
+cp example/starter/configuration/*.yaml configuration/
 ```
 
-writes a starter `configuration/database.yaml` and `configuration/jobs.yaml`. Edit them for your databases, then supply the credentials they reference:
+Edit `configuration/database.yaml` and `configuration/jobs.yaml` for your databases, then supply the credentials they reference:
 
 ```
 export SOURCE_DB_PASSWORD=...  TARGET_DB_PASSWORD=...  MASKING_KEY=...
@@ -75,7 +71,6 @@ python example/native-masking/demo.py    # the same job masked in Python and in 
 ## The command
 
 ```
-bauta init             write a starter configuration to edit
 bauta run              run data jobs once, masking any with a `masking` section
 bauta validate         check configuration without connecting
 bauta jobs             show the job graph and what's due
@@ -110,11 +105,11 @@ bauta verify-manifest  check a manifest is unaltered, and who signed it
 | `--log FILE` | also log to a file, in addition to stderr (`--quiet` silences stderr) |
 | `--memory FILE` | where run state (last runs, watermarks) is kept, overriding `jobs.yaml`'s [`memory`](docs/configuration.md#file-level) |
 | `--memory-database ALIAS` | keep run state in a database table instead |
-| `--history FILE` | append each job's outcome to a JSON-lines history |
-| `--metrics FILE` | write Prometheus metrics for the textfile collector (`--metrics-push URL` for a Pushgateway) |
+| `--history FILE` | append each job's outcome to a JSON-lines history (`--history-database ALIAS` for a table), overriding `jobs.yaml`'s `history` |
 | `--notify-url URL` | post to a webhook when a run doesn't succeed; default `$BAUTA_NOTIFY_URL` |
+| `--rules FILE` | your own rules for recognising personal data, for `discover`, `audit` and `synthesize`; default `configuration/discovery.yaml` ([more](docs/masking.md#your-own-rules-discoveryyaml)) |
 | `--accept-key-change` | run upsert jobs whose masking key changed since their last run |
-| `--manifest FILE` | write a sealed JSON record of what was masked, and how; signed if `$BAUTA_MANIFEST_KEY` is set |
+| `--manifest FILE` | write a sealed JSON record of what was masked, and how (`--manifest-database ALIAS` for a table), overriding `jobs.yaml`'s `manifest`; signed if `$BAUTA_MANIFEST_KEY` is set |
 
 
 ## Documentation
@@ -124,7 +119,7 @@ bauta verify-manifest  check a manifest is unaltered, and who signed it
 | [Configuration](docs/configuration.md) | every field, how credentials are read from the environment, and connection options such as TLS |
 | [Masking](docs/masking.md) | strategies, consistent masks across tables, the key, the manifest, `audit`, `discover`, `subset`, `schema`, `synthesize` and `clear` |
 | [How it works](docs/design.md) | streaming, incremental loads, retries, scheduling, and the masking design |
-| [Operating it](docs/operations.md) | run state, history, metrics and notifications |
+| [Operating it](docs/operations.md) | run state, history and notifications |
 | [Security model](docs/security.md) | what masking protects and what it doesn't, the constructions, keys, and a deployment checklist |
 | [Library](docs/library.md) | embedding it in Python, results, memory backends |
 | [Development](docs/development.md) | running the tests, including against real databases |
@@ -134,9 +129,9 @@ bauta verify-manifest  check a manifest is unaltered, and who signed it
 
 | | |
 | --- | --- |
-| `bauta/` | the package; `runner.py` runs jobs, `masking.py` masks, `databaseDialects.py` holds per-database SQL, `starter/` is what `bauta init` writes |
+| `bauta/` | the package; `runner.py` runs jobs, `masking.py` masks, `databaseDialects.py` holds per-database SQL |
 | `mask-rs/` | the optional native masker, in Rust — see [its README](mask-rs/README.md) |
-| `example/` | runnable demos, each with its `configuration/` — see [its README](example/README.md) |
+| `example/` | runnable demos, each with its `configuration/`, and a starter configuration — see [its README](example/README.md) |
 | `docs/` | the documentation above |
 | `tests/` | the test suite |
 

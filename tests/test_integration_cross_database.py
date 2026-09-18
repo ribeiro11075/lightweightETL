@@ -15,7 +15,7 @@ import uuid
 import pytest
 
 pytest.importorskip('mysql.connector', reason='mysql-connector-python is not installed (pip install -e ".[mysql]")')
-pytest.importorskip('psycopg2', reason='psycopg2 is not installed (pip install psycopg2-binary, or pip install -e ".[postgresql]")')
+pytest.importorskip('psycopg', reason='psycopg is not installed (pip install -e ".[postgresql]")')
 
 from bauta.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
 from bauta.database import Database

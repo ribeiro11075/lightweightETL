@@ -289,11 +289,11 @@ Use `swap` rather than `upsert` for this if any key column is masked. An upsert 
 
 ## The manifest
 
-```
-bauta run --manifest audit/manifest.json
+```yaml
+manifest: ../audit/manifest.json      # in jobs.yaml; or --manifest FILE on the command line
 ```
 
-This writes a record of what was masked, how, and under which key fingerprint. It's the artifact an auditor asks for:
+Every run then writes a record of what was masked, how, and under which key fingerprint. It's the artifact an auditor asks for:
 
 ```json
 {
@@ -334,15 +334,31 @@ This writes a record of what was masked, how, and under which key fingerprint. I
 
 From Python, `RunResult.maskingManifest(jobsFile.jobs)` returns the manifest before sealing, without `tool`, `configuration` or `integrity`; `sealManifest` adds the last.
 
+### In a table
+
+A file is replaced by each run. To keep every run's manifest, or to keep them with the data they describe, store them in a table instead:
+
+```yaml
+manifest:
+  database: warehouse           # an alias in database.yaml
+  table: audit.bauta_manifest   # optional; bauta_manifest by default
+```
+
+or `--manifest-database ALIAS` for one run. Each manifest is stored exactly as it would be written to a file, in 2000-character pieces so one table definition fits every database, under a new run id that the log line names. The table must exist first ([`DATABASE_MANIFEST_SCHEMA`](operations.md#run-state)).
+
+`bauta verify-manifest` with no file reads the latest manifest from there, and `--run RUN_ID` picks an earlier one.
+
+**The table is not what makes a manifest trustworthy.** Whoever can write to it can replace a manifest, and recompute its digest to match. Only a [signature](#sealing-and-verifying) shows who wrote one, wherever it's stored.
+
 ### Sealing and verifying
 
 Every manifest carries a SHA-256 digest of its own content, which shows it hasn't been edited since it was written. Anyone can recompute a digest, though, so it doesn't show who wrote it. For that, set a signing key and the manifest is also signed with HMAC-SHA256:
 
 ```
 export BAUTA_MANIFEST_KEY=...      # at least 16 characters; not the masking key
-bauta run --manifest audit/manifest.json
+bauta run
 
-bauta verify-manifest audit/manifest.json
+bauta verify-manifest       # the manifest jobs.yaml names; or a FILE, or --manifest-database ALIAS
 ```
 
 `verify-manifest` exits 0 for an intact manifest (saying whether it was signed), and 1 if it was altered or its signature doesn't match. With `BAUTA_MANIFEST_KEY` set, an unsigned manifest exits 1 too: otherwise an edited manifest could pass by dropping its signature and recomputing its digest. A signed manifest records its key's fingerprint; verifying it without that key exits 2 rather than half-answering. `--manifest-key-variable` reads the key from another variable, on both commands.
@@ -361,7 +377,7 @@ bauta audit --connect --strict   # also asks the databases; fails on warnings
 | --- | --- |
 | error | A masked query returns a column the policy doesn't cover, or names one it doesn't return (`--connect`). |
 | error | A masked query couldn't be run to check (`--connect`). |
-| warning | A column is kept unmasked although its name suggests personal data (`email`, `ssn`, `phone`, ...). |
+| warning | A column is kept unmasked although its name suggests personal data (`email`, `ssn`, `phone`, ...), by the built-in rules or [your own](#your-own-rules-discoveryyaml). |
 | warning | `defaultStrategy` is `keep`, so any column added to the source later is copied unmasked. |
 | warning | A job copies from a database without masking while other jobs mask what they read from it. |
 | warning | A masked job reads over a connection that isn't encrypted, as the server reports it (`--connect`). |
@@ -396,13 +412,71 @@ For each table, `discover` reads the schema and samples rows (`--sample`, defaul
         status: {strategy: keep}  # no sign of personal data -- review
 ```
 
-- **Names first, then values.** Column names are matched against common patterns (email, phone, SSN, card, name, address, birth date and so on). A name-based suggestion is dropped if it doesn't fit the column's type, so `place_of_birth` isn't treated as a date. Sampled values are then checked for emails, national identifiers, card numbers (with a Luhn check), IP addresses, UUIDs, dates, phone numbers and long free text.
+- **Names first, then values.** Column names are matched against [rules](#your-own-rules-discoveryyaml) for common patterns (email, phone, SSN, card, name, address, birth date and so on). A name-based suggestion is dropped if it doesn't fit the column's type, so `place_of_birth` isn't treated as a date. Sampled values are then checked for emails, national identifiers, card numbers (with a Luhn check), IP addresses, UUIDs, dates, phone numbers and long free text.
 - **Keys are decided together.** Primary keys, the columns that foreign keys reference, and the foreign-key columns themselves get matching domains, so both ends of a relationship agree. Numeric keys are proposed as `keep`, since surrogate ids reveal little, and text keys as `key`.
 - **Sampled values stay in memory.** None of them is printed, logged or written.
 - **Load settings.** With a separate `--target`, jobs upsert and load parent tables before child tables. Without one, the proposal masks in place through a `<table>_masked_stage` swap.
 - `--output` refuses to overwrite an existing file, so it can't replace a policy that has already been reviewed.
 
 Treat the result as a starting point for review. It isn't a finished policy.
+
+### Your own rules: `discovery.yaml`
+
+The built-in rules are in [`bauta/builtinDiscovery.py`](../bauta/builtinDiscovery.py), and they recognise English column names and US-shaped identifiers. For anything else, such as a national identifier or column names in another language, put rules of your own in `configuration/discovery.yaml` (or name a file with `--rules FILE`):
+
+```yaml
+names:                                  # words in column names
+- words: [nif, numero_contribuinte]
+  policy: {strategy: key, charset: digits}
+  reason: a Portuguese tax number
+- words: [nome, apelido]
+  policy: fakeName
+- words: [office_phone]
+  policy: keep                          # a switchboard, not a person
+  reason: switchboard numbers
+values:                                 # regular expressions sampled values must match
+- pattern: '[125689]\d{8}'
+  policy: {strategy: key, charset: digits}
+  reason: looks like a NIF
+personalTables: [clientes, utentes]     # a bare `name` column in these is a person's
+exclude: [ip]                           # built-in rules to leave out
+```
+
+- **Yours come first.** Your rules are tried before the built-in ones, in the order written, and the first that matches wins. So a rule of yours also overrides a built-in one, and `keep` says a column isn't personal after all: above, `office_phone` stays as it is while `home_phone` is still masked.
+- **`names`.** A rule matches when any of its `words` is in the column name. Names are split on underscores and camelCase, and also matched run together, so `numero_contribuinte` matches `NumeroContribuinte` and `numero_contribuinte_cliente`. As with the built-in rules, a rule is skipped for a column whose type its policy doesn't fit.
+- **`values`.** A rule matches when at least 80% of a column's sampled values match its `pattern` in full: `\d{9}` matches `501234567`, not `NIF 501234567`. Unlike the built-in value rules, which read text only, yours also read integer columns as their digits, since a tax number is often stored as one.
+- **`policy`** is a column policy as in `jobs.yaml`: a strategy name, or a mapping with its options. `reason` is the comment written beside the proposal; without one, it says the rule came from `discovery.yaml`.
+- **Leaving built-in rules out.** `exclude` names built-in rules to drop, and one name covers a rule's name and value forms both: leaving out `phone` means nothing is taken for a phone number. `builtins: false` drops them all, `personalTables` included, leaving only yours.
+
+| Field | | |
+| --- | --- | --- |
+| `names` | optional | Rules on column names, each with `words`, a `policy` and an optional `reason`. |
+| `values` | optional | Rules on sampled values, each with a `pattern`, a `policy` and an optional `reason`. |
+| `personalTables` | optional | Words in a table's name that make a bare `name` column in it a person's. |
+| `exclude` | optional | Built-in rules to leave out, by the names below. |
+| `builtins` | optional, `true` | `false` leaves out every built-in rule. |
+
+| Built-in rule | Recognises |
+| --- | --- |
+| `email` | email addresses, by name and value |
+| `credential` | passwords, secrets, tokens and API keys |
+| `nationalId` | SSNs, tax ids, passports and licence numbers, by name; `123-45-6789` by value |
+| `card` | card numbers, by name, and by value with a Luhn check |
+| `bankAccount` | IBANs, account, routing and sort codes |
+| `phone` | phone, mobile and fax numbers, by name and value |
+| `firstName`, `lastName`, `fullName` | people's names |
+| `userName` | user names and logins |
+| `company` | companies and employers |
+| `ip` | IP addresses, by name, and IPv4 by value |
+| `streetAddress`, `city`, `postalCode` | addresses |
+| `birthDate` | dates of birth |
+| `compensation` | salaries, income and bonuses |
+| `coordinate` | latitudes and longitudes |
+| `sensitiveAttribute` | gender, race, ethnicity, religion and nationality |
+| `freeText` | notes, comments and descriptions |
+| `uuid`, `date` | UUIDs and ISO dates, by value, proposed as `keep` for review |
+
+The same rules, yours included, decide which unmasked columns [`audit`](#reviewing-policies-audit) questions and which columns [`synthesize`](#generating-data-instead-synthesize) fills with realistic values. `bauta validate` checks the file: every pattern must compile, every policy must be valid, and every name in `exclude` must be a built-in rule.
 
 
 ## Copying a subset: `subset`
@@ -500,7 +574,7 @@ customers: 1000 row(s)
 
 - **Keys are unique.** Integer keys continue after the table's current maximum; text keys run `S1`, `S2`, ... after the current row count (`S0001`, `S0002`, ... in a fixed-width column, so each stays distinct at full width); UUID keys are generated.
 - **Foreign keys resolve.** Values are drawn from the parent's existing rows, so parents are filled first; `--table` order doesn't matter. A table whose key is made only of foreign keys gets as many rows as its parents allow, which may be fewer than asked.
-- **Names drive realism.** Columns whose names suggest personal data (email, names, phone, postal code, birth date, city, company, address...) get realistic values, from the same rules `discover` uses. Everything else is random within its type: numbers within their precision, text within its length, dates since 2015. Nullable columns are NULL about one time in ten.
+- **Names drive realism.** Columns whose names suggest personal data (email, names, phone, postal code, birth date, city, company, address...) get realistic values, from the same rules `discover` uses, [your own](#your-own-rules-discoveryyaml) included. Everything else is random within its type: numbers within their precision, text within its length, dates since 2015. Nullable columns are NULL about one time in ten.
 - **Reproducible.** The same `--seed` on the same starting tables makes the same rows.
 - `--rows` sets the count for any `--table` given without one. Nothing is written without `--yes`.
 

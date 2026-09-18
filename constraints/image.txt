@@ -11,7 +11,8 @@ cffi==2.1.1
 cryptography==50.0.1
 mysql-connector-python==26.7.0
 oracledb==4.0.2
-psycopg2==2.9.12
+psycopg==3.3.6
+psycopg-binary==3.3.6
 pycparser==3.0
 pydantic==2.13.5
 pydantic-core==2.46.5

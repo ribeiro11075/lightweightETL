@@ -12,10 +12,10 @@ import datetime
 import decimal
 import hashlib
 import uuid
-from typing import Any, Callable, Dict, Iterator, List, NamedTuple, Optional, Sequence, Set, Tuple
+from typing import AbstractSet, Any, Callable, Dict, Iterator, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from .databaseDialects import ColumnDefinition, ForeignKey, quoteIdentifier
-from .discovery import NAME_RULES, nameWords
+from .discovery import BUILTIN_RULES, DiscoveryRules, nameWords
 from .masking import STRATEGIES, KeyedHash
 from .schema import INTEGER_BOOLEAN_NOTE, PortableType, portableType
 
@@ -52,7 +52,7 @@ _FAKE_DESCRIPTIONS = {
     }
 
 
-def _templateFor(words: Set[str]) -> str:
+def _templateFor(words: AbstractSet[str]) -> str:
 
     if words & {'creditcard', 'cardnumber', 'ccnumber', 'pan'}:
         return '4000 0000 0000 0000'
@@ -69,10 +69,11 @@ def _templateFor(words: Set[str]) -> str:
 class _Synthesizer:
     """Builds one table's column generators."""
 
-    def __init__(self, table: str, seed: int, nullShare: float) -> None:
+    def __init__(self, table: str, seed: int, nullShare: float, rules: DiscoveryRules = BUILTIN_RULES) -> None:
         self.salt = 'bauta synthetic data|{}|{}'.format(seed, table.lower())
         self.keyedHash = KeyedHash(self.salt, table.lower())
         self.nullShare = nullShare
+        self.rules = rules
 
 
     def _unit(self, rowNumber: int, column: str) -> float:
@@ -86,17 +87,22 @@ class _Synthesizer:
 
 
     def byName(self, column: ColumnDefinition, portable: PortableType) -> Optional[Tuple[Generator, str]]:
-        """A realistic generator where the column's name suggests personal data."""
+        """A realistic generator where the column's name suggests personal data,
+        by the same rules discovery uses. A rule of your own that says `keep`
+        leaves the column to its type.
+        """
 
         words = nameWords(column.name)
         textual = portable.kind in ('text', 'fixedText')
         numeric = portable.kind in ('smallint', 'integer', 'bigint', 'decimal', 'float')
         dated = portable.kind in ('date', 'timestamp', 'timestampTz')
 
-        for ruleWords, policy, _ in NAME_RULES:
-            if not words & set(ruleWords):
+        for rule in self.rules.names:
+            if not words & rule.words:
                 continue
-            strategy = policy['strategy']
+            strategy = rule.policy['strategy']
+            if strategy == 'keep':
+                return None
             name = column.name
 
             if strategy == 'email' and textual:
@@ -248,7 +254,8 @@ def _integerKind(portable: PortableType) -> bool:
 
 
 def planTable(database: Any, table: str, rows: int, seed: int = 0, foreignKeys: Optional[Sequence[ForeignKey]] = None,
-              nullShare: float = DEFAULT_NULL_SHARE) -> Tuple[List[str], Callable[[int], Tuple[Any, ...]], List[ColumnPlan], int]:
+              nullShare: float = DEFAULT_NULL_SHARE,
+              rules: DiscoveryRules = BUILTIN_RULES) -> Tuple[List[str], Callable[[int], Tuple[Any, ...]], List[ColumnPlan], int]:
     """How `table` would be filled: its columns, a row generator, what each
     column gets, and how many rows can be made.
 
@@ -263,7 +270,7 @@ def planTable(database: Any, table: str, rows: int, seed: int = 0, foreignKeys: 
     primaryKey = {column.upper() for column in database.getPrimaryColumnNames(table)}
     foreignKeys = [foreignKey for foreignKey in (foreignKeys if foreignKeys is not None else database.getForeignKeys())
                    if foreignKey.table.upper() == table.split('.')[-1].upper()]
-    synthesizer = _Synthesizer(table, seed, nullShare)
+    synthesizer = _Synthesizer(table, seed, nullShare, rules)
     spelled = {definition.name.upper(): definition.name for definition in definitions}
     generators: Dict[str, Generator] = {}
     plans: Dict[str, ColumnPlan] = {}
@@ -379,14 +386,14 @@ def _combinations(generators: Dict[str, Generator], keyColumns: List[str]) -> in
 
 
 def synthesizeTable(database: Any, table: str, rows: int, seed: int = 0, foreignKeys: Optional[Sequence[ForeignKey]] = None,
-                    chunkSize: int = 1000, nullShare: float = DEFAULT_NULL_SHARE) -> int:
+                    chunkSize: int = 1000, nullShare: float = DEFAULT_NULL_SHARE, rules: DiscoveryRules = BUILTIN_RULES) -> int:
     """Inserts up to `rows` generated rows into `table`, and returns how many.
 
     Fewer than asked only for a table whose primary key is made entirely of
     foreign keys, which can't have more distinct rows than its parents allow.
     """
 
-    columns, makeRow, _, available = planTable(database, table, rows, seed=seed, foreignKeys=foreignKeys, nullShare=nullShare)
+    columns, makeRow, _, available = planTable(database, table, rows, seed=seed, foreignKeys=foreignKeys, nullShare=nullShare, rules=rules)
     keyColumns = {column.upper() for column in database.getPrimaryColumnNames(table)}
     keyIndexes = [index for index, column in enumerate(columns) if column.upper() in keyColumns]
     seen: Set[Tuple[Any, ...]] = set()

@@ -179,3 +179,100 @@ def test_personal_data_hint_reads_the_name_alone(column, expected):
     from bauta.discovery import personalDataHint
 
     assert personalDataHint(column) == expected
+
+
+# Rules of your own, from a discovery.yaml -------------------------------------
+
+from bauta.discovery import BUILTIN_RULES, discoveryRules, personalDataHint  # noqa: E402
+
+PORTUGUESE = {
+    'names': [
+        {'words': ['nif', 'numero_contribuinte'], 'policy': {'strategy': 'key', 'charset': 'digits'}, 'reason': 'a Portuguese tax number'},
+        {'words': ['nome'], 'policy': 'fakeName'},
+        {'words': ['telefone'], 'policy': 'keep', 'reason': 'switchboard numbers, not people'},
+        ],
+    'values': [{'pattern': r'[125689]\d{8}', 'policy': {'strategy': 'key', 'charset': 'digits'}, 'reason': 'looks like a NIF'}],
+    'personalTables': ['clientes'],
+    }
+
+
+def rulesFrom(raw):
+    return discoveryRules(Configuration.validateDiscoveryRules(raw))
+
+
+def suggested(column, values=(), category=None, table='things', rules=None):
+    return suggestColumn(table, column, category, list(values), rules=rules or rulesFrom(PORTUGUESE))
+
+
+def test_your_own_name_rules_are_matched_as_the_built_in_ones_are():
+    assert suggested('nif').policy == {'strategy': 'key', 'charset': 'digits'}
+    assert suggested('nif').reason == 'a Portuguese tax number'
+    assert suggested('NumeroContribuinte').policy['strategy'] == 'key'
+    assert suggested('nome_cliente').policy['strategy'] == 'fakeName'
+    assert suggested('nome_cliente').reason == 'name matches a rule in discovery.yaml'
+    assert suggested('email').policy['strategy'] == 'email'
+
+
+def test_your_own_rules_come_first_so_keep_overrides_a_built_in_one():
+    switchboard = rulesFrom({'names': [{'words': ['office_phone'], 'policy': 'keep', 'reason': 'switchboard numbers, not people'}]})
+
+    assert strategyFor('office_phone') == 'digits'
+    assert suggested('office_phone', rules=switchboard).policy == {'strategy': 'keep'}
+    assert suggested('office_phone', rules=switchboard).reason == 'switchboard numbers, not people'
+    assert suggested('home_phone', rules=switchboard).policy['strategy'] == 'digits'
+    assert personalDataHint('office_phone') == 'name suggests a phone number'
+    assert personalDataHint('office_phone', switchboard) is None
+    assert personalDataHint('nif', rulesFrom(PORTUGUESE)) == 'a Portuguese tax number'
+
+
+def test_your_own_value_patterns_match_whole_values_in_text_and_integer_columns():
+    nifs = ['501234567', '212345678', '612345679']
+
+    assert suggested('documento', nifs, TEXT).reason == 'looks like a NIF'
+    assert suggested('documento', [int(nif) for nif in nifs], NUMBER).reason == 'looks like a NIF'
+    # fullmatch: a NIF inside longer text isn't one
+    assert suggested('documento', ['NIF ' + nif for nif in nifs], TEXT).reason != 'looks like a NIF'
+
+
+def test_a_value_pattern_is_not_applied_where_its_policy_does_not_fit():
+    rules = rulesFrom({'values': [{'pattern': r'\d+', 'policy': 'email'}]})
+
+    assert suggested('code', [1, 2, 3], NUMBER, rules=rules).policy['strategy'] == 'keep'
+
+
+def test_your_own_personal_tables_make_a_bare_name_a_person():
+    assert suggested('name', ['Ana'], TEXT, table='clientes').policy['strategy'] == 'fakeName'
+    assert suggested('name', ['Ana'], TEXT, table='customers').policy['strategy'] == 'fakeName'
+
+
+def test_built_in_rules_can_be_left_out_by_name_or_all_together():
+    withoutPhone = rulesFrom({'exclude': ['phone']})
+    assert suggested('phone', rules=withoutPhone).policy['strategy'] == 'keep'
+    assert suggested('mobile', ['+351 912 345 678'] * 5, TEXT, rules=withoutPhone).policy['strategy'] == 'keep'
+    assert suggested('email', rules=withoutPhone).policy['strategy'] == 'email'
+
+    onlyYours = rulesFrom({'builtins': False, 'names': [{'words': ['nif'], 'policy': 'hash'}]})
+    assert suggested('nif', rules=onlyYours).policy['strategy'] == 'hash'
+    assert suggested('email', ['a@b.com'], TEXT, rules=onlyYours).policy['strategy'] == 'keep'
+    assert suggested('name', ['Ann'], TEXT, table='customers', rules=onlyYours).policy['strategy'] == 'keep'
+
+
+def test_no_rules_file_means_the_built_in_rules():
+    assert discoveryRules() is BUILTIN_RULES
+    assert discoveryRules(Configuration.validateDiscoveryRules(None)).names == BUILTIN_RULES.names
+
+
+@pytest.mark.parametrize('raw,message', [
+    ({'exclude': ['telephone']}, 'no built-in rule named telephone'),
+    ({'values': [{'pattern': '[0-9', 'policy': 'hash'}]}, 'not a valid regular expression'),
+    ({'names': [{'words': ['nif'], 'policy': {'strategy': 'nope'}}]}, 'nope'),
+    ({'names': [{'words': ['--'], 'policy': 'hash'}]}, 'needs a letter or digit'),
+    ({'names': [{'words': [], 'policy': 'hash'}]}, 'words'),
+    ({'names': [{'word': ['nif'], 'policy': 'hash'}]}, 'word'),
+    ({'excluded': ['phone']}, 'excluded'),
+    ])
+def test_a_rules_file_that_cannot_work_is_refused(raw, message):
+    from bauta.configuration import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match=message):
+        Configuration.validateDiscoveryRules(raw)

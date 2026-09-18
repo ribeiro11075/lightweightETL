@@ -1,6 +1,6 @@
 # example/
 
-Runnable demonstrations. None needs a server or credentials; each runs against throwaway SQLite databases. The test suite runs every one, so none can drift from what the code accepts.
+Runnable demonstrations, and a starter configuration to copy. None needs a server or credentials; each runs against throwaway SQLite databases. The test suite runs every one, so none can drift from what the code accepts.
 
 Each demo has the same shape:
 
@@ -12,14 +12,13 @@ Each demo has the same shape:
 
 The walkthrough runs the `bauta` command itself. The other demos call the Python API, and before each step print the `bauta` command that does the same, with the environment variables its `configuration/` reads — paste it into a shell from the repository root to run that step yourself.
 
-For a configuration to start your own from, rather than a demo's, run `bauta init`.
-
 | Demo | Shows |
 | --- | --- |
 | [`walkthrough/`](#walkthrough) | the whole workflow, through the commands a person would type |
 | [`incremental/`](#incremental) | streaming, and incremental loads that extract only what changed |
 | [`masking/`](#masking) | masking, discovery and subsetting, from Python |
 | [`native-masking/`](#native-masking) | the same job masked in Python and in Rust, in turn and overlapped: the speed, and identical results |
+| [`starter/`](#starter) | not a demo: a configuration to copy for your own databases |
 
 
 ## walkthrough
@@ -98,3 +97,21 @@ The Rust extension is optional. Without it, the demo runs the two Python runs an
 
 Tested by `tests/test_native_masking_demo.py`.
 
+
+## starter
+
+A complete configuration to start your own from:
+
+```
+mkdir configuration
+cp example/starter/configuration/*.yaml configuration/
+```
+
+| File | |
+| --- | --- |
+| `database.yaml` | two database aliases, with credentials read from the environment |
+| `jobs.yaml` | data jobs, including an incremental one and two masked ones, with run state, history and the manifest kept in `transaction/` |
+
+Set the variables it reads -- `SOURCE_DB_PASSWORD`, `TARGET_DB_PASSWORD` and `MASKING_KEY` -- then edit it for your databases. The CLI reads `./configuration` by default; `--config DIR` points it anywhere else.
+
+Validated, with every demo's configuration, by `tests/test_shipped_example_configuration.py`. See [docs/configuration.md](../docs/configuration.md) for every field.

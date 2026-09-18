@@ -257,7 +257,7 @@ def test_stream_returns_real_columns_and_bounded_chunks(liveDatabase, peopleTabl
     thing DatabaseDialect cannot fake: a plain fetchmany() bounds how many rows
     Python builds objects for, but says nothing about how many the driver already
     pulled off the socket. Only a real server proves streamingCursor() actually
-    got a non-buffering cursor -- psycopg2 needs a *named* (server-side) cursor,
+    got a non-buffering cursor -- psycopg needs a *named* (server-side) cursor,
     and mysql.connector needs buffered=False, the inverse of what connect() uses.
 
     The chunk sizes prove fetchmany is bounding the walk; the reassembled rows
@@ -277,7 +277,7 @@ def test_stream_returns_real_columns_and_bounded_chunks(liveDatabase, peopleTabl
 def test_stream_of_an_empty_table_yields_no_chunks_but_still_reports_columns(liveDatabase, peopleTable):
     """cursor.description has to be populated before any row is fetched -- the
     reason stream() pulls its first chunk eagerly rather than describing off a
-    bare execute(), which psycopg2's server-side cursors in particular do not
+    bare execute(), which psycopg's server-side cursors in particular do not
     reliably support.
     """
     columns, chunks = liveDatabase.stream(query='SELECT id, name, amount FROM {}'.format(peopleTable), chunkSize=100)

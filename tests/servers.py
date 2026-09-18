@@ -9,7 +9,7 @@ SERVERS = {
         type=DatabaseType.MYSQL, user='root', password='root', database='bauta_test', host='127.0.0.1', port=3307)),
     'mariadb': ('mysql.connector', DatabaseConnectionConfig(
         type=DatabaseType.MARIADB, user='root', password='root', database='bauta_test', host='127.0.0.1', port=3308)),
-    'postgresql': ('psycopg2', DatabaseConnectionConfig(
+    'postgresql': ('psycopg', DatabaseConnectionConfig(
         type=DatabaseType.POSTGRESQL, user='postgres', password='postgres', database='bauta_test', host='127.0.0.1', port=5433)),
     'oracle': ('oracledb', DatabaseConnectionConfig(
         type=DatabaseType.ORACLE, user='system', password='oracle', database='bauta_test', host='127.0.0.1', port=1522,

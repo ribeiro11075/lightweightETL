@@ -7,7 +7,7 @@ You load configuration however you like and hand it over as plain data. Each dri
 - [Running jobs](#running-jobs)
 - [Results](#results)
 - [Memory backends](#memory-backends)
-- [History, metrics and notifications](#history-metrics-and-notifications)
+- [History and notifications](#history-and-notifications)
 - [Masking, discovery and subsets](#masking-discovery-and-subsets)
 - [Streaming directly](#streaming-directly)
 
@@ -51,7 +51,7 @@ runDataJobs(jobsFile, databaseConfiguration, memory,
             acceptKeyChange=False, onCycle=None)
 ```
 
-- **`onCycle`** is called with each cycle's `RunResult` as the cycle ends, including under `runForever`. See [below](#history-metrics-and-notifications). An exception it raises is logged, not raised.
+- **`onCycle`** is called with each cycle's `RunResult` as the cycle ends, including under `runForever`. See [below](#history-and-notifications). An exception it raises is logged, not raised.
 - **`acceptKeyChange=True`** runs upsert jobs whose masking key changed since their last run; see [the key](masking.md#the-key).
 - **`runForever=False`** makes one pass and returns. `True` keeps running, honouring `refresh`, until `SIGINT` or `SIGTERM`. Either signal stops new jobs from starting and lets running ones finish; see [stopping](design.md#single-runs-not-a-daemon).
 - **`logFile`** is optional. Without one, attach a stream yourself: `Log(level=...).addStreamHandler(sys.stderr)`. Workers' records are written by the calling process's handlers, whichever those are.
@@ -117,20 +117,19 @@ Subclass `MemoryBackend`:
 **One constraint:** the same instance is pickled into every worker process. Hold settings — a path, connection details — rather than an open file or connection, and open what you need inside each method.
 
 
-## History, metrics and notifications
+## History and notifications
 
-What the CLI's `--history`, `--metrics` and `--notify-url` do, as functions to call from `onCycle`:
+What the CLI's `--history` and `--notify-url` do, as functions to call from `onCycle`:
 
 ```python
 import os
-from bauta import FileHistory, notify, writeMetricsFile
+from bauta import FileHistory, notify
 from bauta.reporting import newRunId
 
 history = FileHistory('history.jsonl')
 
 def report(result):
     history.append(result, newRunId())
-    writeMetricsFile('/var/lib/node_exporter/etl.prom', result)
     notify(os.environ['ALERT_WEBHOOK'], result)
 
 runDataJobs(jobsFile, databases, memory, onCycle=report)
@@ -139,11 +138,10 @@ runDataJobs(jobsFile, databases, memory, onCycle=report)
 | | |
 | --- | --- |
 | `FileHistory(path)`, `DatabaseHistory(connectionSettings, table=...)` | `RunHistory` backends: `append(result, runId)`, and `read(limit=20, job=None)` newest first. `DATABASE_HISTORY_SCHEMA` is the table. |
-| `writeMetricsFile(path, result)` | Prometheus text for the textfile collector, keeping jobs that weren't in this cycle. |
-| `pushMetrics(gatewayUrl, result)` | The same, to a Pushgateway. |
+| `DatabaseManifests(connectionSettings, table=...)` | Sealed manifests in a table: `write(manifest, runId)`, and `read(runId=None)`, which returns `(runId, manifest)`, the latest if no run is named. `DATABASE_MANIFEST_SCHEMA` is the table. |
 | `notify(url, result, always=False)` | Posts `reporting.notificationPayload(result)` if the cycle didn't succeed, or always; returns whether it posted. |
 
-See [operations.md](operations.md) for the metrics and payload.
+See [operations.md](operations.md#notifications) for the payload.
 
 
 ## Masking, discovery and subsets
@@ -172,17 +170,18 @@ with Database(connectionSettings=databases['prod']) as database:
 | `keyFingerprint(key)` | The same fingerprint, for a key on its own. |
 | `buildMaskingManifest(outcomes, declared)` | The manifest from outcomes and each masked job's declared target and fingerprint. `RunResult.maskingManifest` wraps it. |
 | `sealManifest(manifest, signingKey=None)`, `verifyManifest(manifest, signingKey=None)` | Add a manifest's digest (and signature), and check them. `verifyManifest` returns `digestValid`, `signed`, `signatureValid` and the signing key's fingerprint, and raises `ValueError` for a manifest with no integrity section. See [sealing and verifying](masking.md#sealing-and-verifying). |
-| `auditJobs(jobs, returnedColumns=None, encryption=None, unreachable=None, targetColumns=None, foreignKeys=None)`, `renderAudit(report)` | The `audit` report as a dict, and as text. The optional arguments carry what `audit --connect` learns from the databases. |
+| `auditJobs(jobs, returnedColumns=None, encryption=None, unreachable=None, targetColumns=None, foreignKeys=None, rules=...)`, `renderAudit(report)` | The `audit` report as a dict, and as text. The optional arguments carry what `audit --connect` learns from the databases. |
 | `Database.getForeignKeys()` | Every foreign key in the connection's current schema, as `ForeignKey(table, columns, referencedTable, referencedColumns, name)`. |
 | `Database.sample(query, rows)` | Column names and at most `rows` rows, without reading the rest. |
 | `Database.isEncrypted()` | Whether the server reports the connection as encrypted; `None` if it can't say. |
-| `proposeTable(database, table, sampleSize=1000)` | A `TableProposal` with a suggested policy and the reason for it, per column. |
+| `proposeTable(database, table, sampleSize=1000, rules=...)` | A `TableProposal` with a suggested policy and the reason for it, per column. |
+| `discoveryRules(rulesFile=None)` | The rules `proposeTable`, `auditJobs` and `synthesizeTable` take as `rules`: the built-in ones, with a validated `discovery.yaml` (`Configuration.validateDiscoveryRules(raw)`) ahead of them. They use the built-in ones alone by default. |
 | `Database.getColumnDefinitions(table)`, `getPrimaryColumnNames(table)`, `tableExists(table)` | The catalog facts `schema` and upserts use. `table` may be `schema.table`; otherwise the connection's current schema is searched, and no other. |
 | `subset.relatedTables(foreignKeys, roots, followChildren=True)` | Every table a subset from `roots` would copy. |
 | `schema.readTable`, `schema.createStatements`, `schema.renderScript` | A table's shape, CREATE TABLE statements for a target dialect, and the script form. |
 | `schema.clearTables(database, tables)` | Empties tables children-first, in one transaction. |
 | `planSubset(foreignKeys, root, where, followChildren=True, ignore=(), materialize=False, quote=None)` | A `SubsetPlan`: tables in load order, a query for each, each table's parents, and the foreign keys ignored. Raises `SubsetError` on a cycle, or on a chain deeper than 16 tables. Pass `materialize=database.dialect.supportsMaterializedSelections()`, and `quote=lambda name: quoteIdentifier(database.type, name)` (from `bauta.databaseDialects`) so reserved-word columns work. |
-| `synthesizeTable(database, table, rows, seed=0)`, `planTable(...)` | Fill a table with generated rows, returning how many; or just describe how, with a row generator. Raise `SynthesisError`. |
+| `synthesizeTable(database, table, rows, seed=0, rules=...)`, `planTable(...)` | Fill a table with generated rows, returning how many; or just describe how, with a row generator. Raise `SynthesisError`. |
 
 
 ## Streaming directly

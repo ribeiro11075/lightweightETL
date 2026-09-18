@@ -342,12 +342,12 @@ def test_copy_text_escapes_what_the_text_format_treats_specially():
     import decimal
     from bauta.databaseDialects import _copyText
 
-    stream = _copyText([
+    text = _copyText([
         (None, 'a\tb\nc\\d\re', True, False, decimal.Decimal('1.50'), float('nan'), float('-inf'), 2.5),
         (datetime.datetime(2026, 1, 2, 3, 4, 5), datetime.date(2026, 1, 2), datetime.time(3, 4), b'\x00\xff', memoryview(b'\x01'), 7, '', '\\N'),
         ])
 
-    assert stream.getvalue() == (
+    assert text == (
         '\\N\ta\\tb\\nc\\\\d\\re\tt\tf\t1.50\tNaN\t-Infinity\t2.5\n'
         '2026-01-02 03:04:05\t2026-01-02\t03:04:00\t\\\\x00ff\t\\\\x01\t7\t\t\\\\N\n')
 
@@ -407,7 +407,7 @@ def _settings(**overrides):
 def test_connect_arguments_add_the_options_to_the_fields():
     arguments = PostgreSQLDialect().connectArguments(_settings(options={'sslmode': 'verify-full', 'sslrootcert': '/ca.pem'}))
 
-    assert arguments == {'user': 'u', 'password': 'secret', 'host': 'h', 'database': 'd', 'port': 5432,
+    assert arguments == {'user': 'u', 'password': 'secret', 'host': 'h', 'dbname': 'd', 'port': 5432,
                          'sslmode': 'verify-full', 'sslrootcert': '/ca.pem'}
 
 
@@ -422,10 +422,15 @@ def test_each_dialect_maps_the_fields_to_its_drivers_own_argument_names():
     oracle = OracleDialect().connectArguments(_settings(type='oracle', serviceName='svc', options={'protocol': 'tcps'}))
     mssql = MSSQLDialect().connectArguments(_settings(type='mssql', port=None))
     sqlite = SQLiteDialect().connectArguments(_settings(type='sqlite', database='/tmp/x.db', options={'uri': True}))
+    mysql = MySQLDialect().connectArguments(_settings(type='mysql', port=3306))
+    postgresql = PostgreSQLDialect().connectArguments(_settings())
 
     assert oracle == {'user': 'u', 'password': 'secret', 'host': 'h', 'port': 5432, 'service_name': 'svc', 'sid': None, 'protocol': 'tcps'}
     assert mssql == {'server': 'h', 'user': 'u', 'password': 'secret', 'database': 'd'}
     assert sqlite == {'database': '/tmp/x.db', 'timeout': 30.0, 'uri': True}
+    # psycopg calls it dbname, and mysql.connector refuses that name
+    assert mysql == {'user': 'u', 'password': 'secret', 'host': 'h', 'database': 'd', 'port': 3306}
+    assert postgresql == {'user': 'u', 'password': 'secret', 'host': 'h', 'dbname': 'd', 'port': 5432}
 
 
 def test_sqlite_cannot_tell_whether_a_connection_is_encrypted():

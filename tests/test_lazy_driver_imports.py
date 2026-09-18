@@ -7,7 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_library_is_importable_without_every_database_driver_installed():
     """Runs in a fresh interpreter, unaffected by whether this environment happens
-    to have psycopg2/oracledb installed, to prove `import bauta` doesn't require
+    to have psycopg/oracledb installed, to prove `import bauta` doesn't require
     every driver up front regardless.
     """
     result = subprocess.run([sys.executable, '-c', 'import bauta'], cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=30)
@@ -16,15 +16,15 @@ def test_library_is_importable_without_every_database_driver_installed():
 
 
 def test_connecting_with_a_missing_driver_fails_at_connect_not_at_import():
-    """Whether psycopg2 happens to be installed in whatever environment runs this
-    test shouldn't change the outcome -- `sys.modules['psycopg2'] = None` forces
-    the subsequent `import psycopg2` inside connect() to raise ModuleNotFoundError
+    """Whether psycopg happens to be installed in whatever environment runs this
+    test shouldn't change the outcome -- `sys.modules['psycopg'] = None` forces
+    the subsequent `import psycopg` inside connect() to raise ModuleNotFoundError
     deterministically, the same documented mechanism Python itself uses to block
     a specific import.
     """
     script = (
         'import sys\n'
-        'sys.modules["psycopg2"] = None\n'
+        'sys.modules["psycopg"] = None\n'
         'import bauta\n'
         'from bauta.configuration import DatabaseConnectionConfig, DatabaseType\n'
         'settings = DatabaseConnectionConfig(type=DatabaseType.POSTGRESQL, user="u", password="p", database="d", host="h")\n'

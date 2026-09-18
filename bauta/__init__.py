@@ -4,6 +4,7 @@ from .configuration import (
     ConfigurationError,
     DatabaseConnectionConfig,
     DatabaseType,
+    DiscoveryRulesFile,
     DataJobConfig,
     DataJobsFile,
     InsertStrategy,
@@ -13,13 +14,13 @@ from .configuration import (
 from .databaseDialects import ColumnCategory, DatabaseDialect, ForeignKey, MariaDBDialect, MSSQLDialect, MySQLDialect, OracleDialect, PostgreSQLDialect, SQLiteDialect
 from .database import Database
 from .dependencyGraph import DependencyGraph, JobOutcome, JobStatus
-from .discovery import TableProposal, proposeTable
+from .discovery import DiscoveryRules, TableProposal, discoveryRules, proposeTable
 from .log import Log
 from .audit import auditJobs, renderAudit
 from .masking import LOCALES, STRATEGIES, MaskingError, MaskingPlan, Strategy, buildMaskingManifest, keyFingerprint, resolveStrategy, sealManifest, \
     verifyManifest
 from .memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory, FileMemory, MemoryBackend, RunInProgressError, exclusiveRun
-from .reporting import DATABASE_HISTORY_SCHEMA, DatabaseHistory, FileHistory, RunHistory, notify, pushMetrics, writeMetricsFile
+from .reporting import DATABASE_HISTORY_SCHEMA, DATABASE_MANIFEST_SCHEMA, DatabaseHistory, DatabaseManifests, FileHistory, RunHistory, notify
 from .runner import RunResult, runDataJobs
 from .subset import SubsetError, SubsetPlan, planSubset
 from .synthesize import SynthesisError, planTable, synthesizeTable
@@ -33,8 +34,10 @@ __all__ = [
     'Configuration',
     'ConfigurationError',
     'DATABASE_HISTORY_SCHEMA',
+    'DATABASE_MANIFEST_SCHEMA',
     'DATABASE_MEMORY_SCHEMA',
     'DatabaseHistory',
+    'DatabaseManifests',
     'Database',
     'DatabaseConnectionConfig',
     'DatabaseDialect',
@@ -45,6 +48,9 @@ __all__ = [
     'DataJobConfig',
     'DataJobsFile',
     'DependencyGraph',
+    'DiscoveryRules',
+    'DiscoveryRulesFile',
+    'discoveryRules',
     'FileHistory',
     'FileMemory',
     'ForeignKey',
@@ -66,7 +72,6 @@ __all__ = [
     'planSubset',
     'PostgreSQLDialect',
     'proposeTable',
-    'pushMetrics',
     'RunHistory',
     'RunInProgressError',
     'RunResult',
@@ -88,6 +93,5 @@ __all__ = [
     'resolveTransformer',
     'sealManifest',
     'verifyManifest',
-    'writeMetricsFile',
     'runDataJobs',
     ]

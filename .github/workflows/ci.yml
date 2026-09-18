@@ -103,12 +103,7 @@ jobs:
       - name: Start the databases
         run: docker compose up -d --wait --wait-timeout 600
       - name: Install
-        # psycopg2-binary rather than the extra's psycopg2, which needs
-        # PostgreSQL's build tools; the tests exercise the same driver, at the
-        # version the constraints pin.
-        run: |
-          psycopg2=$(sed -n 's/^psycopg2==//p' ${{ matrix.constraints }})
-          python -m pip install --constraint ${{ matrix.constraints }} -e ".[mysql,oracle,mssql,fpe,dev]" "psycopg2-binary==$psycopg2"
+        run: python -m pip install --constraint ${{ matrix.constraints }} -e ".[all,dev]"
       - name: Type-check and unit test
         if: matrix.versions == 'lowest'
         run: |

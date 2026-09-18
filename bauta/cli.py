@@ -20,11 +20,12 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import yaml
 
-from .configuration import Configuration, ConfigurationError, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, expandEnvironmentVariables
+from .configuration import (Configuration, ConfigurationError, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, StorageLocation, TableLocation,
+                            expandEnvironmentVariables)
 from .database import DIALECTS, Database
 from .databaseDialects import ForeignKey, quoteIdentifier
 from .dependencyGraph import DependencyGraph
@@ -78,59 +79,101 @@ def _resolveConfigurationPaths(arguments: argparse.Namespace) -> Tuple[Path, Pat
     return jobsPath, databasesPath
 
 
-def _resolveMemoryPath(arguments: argparse.Namespace, jobsFile: DataJobsFile) -> Path:
-    """--memory, else the jobs file's `memory`, else memory.yaml beside the jobs
-    file. The last two are relative to the jobs file, not the working
-    directory, so cron, a shell and CI find the same run state wherever they
-    start.
+Location = Union[Path, TableLocation]
+
+DEFAULT_TABLES = {'memory': 'bauta_memory', 'history': 'bauta_history', 'manifest': 'bauta_manifest'}
+
+
+def _resolveLocation(arguments: argparse.Namespace, setting: str, configured: Optional[StorageLocation] = None) -> Optional[Location]:
+    """Where run state, history or the manifest goes: the setting's file flag
+    (--memory, say), else its database flag (--memory-database), else what the
+    jobs file says, else None. A file the jobs file names is relative to it,
+    not the working directory, so cron, a shell and CI find the same one
+    wherever they start. --<setting>-table renames the table either way.
     """
 
-    if arguments.memory:
-        return Path(arguments.memory)
+    fileFlag = getattr(arguments, setting, None)
+    databaseFlag = getattr(arguments, setting + '_database', None)
+    table = getattr(arguments, setting + '_table', None)
+
+    if fileFlag:
+        return Path(fileFlag)
+    if databaseFlag:
+        return TableLocation(database=databaseFlag, table=table or DEFAULT_TABLES[setting])
+    if isinstance(configured, TableLocation):
+        return TableLocation(database=configured.database, table=table or configured.table or DEFAULT_TABLES[setting])
+    if configured:
+        jobsPath, _ = _resolveConfigurationPaths(arguments)
+        return Path(os.path.normpath(jobsPath.parent / configured))
+
+    return None
+
+
+def _describeLocation(location: Location) -> str:
+
+    return str(location) if isinstance(location, Path) else 'table {} in {}'.format(location.table, location.database)
+
+
+def _settingsFor(location: TableLocation, databaseConfiguration: Dict[str, DatabaseConnectionConfig]) -> DatabaseConnectionConfig:
+
+    _requireAlias(databaseConfiguration, location.database)
+
+    return databaseConfiguration[location.database]
+
+
+def _memoryLocation(arguments: argparse.Namespace, jobsFile: DataJobsFile) -> Location:
+    """Run state has a default where history and the manifest don't: memory.yaml beside the jobs file."""
 
     jobsPath, _ = _resolveConfigurationPaths(arguments)
 
-    return Path(os.path.normpath(jobsPath.parent / (jobsFile.memory or 'memory.yaml')))
+    return _resolveLocation(arguments, 'memory', jobsFile.memory) or Path(os.path.normpath(jobsPath.parent / 'memory.yaml'))
 
 
 def _memoryBackend(arguments: argparse.Namespace, jobsFile: DataJobsFile,
                    databaseConfiguration: Dict[str, DatabaseConnectionConfig]) -> Tuple[MemoryBackend, Path]:
     """The run memory to use, and the file a run holds as its lock, beside it.
 
-    With --memory-database the lock still needs a file, so it goes where a
+    Run state in a table still needs a file for the lock, so it goes where a
     memory file would, and keeps overlapping runs apart on one machine only;
     across machines, let the scheduler do it (a CronJob's concurrencyPolicy:
     Forbid).
     """
 
-    memoryPath = _resolveMemoryPath(arguments, jobsFile)
+    location = _memoryLocation(arguments, jobsFile)
 
-    if arguments.memory_database:
-        _requireAlias(databaseConfiguration, arguments.memory_database)
-        memory = DatabaseMemory(connectionSettings=databaseConfiguration[arguments.memory_database], table=arguments.memory_table)
-        return memory, memoryPath.with_name('memory.run.lock')
+    if isinstance(location, TableLocation):
+        jobsPath, _ = _resolveConfigurationPaths(arguments)
+        wouldBe = jobsFile.memory if isinstance(jobsFile.memory, str) else 'memory.yaml'
+        memory = DatabaseMemory(connectionSettings=_settingsFor(location, databaseConfiguration), table=location.table or DEFAULT_TABLES['memory'])
+        return memory, Path(os.path.normpath(jobsPath.parent / wouldBe)).with_name('memory.run.lock')
 
-    return FileMemory(memoryFile=memoryPath), memoryPath.with_name(memoryPath.name + '.run.lock')
+    return FileMemory(memoryFile=location), location.with_name(location.name + '.run.lock')
 
 
-def _cycleReporter(arguments: argparse.Namespace, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
+def _history(location: Location, databaseConfiguration: Dict[str, DatabaseConnectionConfig]) -> Any:
+
+    from .reporting import DatabaseHistory, FileHistory
+
+    if isinstance(location, Path):
+        return FileHistory(location)
+
+    return DatabaseHistory(connectionSettings=_settingsFor(location, databaseConfiguration), table=location.table or DEFAULT_TABLES['history'])
+
+
+def _cycleReporter(arguments: argparse.Namespace, jobsFile: DataJobsFile, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
                    log: Log) -> Optional[Callable[[RunResult], None]]:
-    """What `run` does as each cycle ends: history, metrics and notifications,
-    as the flags ask. None if they ask for nothing.
+    """What `run` does as each cycle ends: history and notifications, as the
+    flags and the jobs file ask. None if they ask for nothing.
     """
 
-    from .reporting import DatabaseHistory, FileHistory, RunHistory, newRunId, notify, pushMetrics, writeMetricsFile
+    from .reporting import RunHistory, newRunId, notify
 
-    history: Optional[RunHistory] = None
-    if arguments.history:
-        history = FileHistory(arguments.history)
-    elif arguments.history_database:
-        _requireAlias(databaseConfiguration, arguments.history_database)
-        history = DatabaseHistory(connectionSettings=databaseConfiguration[arguments.history_database], table=arguments.history_table)
+    historyLocation = _resolveLocation(arguments, 'history', jobsFile.history)
+    history: Optional[RunHistory] = _history(historyLocation, databaseConfiguration) if historyLocation else None
 
     notifyUrl = arguments.notify_url or os.environ.get(NOTIFY_URL_VARIABLE)
 
-    if not (history or arguments.metrics or arguments.metrics_push or notifyUrl):
+    if not (history or notifyUrl):
         return None
 
     def attempt(what: str, step: Callable[[], Any]) -> None:
@@ -143,10 +186,6 @@ def _cycleReporter(arguments: argparse.Namespace, databaseConfiguration: Dict[st
     def report(result: RunResult) -> None:
         if history is not None:
             attempt('record the run history', lambda: history.append(result, newRunId()))
-        if arguments.metrics:
-            attempt('write the metrics file', lambda: writeMetricsFile(arguments.metrics, result))
-        if arguments.metrics_push:
-            attempt('push metrics', lambda: pushMetrics(arguments.metrics_push, result))
         if notifyUrl:
             attempt('send the notification', lambda: notify(notifyUrl, result, always=arguments.notify_on == 'always'))
 
@@ -178,6 +217,11 @@ def _loadDataJobs(arguments: argparse.Namespace) -> Tuple[DataJobsFile, Dict[str
     databaseConfiguration = Configuration.validateDatabaseConfiguration(_loadYaml(databasesPath))
     jobsFile = Configuration.validateJobConfiguration(_loadYaml(jobsPath), DataJobsFile)
     Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databaseConfiguration))
+
+    unknown = ['{}: database "{}" is not a known database alias'.format(setting, location.database)
+               for setting, location in jobsFile.tableLocations().items() if location.database not in databaseConfiguration]
+    if unknown:
+        raise ConfigurationError('Invalid configuration in {}:\n'.format(jobsPath) + '\n'.join(unknown))
 
     return jobsFile, databaseConfiguration
 
@@ -250,13 +294,15 @@ def _commandRun(arguments: argparse.Namespace, log: Log) -> int:
             result = runDataJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration, logFile=arguments.log,
                                  memory=memory, runForever=arguments.forever,
                                  logLevel=getattr(logging, arguments.log_level.upper()), logFormat=arguments.log_format,
-                                 acceptKeyChange=arguments.accept_key_change, onCycle=_cycleReporter(arguments, databaseConfiguration, log))
+                                 acceptKeyChange=arguments.accept_key_change,
+                                 onCycle=_cycleReporter(arguments, jobsFile, databaseConfiguration, log))
     except RunInProgressError as error:
         log.logging.error(str(error))
         return EXIT_JOBS_DID_NOT_SUCCEED
 
-    if arguments.manifest:
-        _writeManifest(Path(arguments.manifest), result, jobsFile, arguments, log)
+    manifestLocation = _resolveLocation(arguments, 'manifest', jobsFile.manifest)
+    if manifestLocation:
+        _writeManifest(manifestLocation, result, jobsFile, databaseConfiguration, arguments, log)
 
     return _reportRun(result, log)
 
@@ -271,10 +317,11 @@ def _toolVersion() -> str:
         return 'unknown'
 
 
-def _writeManifest(path: Path, result: RunResult, jobsFile: DataJobsFile, arguments: argparse.Namespace, log: Log) -> None:
-    """Writes the run's masking manifest as sealed JSON, even when a job
-    failed, with the tool version and a digest of the jobs file. Signed when
-    the signing key's variable is set.
+def _writeManifest(location: Location, result: RunResult, jobsFile: DataJobsFile, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
+                   arguments: argparse.Namespace, log: Log) -> None:
+    """Writes the run's masking manifest as sealed JSON, to a file or a table,
+    even when a job failed, with the tool version and a digest of the jobs
+    file. Signed when the signing key's variable is set.
     """
 
     jobsPath, _ = _resolveConfigurationPaths(arguments)
@@ -285,10 +332,62 @@ def _writeManifest(path: Path, result: RunResult, jobsFile: DataJobsFile, argume
     signingKey = os.environ.get(arguments.manifest_key_variable)
     manifest = sealManifest(manifest, signingKey=signingKey)
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, indent=2) + '\n')
+    if isinstance(location, Path):
+        location.parent.mkdir(parents=True, exist_ok=True)
+        location.write_text(json.dumps(manifest, indent=2) + '\n')
+        where = str(location)
+    else:
+        from .reporting import DatabaseManifests, newRunId
+
+        runId = newRunId()
+        DatabaseManifests(_settingsFor(location, databaseConfiguration), table=location.table or DEFAULT_TABLES['manifest']).write(manifest, runId)
+        where = '{}, run {}'.format(_describeLocation(location), runId)
+
     log.logging.info('Wrote the masking manifest for {} job(s) to {}, {}'.format(
-        len(manifest['jobs']), path, 'signed' if signingKey else 'unsigned (set ${} to sign it)'.format(arguments.manifest_key_variable)))
+        len(manifest['jobs']), where, 'signed' if signingKey else 'unsigned (set ${} to sign it)'.format(arguments.manifest_key_variable)))
+
+
+def _readManifest(arguments: argparse.Namespace) -> Tuple[str, Dict[str, Any]]:
+    """The manifest to verify, and what to call it: the file named, else from
+    --manifest-database, else from wherever the jobs file's `manifest` says --
+    from a table, the latest run's unless --run names one.
+    """
+
+    location: Optional[Location]
+    if arguments.manifest:
+        location = Path(arguments.manifest)
+        databaseConfiguration: Dict[str, DatabaseConnectionConfig] = {}
+    elif arguments.manifest_database:
+        location = _resolveLocation(arguments, 'manifest')
+        databaseConfiguration = _loadDatabases(arguments)
+    else:
+        jobsFile, databaseConfiguration = _loadDataJobs(arguments)
+        location = _resolveLocation(arguments, 'manifest', jobsFile.manifest)
+        if location is None:
+            raise UsageError('name the manifest to verify: a FILE, --manifest-database ALIAS, or `manifest` in the jobs file')
+
+    if isinstance(location, Path):
+        if arguments.run:
+            raise UsageError('--run picks a manifest from a table, not a file')
+        try:
+            return str(location), json.loads(location.read_text())
+        except FileNotFoundError as error:
+            raise UsageError('no such file: {}'.format(location)) from error
+        except ValueError as error:
+            raise UsageError('{} is not valid JSON: {}'.format(location, error)) from error
+
+    from .reporting import DatabaseManifests
+
+    assert location is not None
+    try:
+        runId, manifest = DatabaseManifests(_settingsFor(location, databaseConfiguration),
+                                            table=location.table or DEFAULT_TABLES['manifest']).read(arguments.run)
+    except KeyError as error:
+        raise UsageError(error.args[0]) from error
+    except ValueError as error:
+        raise UsageError('the manifest in {} is not valid JSON: {}'.format(_describeLocation(location), error)) from error
+
+    return 'run {} in {}'.format(runId, _describeLocation(location)), manifest
 
 
 def _commandVerifyManifest(arguments: argparse.Namespace, log: Log) -> int:
@@ -296,13 +395,7 @@ def _commandVerifyManifest(arguments: argparse.Namespace, log: Log) -> int:
     needs the key, or it's a usage error.
     """
 
-    path = Path(arguments.manifest)
-    try:
-        manifest = json.loads(path.read_text())
-    except FileNotFoundError as error:
-        raise UsageError('no such file: {}'.format(path)) from error
-    except ValueError as error:
-        raise UsageError('{} is not valid JSON: {}'.format(path, error)) from error
+    path, manifest = _readManifest(arguments)
 
     signingKey = os.environ.get(arguments.manifest_key_variable)
 
@@ -370,8 +463,18 @@ def _commandValidate(arguments: argparse.Namespace, log: Log) -> int:
         raise ConfigurationError('invalid configuration:\n' + '\n'.join(problems))
 
     print('configuration is valid: {} database alias(es), {} job(s)'.format(len(databaseConfiguration), len(jobsFile.jobs)))
-    if not arguments.memory_database:
-        print('run state: {}'.format(_resolveMemoryPath(arguments, jobsFile)))
+    print('run state: {}'.format(_describeLocation(_memoryLocation(arguments, jobsFile))))
+    for setting, missing in (('history', 'not recorded'), ('manifest', 'not written')):
+        location = _resolveLocation(arguments, setting, getattr(jobsFile, setting))
+        print('{}: {}'.format(setting, _describeLocation(location) if location else missing))
+
+    rulesPath, rulesFile = _discoveryRulesFile(arguments)
+    if rulesFile is None:
+        print('discovery rules: built-in')
+    else:
+        builtins = 'none built-in' if not rulesFile.builtins else \
+            'built-in except {}'.format(', '.join(rulesFile.exclude)) if rulesFile.exclude else 'then the built-in ones'
+        print('discovery rules: {} ({} name, {} value), {}'.format(rulesPath, len(rulesFile.names), len(rulesFile.values), builtins))
 
     return EXIT_SUCCESS
 
@@ -480,6 +583,30 @@ def _writeOutput(text: str, output: Optional[str]) -> None:
     print('wrote {}'.format(path))
 
 
+def _discoveryRulesFile(arguments: argparse.Namespace) -> Tuple[Optional[Path], Any]:
+    """The discovery.yaml in use and its validated rules: --rules, else one in
+    the configuration directory if there is one, else (None, None).
+    """
+
+    from .discovery import DISCOVERY_FILE
+
+    path = Path(arguments.rules) if arguments.rules else _configDirectory(arguments) / DISCOVERY_FILE
+    if not arguments.rules and not path.exists():
+        return None, None
+
+    return path, Configuration.validateDiscoveryRules(_loadYaml(path), str(path))
+
+
+def _discoveryRules(arguments: argparse.Namespace) -> Any:
+    """What discover, audit and synthesize recognise personal data by: the
+    built-in rules, with a discovery.yaml's ahead of them.
+    """
+
+    from .discovery import discoveryRules
+
+    return discoveryRules(_discoveryRulesFile(arguments)[1])
+
+
 def _requireAlias(databaseConfiguration: Dict[str, DatabaseConnectionConfig], alias: str) -> None:
 
     if alias not in databaseConfiguration:
@@ -527,6 +654,7 @@ def _commandDiscover(arguments: argparse.Namespace, log: Log) -> int:
     from .discovery import JobDraft, proposeTable, renderJobs
 
     databaseConfiguration = _loadDatabases(arguments)
+    rules = _discoveryRules(arguments)
     target = arguments.target or arguments.database
     _requireAlias(databaseConfiguration, arguments.database)
     _requireAlias(databaseConfiguration, target)
@@ -540,7 +668,7 @@ def _commandDiscover(arguments: argparse.Namespace, log: Log) -> int:
         requested = {table.upper(): table for table in arguments.table}
         for table in arguments.table:
             log.logging.info('Sampling up to {} row(s) of {}'.format(arguments.sample, table))
-            proposal = proposeTable(database, table, sampleSize=arguments.sample, foreignKeys=foreignKeys)
+            proposal = proposeTable(database, table, sampleSize=arguments.sample, foreignKeys=foreignKeys, rules=rules)
             # Parents first, so a target that enforces foreign keys accepts the load.
             parents = sorted({requested[foreignKey.referencedTable.upper()] for foreignKey in foreignKeys
                               if foreignKey.table.upper() == table.upper() and foreignKey.referencedTable.upper() in requested
@@ -563,6 +691,7 @@ def _commandSubset(arguments: argparse.Namespace, log: Log) -> int:
     from .subset import SubsetError, planSubset
 
     databaseConfiguration = _loadDatabases(arguments)
+    rules = _discoveryRules(arguments)
     _requireAlias(databaseConfiguration, arguments.database)
     _requireAlias(databaseConfiguration, arguments.target)
 
@@ -586,7 +715,7 @@ def _commandSubset(arguments: argparse.Namespace, log: Log) -> int:
 
         drafts = []
         for table in plan.tables:
-            proposal = proposeTable(database, table, sampleSize=arguments.sample, foreignKeys=foreignKeys) if arguments.mask else None
+            proposal = proposeTable(database, table, sampleSize=arguments.sample, foreignKeys=foreignKeys, rules=rules) if arguments.mask else None
             drafts.append(JobDraft(table=table, sourceQuery=plan.queries[table], predecessors=plan.parents[table], proposal=proposal))
 
     heading = _generatedHeading('subset', arguments.database, arguments.target) + [
@@ -690,6 +819,7 @@ def _commandSynthesize(arguments: argparse.Namespace, log: Log) -> int:
     from .synthesize import SynthesisError, planTable, synthesizeTable
 
     databaseConfiguration = _loadDatabases(arguments)
+    rules = _discoveryRules(arguments)
     _requireAlias(databaseConfiguration, arguments.database)
     requested = dict(_parseTableRows(arguments.table, arguments.rows))
 
@@ -708,14 +838,14 @@ def _commandSynthesize(arguments: argparse.Namespace, log: Log) -> int:
             rows = requested[table]
             try:
                 if arguments.dry_run:
-                    columns, makeRow, plans, available = planTable(database, table, rows, seed=arguments.seed, foreignKeys=foreignKeys)
+                    columns, makeRow, plans, available = planTable(database, table, rows, seed=arguments.seed, foreignKeys=foreignKeys, rules=rules)
                     print('{}: {} row(s){}'.format(table, available, '' if available == rows else ' (all its keys allow, of {} asked)'.format(rows)))
                     for plan in plans:
                         print('  {:<28} {:<12} {}'.format(plan.column, plan.source, plan.description))
                     for row in range(min(3, available)):
                         print('  sample: {}'.format(dict(zip(columns, makeRow(row)))))
                     continue
-                inserted = synthesizeTable(database, table, rows, seed=arguments.seed, foreignKeys=foreignKeys)
+                inserted = synthesizeTable(database, table, rows, seed=arguments.seed, foreignKeys=foreignKeys, rules=rules)
             except SynthesisError as error:
                 raise UsageError(str(error)) from error
             log.logging.info('{}: inserted {} synthetic row(s)'.format(table, inserted), extra={'table': table, 'rowCount': inserted})
@@ -841,7 +971,7 @@ def _commandAudit(arguments: argparse.Namespace, log: Log) -> int:
             foreignKeys[target] = list(unique.values())
 
     report = auditJobs(jobs, returnedColumns=returnedColumns, encryption=encryption, unreachable=unreachable,
-                       targetColumns=targetColumns, foreignKeys=foreignKeys)
+                       targetColumns=targetColumns, foreignKeys=foreignKeys, rules=_discoveryRules(arguments))
     _writeOutput(json.dumps(report, indent=2, default=str) + '\n' if arguments.format == 'json' else renderAudit(report), arguments.output)
 
     if report['summary']['error'] or (arguments.strict and report['summary']['warning']):
@@ -851,19 +981,25 @@ def _commandAudit(arguments: argparse.Namespace, log: Log) -> int:
 
 
 def _commandHistory(arguments: argparse.Namespace, log: Log) -> int:
-    """The latest outcomes a `run --history` recorded, newest first."""
+    """The latest outcomes `run` recorded, newest first, from the flags'
+    history or else the jobs file's.
+    """
 
-    from .reporting import DatabaseHistory, FileHistory, RunHistory, renderHistory
+    from .reporting import renderHistory
 
-    history: RunHistory
+    location: Optional[Location]
     if arguments.history:
-        history = FileHistory(arguments.history)
+        location, databaseConfiguration = _resolveLocation(arguments, 'history'), {}
     elif arguments.history_database:
-        databaseConfiguration = _loadDatabases(arguments)
-        _requireAlias(databaseConfiguration, arguments.history_database)
-        history = DatabaseHistory(connectionSettings=databaseConfiguration[arguments.history_database], table=arguments.history_table)
+        location, databaseConfiguration = _resolveLocation(arguments, 'history'), _loadDatabases(arguments)
     else:
-        raise UsageError('name the history to read with --history FILE or --history-database ALIAS')
+        jobsFile, databaseConfiguration = _loadDataJobs(arguments)
+        location = _resolveLocation(arguments, 'history', jobsFile.history)
+        if location is None:
+            raise UsageError('name the history to read: --history FILE, --history-database ALIAS, or `history` in the jobs file')
+
+    assert location is not None
+    history = _history(location, databaseConfiguration)
 
     records = history.read(limit=arguments.limit, job=arguments.job)
     sys.stdout.write(json.dumps(records, indent=2) + '\n' if arguments.format == 'json' else renderHistory(records))
@@ -899,56 +1035,32 @@ def _commandJobs(arguments: argparse.Namespace, log: Log) -> int:
     return EXIT_SUCCESS
 
 
-STARTER_FILES = ('database.yaml', 'jobs.yaml')
-
-
-def _commandInit(arguments: argparse.Namespace, log: Log) -> int:
-    """Writes the starter configuration, which ships with the package, into
-    the configuration directory. Writes nothing if either file is already
-    there, since a reviewed jobs.yaml is worth more than a sample.
-    """
-
-    from importlib.resources import files
-
-    configDirectory = _configDirectory(arguments)
-    existing = [configDirectory / name for name in STARTER_FILES if (configDirectory / name).exists()]
-    if existing:
-        raise UsageError('{} already exist{}; remove {} or choose another --config'.format(
-            ' and '.join(str(path) for path in existing), 's' if len(existing) == 1 else '', 'it' if len(existing) == 1 else 'them'))
-
-    configDirectory.mkdir(parents=True, exist_ok=True)
-    for name in STARTER_FILES:
-        (configDirectory / name).write_text((files('bauta') / 'starter' / name).read_text())
-        print('wrote {}'.format(configDirectory / name))
-
-    print('\nEdit both files for your databases, set SOURCE_DB_PASSWORD, TARGET_DB_PASSWORD and MASKING_KEY, then:\n\n'
-          '  bauta validate{0}          # check the configuration, offline\n'
-          '  bauta run --dry-run{0}     # check connections and tables, moving nothing'.format(
-              '' if configDirectory == Path('configuration') else ' --config {}'.format(configDirectory)))
-
-    return EXIT_SUCCESS
-
-
-def _addCommonArguments(parser: argparse.ArgumentParser, jobs: bool = True) -> None:
+def _addCommonArguments(parser: argparse.ArgumentParser, jobs: bool = True, memory: bool = True) -> None:
 
     parser.add_argument('--config', help='directory holding jobs.yaml and database.yaml (default: ${} or ./configuration)'.format(
         CONFIG_DIRECTORY_VARIABLE))
     if jobs:
         parser.add_argument('--jobs', help='explicit path to the jobs file, overriding --config')
     parser.add_argument('--databases', help='explicit path to the database file, overriding --config')
-    if jobs:
+    if jobs and memory:
         parser.add_argument('--memory', help='path to the run-memory file (default: jobs.yaml\'s `memory`, else memory.yaml beside jobs.yaml)')
         parser.add_argument('--memory-database', metavar='ALIAS',
                             help='keep run memory in this database instead of a file (see docs/operations.md)')
-        parser.add_argument('--memory-table', default='bauta_memory', help='the --memory-database table (default: bauta_memory)')
+        parser.add_argument('--memory-table', help='the run-memory table (default: jobs.yaml\'s, else bauta_memory)')
     _addLoggingArguments(parser)
 
 
 def _addHistoryArguments(parser: argparse.ArgumentParser) -> None:
 
-    parser.add_argument('--history', metavar='FILE', help='run history as JSON lines')
+    parser.add_argument('--history', metavar='FILE', help='run history as JSON lines (default: jobs.yaml\'s `history`)')
     parser.add_argument('--history-database', metavar='ALIAS', help='run history in this database')
-    parser.add_argument('--history-table', default='bauta_history', help='the --history-database table (default: bauta_history)')
+    parser.add_argument('--history-table', help='the history table (default: jobs.yaml\'s, else bauta_history)')
+
+
+def _addManifestLocationArguments(parser: argparse.ArgumentParser) -> None:
+
+    parser.add_argument('--manifest-database', metavar='ALIAS', help='the masking manifest in this database')
+    parser.add_argument('--manifest-table', help='the manifest table (default: jobs.yaml\'s, else bauta_manifest)')
 
 
 def _addManifestKeyArgument(parser: argparse.ArgumentParser) -> None:
@@ -987,6 +1099,12 @@ def _addRunArguments(parser: argparse.ArgumentParser) -> None:
                         help='check connections, target tables, primary keys and masking coverage without moving any rows')
 
 
+def _addRulesArgument(parser: argparse.ArgumentParser) -> None:
+
+    parser.add_argument('--rules', metavar='FILE', help='your own rules for recognising personal data, ahead of the built-in ones '
+                                                        '(default: discovery.yaml in the configuration directory, if there is one)')
+
+
 def _addGeneratorArguments(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument('--sample', type=_positiveInteger, default=1000, help='rows sampled per table to classify columns (default: 1000)')
@@ -1000,22 +1118,16 @@ def _buildParser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='bauta', description='Move, mask and subset data between databases, with jobs defined in YAML.')
     subparsers = parser.add_subparsers(dest='command', required=True)
 
-    initParser = subparsers.add_parser('init', help='write a starter configuration to edit for your databases')
-    initParser.add_argument('--config', help='directory to write jobs.yaml and database.yaml into (default: ${} or ./configuration)'.format(
-        CONFIG_DIRECTORY_VARIABLE))
-    _addLoggingArguments(initParser)
-    initParser.set_defaults(handler=_commandInit)
-
     runParser = subparsers.add_parser('run', help='run data jobs')
     _addCommonArguments(runParser)
     _addRunArguments(runParser)
-    runParser.add_argument('--manifest', help='write a JSON record of what was masked, how, and under which key fingerprint')
+    runParser.add_argument('--manifest', metavar='FILE',
+                           help='write a JSON record of what was masked, how, and under which key fingerprint (default: jobs.yaml\'s `manifest`)')
+    _addManifestLocationArguments(runParser)
     _addManifestKeyArgument(runParser)
     runParser.add_argument('--accept-key-change', action='store_true',
                            help='run upsert jobs even though their masking key changed since their last run')
     _addHistoryArguments(runParser)
-    runParser.add_argument('--metrics', metavar='FILE', help='write Prometheus metrics to this file after each cycle (for the textfile collector)')
-    runParser.add_argument('--metrics-push', metavar='URL', help='push Prometheus metrics to this Pushgateway after each cycle')
     runParser.add_argument('--notify-url', metavar='URL', help='post a JSON summary to this webhook when a cycle does not succeed '
                                                               '(default: ${})'.format(NOTIFY_URL_VARIABLE))
     runParser.add_argument('--notify-on', default='failure', choices=['failure', 'always'], help='default: failure')
@@ -1023,6 +1135,7 @@ def _buildParser() -> argparse.ArgumentParser:
 
     validateParser = subparsers.add_parser('validate', help='check configuration offline, without connecting to anything')
     _addCommonArguments(validateParser)
+    _addRulesArgument(validateParser)
     validateParser.set_defaults(handler=_commandValidate)
 
     auditParser = subparsers.add_parser('audit', help='report what each job does with data, and what a reviewer should question')
@@ -1033,16 +1146,19 @@ def _buildParser() -> argparse.ArgumentParser:
     auditParser.add_argument('--format', default='text', choices=['text', 'json'], help='default: text')
     auditParser.add_argument('--strict', action='store_true', help='exit 1 on warnings as well as errors')
     auditParser.add_argument('--output', help='write the report here instead of stdout; must not already exist')
+    _addRulesArgument(auditParser)
     auditParser.set_defaults(handler=_commandAudit)
 
     verifyParser = subparsers.add_parser('verify-manifest', help='check that a manifest is unaltered, and who signed it')
-    verifyParser.add_argument('manifest', help='the manifest file written by run --manifest')
+    verifyParser.add_argument('manifest', nargs='?', help='a manifest file (default: --manifest-database, else jobs.yaml\'s `manifest`)')
+    _addManifestLocationArguments(verifyParser)
+    verifyParser.add_argument('--run', metavar='RUN_ID', help='from a table, this run\'s manifest rather than the latest')
+    _addCommonArguments(verifyParser, memory=False)
     _addManifestKeyArgument(verifyParser)
-    _addLoggingArguments(verifyParser)
     verifyParser.set_defaults(handler=_commandVerifyManifest)
 
     historyParser = subparsers.add_parser('history', help='show recent job outcomes recorded with run --history')
-    _addCommonArguments(historyParser, jobs=False)
+    _addCommonArguments(historyParser, memory=False)
     _addHistoryArguments(historyParser)
     historyParser.add_argument('--job', help='only this job')
     historyParser.add_argument('--limit', type=_positiveInteger, default=20, help='how many records (default: 20)')
@@ -1059,6 +1175,7 @@ def _buildParser() -> argparse.ArgumentParser:
     discoverParser.add_argument('--table', action='append', required=True, help='a table to propose a policy for (repeatable)')
     discoverParser.add_argument('--target', help='the alias the generated jobs load into (default: --database, masking in place)')
     _addGeneratorArguments(discoverParser)
+    _addRulesArgument(discoverParser)
     discoverParser.set_defaults(handler=_commandDiscover)
 
     subsetParser = subparsers.add_parser('subset', help='generate jobs that copy a referentially complete subset')
@@ -1072,6 +1189,7 @@ def _buildParser() -> argparse.ArgumentParser:
                               help='do not follow this foreign key (repeatable); needed to break a cycle')
     subsetParser.add_argument('--mask', action='store_true', help='also propose a masking policy for every table, as discover does')
     _addGeneratorArguments(subsetParser)
+    _addRulesArgument(subsetParser)
     subsetParser.set_defaults(handler=_commandSubset)
 
     schemaParser = subparsers.add_parser('schema', help='generate or apply CREATE TABLE statements for a target, from source tables')
@@ -1096,6 +1214,7 @@ def _buildParser() -> argparse.ArgumentParser:
     synthesizeParser.add_argument('--seed', type=int, default=0, help='the same seed makes the same rows (default: 0)')
     synthesizeParser.add_argument('--dry-run', action='store_true', help='show what each column gets, and sample rows, without writing')
     synthesizeParser.add_argument('--yes', action='store_true', help='actually insert the rows')
+    _addRulesArgument(synthesizeParser)
     synthesizeParser.set_defaults(handler=_commandSynthesize)
 
     clearParser = subparsers.add_parser('clear', help='empty the target tables of data jobs, children first (destructive)')
@@ -1113,13 +1232,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = _buildParser()
     arguments = parser.parse_args(argv)
 
-    for name in ('job', 'force', 'workers', 'dry_run', 'forever', 'manifest', 'jobs', 'memory', 'memory_database', 'yes', 'config', 'databases',
-                 'accept_key_change', 'history', 'history_database', 'metrics', 'metrics_push', 'notify_url'):
+    for name in ('job', 'force', 'workers', 'dry_run', 'forever', 'manifest', 'jobs', 'memory', 'memory_database', 'memory_table', 'yes', 'config',
+                 'databases', 'accept_key_change', 'history', 'history_database', 'history_table', 'manifest_database', 'manifest_table', 'run',
+                 'notify_url', 'rules'):
         if not hasattr(arguments, name):
             setattr(arguments, name, None)
-    for name, default in (('memory_table', 'bauta_memory'), ('history_table', 'bauta_history')):
-        if not hasattr(arguments, name):
-            setattr(arguments, name, default)
 
     log = _configureLogging(arguments)
 

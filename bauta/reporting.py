@@ -1,4 +1,4 @@
-"""What happened, for people and for monitoring: run history, metrics and
+"""What happened, for people and for monitoring: run history and
 notifications.
 
 Each takes a cycle's RunResult -- runDataJobs hands one to its `onCycle`
@@ -7,21 +7,18 @@ logs a reporting failure and carries on.
 """
 from __future__ import annotations
 
-import base64
 import datetime
 import json
 import os
-import re
 import socket
 import urllib.request
 import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from .configuration import DatabaseConnectionConfig
 from .database import Database
-from .dependencyGraph import JobOutcome, JobStatus
 from .memory import exclusiveLock
 from .runner import RunResult
 
@@ -181,142 +178,72 @@ def newRunId() -> str:
     return str(uuid.uuid4())
 
 
-# Prometheus -----------------------------------------------------------------
+# Manifests --------------------------------------------------------------------
 
-JOB_METRICS = (
-    ('bauta_job_last_run_success', 'Whether the job completed in its latest run (1), or failed or was skipped (0).'),
-    ('bauta_job_last_run_skipped', 'Whether the job was skipped in its latest run.'),
-    ('bauta_job_last_run_rows', 'Rows the job loaded in its latest run.'),
-    ('bauta_job_last_run_duration_seconds', 'How long the job took in its latest run.'),
-    ('bauta_job_last_run_timestamp_seconds', 'When the job last ran.'),
-    ('bauta_job_last_success_timestamp_seconds', 'When the job last completed; alert on this to catch stale data.'),
-    )
+# One row per piece of a manifest's JSON, which is ASCII (json.dumps escapes
+# the rest), so VARCHAR holds it on every dialect where a single large-text
+# column would need a different type on each.
+DATABASE_MANIFEST_SCHEMA = """CREATE TABLE bauta_manifest (
+    run_id VARCHAR(36) NOT NULL,
+    part INT NOT NULL,
+    written_at DOUBLE PRECISION NOT NULL,
+    content VARCHAR(2000) NOT NULL,
+    PRIMARY KEY (run_id, part)
+    )"""
 
-CYCLE_METRICS = (
-    ('bauta_cycle_jobs', 'Jobs in the latest cycle, by status.'),
-    ('bauta_cycle_rows', 'Rows loaded in the latest cycle.'),
-    ('bauta_cycle_timestamp_seconds', 'When the latest cycle finished.'),
-    )
-
-_SAMPLE = re.compile(r'^(bauta_job_\w+)\{job="((?:[^"\\]|\\.)*)"\} (\S+)$')
+MANIFEST_PART_LENGTH = 2000
 
 
-def _escapeLabel(value: str) -> str:
-
-    return value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
-
-
-def _unescapeLabel(value: str) -> str:
-
-    return re.sub(r'\\(.)', lambda match: '\n' if match.group(1) == 'n' else match.group(1), value)
-
-
-def _jobSamples(outcome: JobOutcome, now: float, previous: Mapping[str, float]) -> Dict[str, float]:
-
-    completed = outcome.status == JobStatus.COMPLETED
-    samples = {
-        'bauta_job_last_run_success': 1.0 if completed else 0.0,
-        'bauta_job_last_run_skipped': 1.0 if outcome.status == JobStatus.SKIPPED else 0.0,
-        'bauta_job_last_run_rows': float(outcome.rowCount),
-        'bauta_job_last_run_duration_seconds': round(outcome.durationSeconds, 3),
-        'bauta_job_last_run_timestamp_seconds': round(outcome.finishedAt or now, 3),
-        }
-    lastSuccess = round(outcome.finishedAt or now, 3) if completed else previous.get('bauta_job_last_success_timestamp_seconds')
-    if lastSuccess is not None:
-        samples['bauta_job_last_success_timestamp_seconds'] = lastSuccess
-
-    return samples
-
-
-def _renderFamilies(families: Mapping[str, str], samples: Mapping[str, List[str]]) -> str:
-
-    lines = []
-    for name, description in families.items():
-        if samples.get(name):
-            lines += ['# HELP {} {}'.format(name, description), '# TYPE {} gauge'.format(name)] + samples[name]
-
-    return '\n'.join(lines) + '\n' if lines else ''
-
-
-def _cycleText(result: RunResult, now: float) -> Dict[str, List[str]]:
-
-    return {
-        'bauta_cycle_jobs': ['bauta_cycle_jobs{{status="{}"}} {}'.format(status, len(outcomes)) for status, outcomes in
-                                       (('completed', result.completed), ('failed', result.failed), ('skipped', result.skipped))],
-        'bauta_cycle_rows': ['bauta_cycle_rows {}'.format(result.rowCount)],
-        'bauta_cycle_timestamp_seconds': ['bauta_cycle_timestamp_seconds {}'.format(round(now, 3))],
-        }
-
-
-def _jobText(state: Mapping[str, Mapping[str, float]]) -> Dict[str, List[str]]:
-
-    samples: Dict[str, List[str]] = {name: [] for name, _ in JOB_METRICS}
-    for job in sorted(state):
-        for name, value in state[job].items():
-            samples[name].append('{}{{job="{}"}} {}'.format(name, _escapeLabel(job), repr(float(value))))
-
-    return samples
-
-
-def writeMetricsFile(path: Union[str, Path], result: RunResult, now: Optional[float] = None) -> None:
-    """A Prometheus text file, for node_exporter's textfile collector.
-
-    A job that wasn't in this cycle -- inside its refresh window, say -- keeps
-    the values the file already had for it, so its series don't vanish between
-    runs; `..._last_success_timestamp_seconds` says how stale it is. The file
-    is replaced atomically, since the collector may read it at any moment.
+class DatabaseManifests:
+    """Sealed manifests in a table, which must exist, shaped like
+    DATABASE_MANIFEST_SCHEMA. Each is stored as written, so its digest and
+    signature verify as they would from a file. The table protects nothing
+    by itself: whoever can write it can replace a manifest, and only a
+    signature shows that one was.
     """
 
-    path = Path(path)
-    now = datetime.datetime.now(datetime.timezone.utc).timestamp() if now is None else now
-    state: Dict[str, Dict[str, float]] = {}
-
-    if path.exists():
-        for line in path.read_text().splitlines():
-            match = _SAMPLE.match(line)
-            if match:
-                state.setdefault(_unescapeLabel(match.group(2)), {})[match.group(1)] = float(match.group(3))
-
-    for outcome in result.outcomes:
-        state[outcome.job] = _jobSamples(outcome, now, state.get(outcome.job, {}))
-
-    families = dict(JOB_METRICS + CYCLE_METRICS)
-    text = _renderFamilies(families, {**_jobText(state), **_cycleText(result, now)})
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + '.tmp')
-    temporary.write_text(text)
-    os.replace(temporary, path)
+    def __init__(self, connectionSettings: DatabaseConnectionConfig, table: str = 'bauta_manifest') -> None:
+        self.connectionSettings = connectionSettings
+        self.table = table
 
 
-def _put(url: str, body: bytes, contentType: str) -> None:
+    def write(self, manifest: Mapping[str, Any], runId: str) -> None:
 
-    request = urllib.request.Request(url, data=body, method='PUT', headers={'Content-Type': contentType})
-    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-        response.read()
+        text = json.dumps(manifest, indent=2)
+        writtenAt = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        rows = [(runId, number, writtenAt, text[start:start + MANIFEST_PART_LENGTH])
+                for number, start in enumerate(range(0, len(text), MANIFEST_PART_LENGTH))]
+
+        with Database(connectionSettings=self.connectionSettings) as database:
+            # One chunk, so one transaction: a manifest is stored whole or not at all.
+            database.insert(table=self.table, data=rows, chunkSize=len(rows), columns=['run_id', 'part', 'written_at', 'content'])
 
 
-def pushMetrics(gatewayUrl: str, result: RunResult, now: Optional[float] = None) -> None:
-    """Pushes the cycle to a Prometheus Pushgateway.
+    def read(self, runId: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
+        """A run's manifest, or the latest one's, with its run id. KeyError if
+        there is none.
+        """
 
-    Each job goes in a group of its own, replaced only when that job runs, so a
-    job outside this cycle keeps its last values there too. The cycle's totals
-    go in the `bauta` group.
-    """
+        with Database(connectionSettings=self.connectionSettings) as database:
+            placeholder = database.dialect.placeholders(1)[0]
 
-    now = datetime.datetime.now(datetime.timezone.utc).timestamp() if now is None else now
-    base = gatewayUrl.rstrip('/') + '/metrics/job/bauta'
-    families = dict(JOB_METRICS + CYCLE_METRICS)
-    contentType = 'text/plain; version=0.0.4'
+            if runId is None:
+                _, chunks = database.stream(query='SELECT run_id FROM {} ORDER BY written_at DESC'.format(self.table), chunkSize=1)
+                with chunks:
+                    latest = next(chunks, [])
+                if not latest:
+                    raise KeyError('{} holds no manifest'.format(self.table))
+                runId = latest[0][0]
 
-    for outcome in result.outcomes:
-        # Label values in the path must be base64 once they may hold a slash.
-        encoded = base64.urlsafe_b64encode(outcome.job.encode('utf-8')).decode('ascii')
-        text = _renderFamilies(families, _jobText({outcome.job: _jobSamples(outcome, now, {})}))
-        # The job label is in the path; Pushgateway refuses it in the body too.
-        _put('{}/etl_job@base64/{}'.format(base, encoded), re.sub(r'\{job="(?:[^"\\]|\\.)*"\}', '', text).encode('utf-8'), contentType)
+            _, chunks = database.stream(query='SELECT content FROM {} WHERE run_id = {} ORDER BY part'.format(self.table, placeholder),
+                                        chunkSize=100, parameters=(runId,))
+            with chunks:
+                text = ''.join(row[0] for chunk in chunks for row in chunk)
 
-    _put(base, _renderFamilies(families, _cycleText(result, now)).encode('utf-8'), contentType)
+        if not text:
+            raise KeyError('{} holds no manifest for run {}'.format(self.table, runId))
+
+        return str(runId), json.loads(text)
 
 
 # Notifications ----------------------------------------------------------------

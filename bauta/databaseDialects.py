@@ -3,7 +3,6 @@ from __future__ import annotations
 import datetime
 import decimal
 import hashlib
-import io
 import math
 import re
 import uuid
@@ -514,15 +513,19 @@ def _copyField(value: Any) -> str:
     raise _Unencodable(type(value).__name__)
 
 
-def _copyText(rows: Sequence[Sequence[Any]]) -> Optional[io.StringIO]:
-    """The rows as a COPY text-format stream, or None if any value can't be encoded."""
+def _copyText(rows: Sequence[Sequence[Any]]) -> Optional[str]:
+    """The rows in COPY's text format, or None if any value can't be encoded."""
 
     try:
-        text = ''.join('\t'.join(_copyField(value) for value in row) + '\n' for row in rows)
+        return ''.join('\t'.join(_copyField(value) for value in row) + '\n' for row in rows)
     except _Unencodable:
         return None
 
-    return io.StringIO(text)
+
+def _copyIn(cursor: Any, statement: str, text: str) -> None:
+
+    with cursor.copy(statement) as copy:
+        copy.write(text)
 
 
 class PostgreSQLDialect(_OnConflictDialect):
@@ -533,9 +536,12 @@ class PostgreSQLDialect(_OnConflictDialect):
 
     def connect(self, settings: DatabaseConnectionConfig) -> Tuple[Any, Any]:
 
-        import psycopg2
+        import psycopg
 
-        connection = psycopg2.connect(**self.connectArguments(settings))
+        # ClientCursor writes parameters into the statement, as the other
+        # drivers do, rather than binding them server-side: a server-side
+        # parameter takes one fixed type, which a value can't always fit.
+        connection = psycopg.connect(**self.connectArguments(settings), cursor_factory=psycopg.ClientCursor)
         cursor = connection.cursor()
 
         # Only this schema, with no fallback such as `public` that catalog
@@ -549,12 +555,12 @@ class PostgreSQLDialect(_OnConflictDialect):
 
     def _ownConnectArguments(self, settings: DatabaseConnectionConfig, password: Optional[str]) -> Dict[str, Any]:
 
-        return {'user': settings.user, 'password': password, 'host': settings.host, 'database': settings.database,
+        return {'user': settings.user, 'password': password, 'host': settings.host, 'dbname': settings.database,
                 'port': settings.port}
 
 
     def streamingCursor(self, connection: Any, chunkSize: int) -> Any:
-        """A named, server-side cursor: psycopg2 buffers everything through an
+        """A named, server-side cursor: psycopg buffers everything through an
         unnamed one. A commit on the connection invalidates it, so the extract
         side never commits.
         """
@@ -587,15 +593,15 @@ class PostgreSQLDialect(_OnConflictDialect):
 
 
     def bulkInsert(self, cursor: Any, table: str, columns: List[str], rows: Sequence[Sequence[Any]]) -> bool:
-        """COPY FROM STDIN: one round trip per chunk, where psycopg2's
-        executemany sends one statement per row.
+        """COPY FROM STDIN: one round trip per chunk, where executemany sends
+        one statement per row.
         """
 
-        stream = _copyText(rows)
-        if stream is None:
+        text = _copyText(rows)
+        if text is None:
             return False
 
-        cursor.copy_expert('COPY {} ({}) FROM STDIN'.format(table, ', '.join(columns)), stream)
+        _copyIn(cursor, 'COPY {} ({}) FROM STDIN'.format(table, ', '.join(columns)), text)
 
         return True
 
@@ -606,22 +612,22 @@ class PostgreSQLDialect(_OnConflictDialect):
         The table empties at every commit, so each chunk reuses it.
         """
 
-        stream = _copyText(rows)
-        if stream is None:
+        text = _copyText(rows)
+        if text is None:
             return False
 
         columns = ', '.join(allColumns)
         staging = 'bauta_upsert_{}'.format(hashlib.sha1('{}|{}'.format(table, columns).encode('utf-8')).hexdigest()[:12])
 
         cursor.execute('CREATE TEMPORARY TABLE IF NOT EXISTS {} ON COMMIT DELETE ROWS AS SELECT {} FROM {} WITH NO DATA'.format(staging, columns, table))
-        cursor.copy_expert('COPY {} ({}) FROM STDIN'.format(staging, columns), stream)
+        _copyIn(cursor, 'COPY {} ({}) FROM STDIN'.format(staging, columns), text)
         cursor.execute(self.upsertFromStageQuery(table, staging, allColumns, primaryKeyColumns, nonPrimaryKeyColumns))
 
         return True
 
 
     def columnCategory(self, dataType: Any) -> Optional[ColumnCategory]:
-        """psycopg2's cursor.description reports types as numeric OIDs, not names."""
+        """psycopg's cursor.description reports types as numeric OIDs, not names."""
 
         if dataType in self._NUMBER_OIDS:
             return ColumnCategory.NUMBER

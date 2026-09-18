@@ -4,7 +4,7 @@ Running `bauta` unattended: where its state lives, and how to know what it did. 
 
 - [Run state](#run-state)
 - [Run history](#run-history)
-- [Metrics](#metrics)
+- [Tables](#tables)
 - [Throughput](#throughput)
 - [Environment variables](#environment-variables)
 - [Notifications](#notifications)
@@ -15,36 +15,31 @@ Running `bauta` unattended: where its state lives, and how to know what it did. 
 
 `run` keeps each job's last run time, watermark and masking-key fingerprint between invocations. Losing it doesn't break anything, but it costs: every incremental job re-extracts from `watermarkInitial`, and `refresh` windows start over.
 
-| Where | Flag | Use when |
+| Where | Set with | Use when |
 | --- | --- | --- |
 | A file named by `jobs.yaml`'s `memory`, relative to it; `memory.yaml` beside it without one | (default) | The filesystem persists between runs. |
-| Another file | `--memory FILE` | It should live somewhere else for this run, such as a mounted volume. |
-| A database table | `--memory-database ALIAS` | Nothing persists: containers without a volume, several machines. |
+| A table | `memory: {database: ALIAS}` in `jobs.yaml` | Nothing persists: containers without a volume, several machines. |
+| Another file, or a table, for one run | `--memory FILE`, `--memory-database ALIAS` | It should live somewhere else this time, such as a mounted volume. |
 
-The table for `--memory-database` must exist first. Watermarks are stored as text with a type beside them, and read back as the same type: dates, timestamps, times, integers, floats, decimals, and bytes such as SQL Server's `rowversion`. Its shape is `DATABASE_MEMORY_SCHEMA`; adjust the types for your database if needed:
+Watermarks in a table are stored as text with a type beside them, and read back as the same type: dates, timestamps, times, integers, floats, decimals, and bytes such as SQL Server's `rowversion`. See [tables](#tables) for its definition.
 
-```sql
-CREATE TABLE bauta_memory (
-    job VARCHAR(255) PRIMARY KEY,
-    last_run DOUBLE PRECISION,
-    watermark_value VARCHAR(255),
-    watermark_type VARCHAR(32)
-    )
-```
-
-**Overlapping runs.** `run` holds a lock beside the memory file (`memory.yaml.run.lock`) for as long as it runs, and a second run that finds it held exits with status 1. With `--memory-database` the lock is `memory.run.lock` where the memory file would have been, so it only separates runs on one machine. Across machines, let the scheduler do it: a Kubernetes CronJob with `concurrencyPolicy: Forbid`, or Airflow's `max_active_runs=1`.
+**Overlapping runs.** `run` holds a lock beside the memory file (`memory.yaml.run.lock`) for as long as it runs, and a second run that finds it held exits with status 1. With run state in a table, the lock is `memory.run.lock` where the memory file would have been, so it only separates runs on one machine. Across machines, let the scheduler do it: a Kubernetes CronJob with `concurrencyPolicy: Forbid`, or Airflow's `max_active_runs=1`.
 
 
 ## Run history
 
-`--history FILE` appends one JSON line per job to a file after each cycle. `--history-database ALIAS` writes the same to a table instead. Nothing reads it to decide what to run; it's for answering "what happened last night".
+With `history` set in `jobs.yaml`, `run` records one entry per job after each cycle: a JSON line in a file, or a row in a table. Nothing reads it to decide what to run; it's for answering "what happened last night".
+
+```yaml
+history: ../transaction/history.jsonl    # a file, relative to jobs.yaml
+history:
+  database: warehouse                    # or a table
+```
 
 ```
-bauta run --history /var/lib/etl/history.jsonl
-
-bauta history --history /var/lib/etl/history.jsonl
-bauta history --history /var/lib/etl/history.jsonl --job loadOrders --limit 5
-bauta history --history-database warehouse --format json
+bauta history
+bauta history --job loadOrders --limit 5
+bauta history --format json
 ```
 
 ```
@@ -54,11 +49,33 @@ FINISHED             JOB                          STATUS           ROWS   SECOND
 2026-09-16 02:00:12  loadOrders                   completed        4200      12.5
 ```
 
-Each record has `runId` (shared by the jobs of one cycle), `job`, `status`, `rowCount`, `attempts`, `startedAt`, `finishedAt`, `durationSeconds` and `error`, cut to 2000 characters. The file grows by one line per job per run, so rotate it with `logrotate` or similar.
+`--history FILE` or `--history-database ALIAS` overrides the setting, on `run` and on `history`.
 
-The table for `--history-database` must exist first (`DATABASE_HISTORY_SCHEMA`). Its types work on all six databases:
+Each record has `runId` (shared by the jobs of one cycle), `job`, `status`, `rowCount`, `attempts`, `startedAt`, `finishedAt`, `durationSeconds` and `error`, cut to 2000 characters. A file grows by one line per job per run, so rotate it with `logrotate` or similar.
+
+**Alerting on staleness.** In a table, history answers the question worth alerting on, whether a job has stopped completing, from any dashboard or monitor that runs SQL. Alert on this rather than on one failure, which the next run's retry may already have fixed:
 
 ```sql
+SELECT job, max(finished_at) AS last_success
+FROM bauta_history
+WHERE status = 'completed'
+GROUP BY job
+HAVING max(finished_at) < <now, in seconds since 1970> - 3 * 3600
+```
+
+
+## Tables
+
+Run state, history and manifests each need their table to exist before a run uses it. These definitions are `DATABASE_MEMORY_SCHEMA`, `DATABASE_HISTORY_SCHEMA` and `DATABASE_MANIFEST_SCHEMA` in the package, and their types work on all six databases. Times are seconds since 1970.
+
+```sql
+CREATE TABLE bauta_memory (
+    job VARCHAR(255) PRIMARY KEY,
+    last_run DOUBLE PRECISION,
+    watermark_value VARCHAR(255),
+    watermark_type VARCHAR(32)
+    )
+
 CREATE TABLE bauta_history (
     run_id VARCHAR(36) NOT NULL,
     job VARCHAR(255) NOT NULL,
@@ -70,38 +87,17 @@ CREATE TABLE bauta_history (
     error VARCHAR(2000),
     PRIMARY KEY (run_id, job)
     )
+
+CREATE TABLE bauta_manifest (
+    run_id VARCHAR(36) NOT NULL,
+    part INT NOT NULL,
+    written_at DOUBLE PRECISION NOT NULL,
+    content VARCHAR(2000) NOT NULL,
+    PRIMARY KEY (run_id, part)
+    )
 ```
 
-Times are seconds since 1970, as in the memory table.
-
-
-## Metrics
-
-Prometheus metrics, written after each cycle:
-
-| Flag | |
-| --- | --- |
-| `--metrics FILE` | A text file for node_exporter's textfile collector. Name it `*.prom` inside the collector's directory. |
-| `--metrics-push URL` | Pushed to a Pushgateway: each job to its own group, `etl_job=<name>`, and the cycle's totals to `job=bauta`. |
-
-| Metric | Labels | |
-| --- | --- | --- |
-| `bauta_job_last_run_success` | `job` | 1 if the job completed in its latest run, 0 if it failed or was skipped |
-| `bauta_job_last_run_skipped` | `job` | 1 if it was skipped |
-| `bauta_job_last_run_rows` | `job` | rows loaded |
-| `bauta_job_last_run_duration_seconds` | `job` | |
-| `bauta_job_last_run_timestamp_seconds` | `job` | when it last ran |
-| `bauta_job_last_success_timestamp_seconds` | `job` | when it last completed |
-| `bauta_cycle_jobs` | `status` | jobs in the latest cycle |
-| `bauta_cycle_rows` | | rows in the latest cycle |
-| `bauta_cycle_timestamp_seconds` | | when the latest cycle finished |
-
-A job that isn't part of a cycle, because it's inside its `refresh` window, keeps its last values rather than disappearing. Alert on staleness rather than on a single failure, which a retry on the next run may already have fixed:
-
-```yaml
-- alert: EtlJobStale
-  expr: time() - bauta_job_last_success_timestamp_seconds > 3 * 3600
-```
+A manifest is stored in pieces of `content`, in `part` order, because its JSON can be longer than any one text type every database shares. See [manifests in a table](masking.md#in-a-table).
 
 
 ## Throughput
@@ -152,15 +148,23 @@ The last two are for diagnosis. The implementations are tested to agree, so a di
 
 Slack, Mattermost and Microsoft Teams incoming webhooks show `text` as it is; anything else can read the rest. The URL usually carries a token, so prefer the environment variable to the flag. Error messages come from the database drivers. Values they quote are replaced with `<redacted>` for every message format the tests know, but not every format a driver can write (see [the security model](security.md#where-unmasked-data-goes)); keep that in mind when choosing the channel.
 
-History, metrics and notifications never affect a run's outcome. If one fails, the failure is logged and the run carries on.
+History and notifications never affect a run's outcome. If one fails, the failure is logged and the run carries on.
 
 
 ## A deployment, put together
 
-```cron
-*/15 * * * *  bauta run --config /etc/etl --memory /var/lib/etl/memory.yaml \
-                --history /var/lib/etl/history.jsonl --metrics /var/lib/node_exporter/etl.prom \
-                --log-format json --log /var/log/etl/etl.log --quiet
+In `/etc/etl/jobs.yaml`, beside the jobs:
+
+```yaml
+memory: /var/lib/etl/memory.yaml
+history:
+  database: warehouse
+manifest:
+  database: warehouse
 ```
 
-With `BAUTA_NOTIFY_URL` set in the environment, a failed run also posts to the team's channel, and `bauta history` answers what happened overnight.
+```cron
+*/15 * * * *  bauta run --config /etc/etl --log-format json --log /var/log/etl/etl.log --quiet
+```
+
+With `BAUTA_NOTIFY_URL` set in the environment, a failed run also posts to the team's channel. `bauta history --config /etc/etl` answers what happened overnight, and `bauta verify-manifest --config /etc/etl` checks the latest manifest.

@@ -2,8 +2,8 @@
 
 This keeps it honest: a field renamed in configuration.py without the samples
 being updated fails here rather than in somebody's first five minutes with the
-tool. The starter configuration, under bauta/starter/, is what `bauta init`
-writes; each demo's configuration under example/ is what its script runs.
+tool. The starter configuration is what people copy; each demo's configuration
+is what its script runs.
 """
 from pathlib import Path
 
@@ -13,9 +13,9 @@ import yaml
 from bauta.configuration import Configuration, ConfigurationError, DataJobsFile, expandEnvironmentVariables
 from bauta.transform import resolveTransformer
 
-ROOT = Path(__file__).resolve().parents[1]
-CONFIGURATION_DIRECTORY = ROOT / 'bauta' / 'starter'
-DEMO_CONFIGURATION_DIRECTORIES = sorted((ROOT / 'example').glob('*/configuration'))
+EXAMPLE_DIRECTORY = Path(__file__).resolve().parents[1] / 'example'
+CONFIGURATION_DIRECTORY = EXAMPLE_DIRECTORY / 'starter' / 'configuration'
+DEMO_CONFIGURATION_DIRECTORIES = sorted(path for path in EXAMPLE_DIRECTORY.glob('*/configuration') if path != CONFIGURATION_DIRECTORY)
 
 # The sample reads credentials from the environment, so validating it means
 # supplying them the way a deployment would. This list doubles as a check that

@@ -1,4 +1,4 @@
-"""Run history, Prometheus metrics and webhook notifications."""
+"""Run history and webhook notifications."""
 import http.server
 import json
 import sqlite3
@@ -8,8 +8,8 @@ import pytest
 
 from bauta.configuration import DatabaseConnectionConfig
 from bauta.dependencyGraph import JobOutcome, JobStatus
-from bauta.reporting import (DATABASE_HISTORY_SCHEMA, DatabaseHistory, FileHistory, historyRecords, notificationPayload, notify,
-                                       pushMetrics, renderHistory, writeMetricsFile)
+from bauta.reporting import (DATABASE_HISTORY_SCHEMA, DATABASE_MANIFEST_SCHEMA, DatabaseHistory, DatabaseManifests, FileHistory, historyRecords,
+                             notificationPayload, notify, renderHistory)
 from bauta.runner import RunResult
 
 
@@ -71,52 +71,48 @@ def test_history_renders_as_a_table():
     assert 'OperationalError: timeout' in text
 
 
-def _samples(text):
-    return {line.rsplit(' ', 1)[0]: float(line.rsplit(' ', 1)[1]) for line in text.splitlines() if not line.startswith('#')}
+@pytest.fixture
+def manifestTable(tmp_path):
+    path = tmp_path / 'manifests.db'
+    connection = sqlite3.connect(path)
+    connection.execute(DATABASE_MANIFEST_SCHEMA)
+    connection.close()
+
+    return DatabaseManifests(DatabaseConnectionConfig(type='sqlite', database=str(path))), path
 
 
-def test_the_metrics_file_describes_the_cycle_and_each_job(tmp_path):
-    path = tmp_path / 'bauta.prom'
+def test_a_manifest_longer_than_a_part_is_stored_in_order_and_read_back_whole(manifestTable):
+    manifests, path = manifestTable
+    manifest = {'jobs': [{'job': 'j{}'.format(index), 'columns': ['c'] * 40} for index in range(30)]}
 
-    writeMetricsFile(path, _result(COMPLETED, FAILED, SKIPPED), now=1_790_000_100.0)
+    manifests.write(manifest, 'run-1')
 
-    samples = _samples(path.read_text())
-    assert samples['bauta_job_last_run_success{job="loadOrders"}'] == 1.0
-    assert samples['bauta_job_last_run_rows{job="loadOrders"}'] == 42.0
-    assert samples['bauta_job_last_success_timestamp_seconds{job="loadOrders"}'] == 1_790_000_012.5
-    assert samples['bauta_job_last_run_success{job="loadCustomers"}'] == 0.0
-    assert 'bauta_job_last_success_timestamp_seconds{job="loadCustomers"}' not in samples
-    assert samples['bauta_job_last_run_skipped{job="loadInvoices"}'] == 1.0
-    assert samples['bauta_cycle_jobs{status="failed"}'] == 1.0
-    assert samples['bauta_cycle_rows'] == 42.0
-    assert path.read_text().count('# TYPE bauta_job_last_run_success gauge') == 1
+    connection = sqlite3.connect(path)
+    parts = [row[0] for row in connection.execute("SELECT part FROM bauta_manifest WHERE run_id = 'run-1' ORDER BY part")]
+    connection.close()
+    assert len(parts) > 1 and parts == list(range(len(parts)))
+    assert manifests.read('run-1') == ('run-1', manifest)
 
 
-def test_a_job_outside_the_cycle_keeps_its_last_values(tmp_path):
-    """A job inside its refresh window isn't in the cycle; its series must not
-    vanish, and its last success must stay what it was.
-    """
-    path = tmp_path / 'bauta.prom'
-    writeMetricsFile(path, _result(COMPLETED), now=1_790_000_100.0)
+def test_the_latest_manifest_is_read_unless_a_run_is_named(manifestTable):
+    manifests, _ = manifestTable
 
-    writeMetricsFile(path, _result(FAILED._replace(job='loadOrders', finishedAt=1_790_000_200.0)), now=1_790_000_300.0)
-    writeMetricsFile(path, _result(SKIPPED), now=1_790_000_400.0)
+    manifests.write({'jobs': ['older']}, 'run-1')
+    manifests.write({'jobs': ['newer']}, 'run-2')
 
-    samples = _samples(path.read_text())
-    assert samples['bauta_job_last_run_success{job="loadOrders"}'] == 0.0
-    assert samples['bauta_job_last_success_timestamp_seconds{job="loadOrders"}'] == 1_790_000_012.5
-    assert samples['bauta_job_last_run_skipped{job="loadInvoices"}'] == 1.0
-    assert samples['bauta_cycle_jobs{status="skipped"}'] == 1.0
+    assert manifests.read() == ('run-2', {'jobs': ['newer']})
+    assert manifests.read('run-1') == ('run-1', {'jobs': ['older']})
 
 
-def test_job_names_are_escaped_in_labels_and_survive_a_rewrite(tmp_path):
-    path = tmp_path / 'bauta.prom'
-    odd = COMPLETED._replace(job='say "hi" \\ there')
+def test_reading_a_manifest_that_is_not_there_is_a_key_error(manifestTable):
+    manifests, _ = manifestTable
 
-    writeMetricsFile(path, _result(odd))
-    writeMetricsFile(path, _result())
+    with pytest.raises(KeyError, match='holds no manifest'):
+        manifests.read()
 
-    assert 'bauta_job_last_run_rows{job="say \\"hi\\" \\\\ there"} 42.0' in path.read_text()
+    manifests.write({'jobs': []}, 'run-1')
+    with pytest.raises(KeyError, match='no manifest for run run-9'):
+        manifests.read('run-9')
 
 
 class _Recorder(http.server.BaseHTTPRequestHandler):
@@ -127,7 +123,7 @@ class _Recorder(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
 
-    do_PUT = do_POST = _record
+    do_POST = _record
 
     def log_message(self, *arguments):
         pass
@@ -143,21 +139,6 @@ def webServer():
     yield server, 'http://127.0.0.1:{}'.format(server.server_port)
 
     server.shutdown()
-
-
-def test_metrics_are_pushed_per_job_and_per_cycle(webServer):
-    server, url = webServer
-
-    pushMetrics(url, _result(COMPLETED, FAILED), now=1_790_000_100.0)
-
-    paths = [request[1] for request in server.requests]
-    assert paths == ['/metrics/job/bauta/etl_job@base64/bG9hZE9yZGVycw==',
-                     '/metrics/job/bauta/etl_job@base64/bG9hZEN1c3RvbWVycw==',
-                     '/metrics/job/bauta']
-    assert all(request[0] == 'PUT' and request[2].startswith('text/plain') for request in server.requests)
-    assert 'bauta_job_last_run_rows 42.0' in server.requests[0][3]
-    assert 'job=' not in server.requests[0][3]
-    assert 'bauta_cycle_rows 42' in server.requests[2][3]
 
 
 def test_a_notification_is_sent_only_when_a_cycle_does_not_succeed(webServer):

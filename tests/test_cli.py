@@ -745,14 +745,12 @@ def test_a_manifest_stripped_of_its_signature_fails_when_a_key_is_set(workspace,
     assert main(['verify-manifest', str(path), '--quiet']) == EXIT_SUCCESS
 
 
-def test_run_records_history_and_metrics_and_history_shows_them(workspace, capsys):
+def test_run_records_history_and_history_shows_it(workspace, capsys):
     import json
 
-    assert main(['run', '--quiet', '--history', 'state/history.jsonl', '--metrics', 'state/etl.prom']) == EXIT_SUCCESS
+    assert main(['run', '--quiet', '--history', 'state/history.jsonl']) == EXIT_SUCCESS
     assert main(['run', '--quiet', '--force', '--job', 'loadRows', '--history', 'state/history.jsonl']) == EXIT_SUCCESS
     capsys.readouterr()
-
-    assert 'bauta_job_last_run_rows{job="loadRows"} 5.0' in (workspace / 'state' / 'etl.prom').read_text()
 
     assert main(['history', '--quiet', '--history', 'state/history.jsonl']) == EXIT_SUCCESS
     rows = capsys.readouterr().out.splitlines()
@@ -871,35 +869,153 @@ def test_synthesize_rejects_a_bad_table_argument(workspace):
     assert main(['synthesize', '--quiet', '--database', 'demo', '--table', 'tgt:0', '--yes']) == EXIT_BAD_CONFIGURATION
 
 
-def test_init_writes_a_starter_configuration_that_validates(tmp_path, monkeypatch, capsys):
-    """The whole first five minutes after `pip install bauta`: no clone, no
-    copying, and a configuration the CLI accepts once its secrets are set.
-    """
-    monkeypatch.chdir(tmp_path)
-    for name, value in {'SOURCE_DB_PASSWORD': 'sourceSecret', 'TARGET_DB_PASSWORD': 'targetSecret', 'MASKING_KEY': 'a-sample-masking-key'}.items():
-        monkeypatch.setenv(name, value)
-    monkeypatch.delenv('BAUTA_CONFIG', raising=False)
+def _createTables(workspace, *schemas):
+    connection = sqlite3.connect(str(workspace / 'demo.db'))
+    for schema in schemas:
+        connection.execute(schema)
+    connection.commit()
+    connection.close()
 
-    assert main(['init', '--quiet']) == EXIT_SUCCESS
-    assert sorted(path.name for path in (tmp_path / 'configuration').iterdir()) == ['database.yaml', 'jobs.yaml']
-    assert 'bauta validate ' in capsys.readouterr().out
+
+def test_history_and_the_manifest_go_where_the_jobs_file_says(maskedWorkspace, capsys):
+    """Relative to the jobs file, as memory is, and read back by `history` and
+    `verify-manifest` with no flags at all.
+    """
+    import json
+
+    (maskedWorkspace / 'configuration' / 'jobs.yaml').write_text(
+        'history: ../state/history.jsonl\nmanifest: ../state/manifest.json\n' + MASKED_JOBS_YAML)
+
+    assert main(['run', '--quiet']) == EXIT_SUCCESS
+    assert json.loads((maskedWorkspace / 'state' / 'manifest.json').read_text())['jobs'][0]['job'] == 'maskRows'
+    capsys.readouterr()
+
+    assert main(['history', '--quiet']) == EXIT_SUCCESS
+    assert 'maskRows' in capsys.readouterr().out
+    assert main(['verify-manifest', '--quiet']) == EXIT_SUCCESS
+    assert 'state/manifest.json: intact' in capsys.readouterr().out
+
+
+def test_memory_history_and_the_manifest_can_all_live_in_tables(maskedWorkspace, capsys):
+    from bauta.memory import DATABASE_MEMORY_SCHEMA
+    from bauta.reporting import DATABASE_HISTORY_SCHEMA, DATABASE_MANIFEST_SCHEMA
+
+    _createTables(maskedWorkspace, DATABASE_MEMORY_SCHEMA.replace('bauta_memory', 'etl_memory'), DATABASE_HISTORY_SCHEMA, DATABASE_MANIFEST_SCHEMA)
+    (maskedWorkspace / 'configuration' / 'jobs.yaml').write_text(
+        'memory:\n  database: demo\n  table: etl_memory\nhistory:\n  database: demo\nmanifest:\n  database: demo\n' + MASKED_JOBS_YAML)
 
     assert main(['validate', '--quiet']) == EXIT_SUCCESS
+    output = capsys.readouterr().out
+    assert 'run state: table etl_memory in demo' in output
+    assert 'history: table bauta_history in demo' in output
+    assert 'manifest: table bauta_manifest in demo' in output
+
+    assert main(['run', '--quiet']) == EXIT_SUCCESS
+    assert main(['run', '--quiet', '--force']) == EXIT_SUCCESS
+
+    connection = sqlite3.connect(str(maskedWorkspace / 'demo.db'))
+    assert {row[0] for row in connection.execute('SELECT job FROM etl_memory')} == {'maskRows', 'maskRows#maskingKey'}
+    assert connection.execute('SELECT count(*) FROM bauta_history').fetchone()[0] == 2
+    runs = [row[0] for row in connection.execute('SELECT DISTINCT run_id FROM bauta_manifest ORDER BY written_at')]
+    connection.close()
+    assert len(runs) == 2
+    assert not (maskedWorkspace / 'configuration' / 'memory.yaml').exists()
+    capsys.readouterr()
+
+    assert main(['history', '--quiet', '--format', 'json']) == EXIT_SUCCESS
+    assert len(__import__('json').loads(capsys.readouterr().out)) == 2
+    assert main(['verify-manifest', '--quiet']) == EXIT_SUCCESS
+    assert 'run {} in table bauta_manifest in demo: intact'.format(runs[1]) in capsys.readouterr().out
+    assert main(['verify-manifest', '--quiet', '--run', runs[0]]) == EXIT_SUCCESS
+    assert 'run {} '.format(runs[0]) in capsys.readouterr().out
 
 
-def test_init_writes_where_config_says(tmp_path, monkeypatch, capsys):
-    monkeypatch.chdir(tmp_path)
+def test_a_manifest_edited_in_its_table_fails_verification(maskedWorkspace):
+    from bauta.reporting import DATABASE_MANIFEST_SCHEMA
 
-    assert main(['init', '--config', 'deploy/etl', '--quiet']) == EXIT_SUCCESS
-    assert (tmp_path / 'deploy' / 'etl' / 'jobs.yaml').is_file()
-    assert 'bauta validate --config deploy/etl' in capsys.readouterr().out
+    _createTables(maskedWorkspace, DATABASE_MANIFEST_SCHEMA)
+    assert main(['run', '--quiet', '--manifest-database', 'demo']) == EXIT_SUCCESS
+
+    connection = sqlite3.connect(str(maskedWorkspace / 'demo.db'))
+    connection.execute('UPDATE bauta_manifest SET content = replace(content, \'"rowCount": 5\', \'"rowCount": 6\')')
+    connection.commit()
+    connection.close()
+
+    assert main(['verify-manifest', '--quiet', '--manifest-database', 'demo']) == EXIT_JOBS_DID_NOT_SUCCEED
 
 
-def test_init_leaves_an_existing_configuration_alone(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / 'configuration').mkdir()
-    (tmp_path / 'configuration' / 'jobs.yaml').write_text('reviewed')
+def test_flags_override_the_jobs_file(maskedWorkspace):
+    (maskedWorkspace / 'configuration' / 'jobs.yaml').write_text('history: ../configured.jsonl\nmanifest: ../configured.json\n' + MASKED_JOBS_YAML)
 
-    assert main(['init', '--quiet']) == EXIT_BAD_CONFIGURATION
-    assert (tmp_path / 'configuration' / 'jobs.yaml').read_text() == 'reviewed'
-    assert not (tmp_path / 'configuration' / 'database.yaml').exists()
+    assert main(['run', '--quiet', '--history', 'flagged.jsonl', '--manifest', 'flagged.json']) == EXIT_SUCCESS
+
+    assert (maskedWorkspace / 'flagged.jsonl').exists() and (maskedWorkspace / 'flagged.json').exists()
+    assert not (maskedWorkspace / 'configured.jsonl').exists() and not (maskedWorkspace / 'configured.json').exists()
+
+
+def test_a_table_setting_needs_a_known_alias(workspace, caplog):
+    (workspace / 'configuration' / 'jobs.yaml').write_text('history:\n  database: nowhere\n' + JOBS_YAML)
+
+    assert main(['validate']) == EXIT_BAD_CONFIGURATION
+    assert 'history: database "nowhere" is not a known database alias' in caplog.text
+
+
+def test_a_misspelled_table_setting_is_refused(workspace, caplog):
+    (workspace / 'configuration' / 'jobs.yaml').write_text('history:\n  database: demo\n  tabel: runs\n' + JOBS_YAML)
+
+    assert main(['validate']) == EXIT_BAD_CONFIGURATION
+    assert 'tabel' in caplog.text
+
+
+def test_history_and_verify_manifest_say_where_to_look_when_nothing_is_set(workspace):
+    assert main(['history', '--quiet']) == EXIT_BAD_CONFIGURATION
+    assert main(['verify-manifest', '--quiet']) == EXIT_BAD_CONFIGURATION
+
+
+DISCOVERY_YAML = """exclude: [email]
+names:
+- words: [tier]
+  policy: {strategy: shuffle}
+  reason: membership tier, which singles people out
+"""
+
+
+def test_discover_reads_discovery_yaml_from_the_configuration_directory(schemaWorkspace, capsys):
+    (schemaWorkspace / 'configuration' / 'discovery.yaml').write_text(DISCOVERY_YAML)
+
+    assert main(['discover', '--quiet', '--database', 'demo', '--table', 'customers', '--target', 'copy']) == EXIT_SUCCESS
+
+    output = capsys.readouterr().out
+    assert 'tier: {strategy: shuffle}  # membership tier, which singles people out' in output
+    # Leaving out `email` leaves out the name rule and the value rule both.
+    assert 'email address' not in output
+
+
+def test_rules_can_be_named_on_the_command_line(schemaWorkspace, capsys):
+    (schemaWorkspace / 'mine.yaml').write_text(DISCOVERY_YAML)
+
+    assert main(['discover', '--quiet', '--database', 'demo', '--table', 'customers', '--rules', 'mine.yaml']) == EXIT_SUCCESS
+    assert 'membership tier' in capsys.readouterr().out
+    assert main(['discover', '--quiet', '--database', 'demo', '--table', 'customers', '--rules', 'missing.yaml']) == EXIT_BAD_CONFIGURATION
+
+
+def test_audit_questions_a_kept_column_by_your_own_rules(maskedWorkspace, capsys):
+    (maskedWorkspace / 'configuration' / 'discovery.yaml').write_text("names:\n- words: [name]\n  policy: fakeName\n")
+    (maskedWorkspace / 'configuration' / 'jobs.yaml').write_text(MASKED_JOBS_YAML.replace('name: hash', 'name: keep'))
+
+    main(['audit', '--quiet'])
+
+    assert 'column name is kept unmasked, but its name matches a rule in discovery.yaml' in capsys.readouterr().out
+
+
+def test_validate_checks_and_summarises_the_rules(workspace, capsys, caplog):
+    assert main(['validate', '--quiet']) == EXIT_SUCCESS
+    assert 'discovery rules: built-in' in capsys.readouterr().out
+
+    (workspace / 'configuration' / 'discovery.yaml').write_text(DISCOVERY_YAML)
+    assert main(['validate', '--quiet']) == EXIT_SUCCESS
+    assert 'discovery rules: configuration/discovery.yaml (1 name, 0 value), built-in except email' in capsys.readouterr().out
+
+    (workspace / 'configuration' / 'discovery.yaml').write_text("values:\n- pattern: '[0-9'\n  policy: hash\n")
+    assert main(['validate']) == EXIT_BAD_CONFIGURATION
+    assert 'not a valid regular expression' in caplog.text

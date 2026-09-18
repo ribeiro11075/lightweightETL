@@ -29,6 +29,15 @@ def _mockedDatabase(dbType: DatabaseType) -> Database:
     return database
 
 
+def _copies(cursor):
+    """Each COPY statement psycopg ran, and the text written into it."""
+
+    statements = [call.args[0] for call in cursor.copy.call_args_list]
+    written = [call.args[0] for call in cursor.copy.return_value.__enter__.return_value.write.call_args_list]
+
+    return list(zip(statements, written))
+
+
 @pytest.mark.parametrize('dbType', [DatabaseType.MYSQL, DatabaseType.POSTGRESQL, DatabaseType.ORACLE, DatabaseType.MSSQL, DatabaseType.SQLITE, DatabaseType.MARIADB])
 def test_upsert_executes_for_every_dialect(dbType):
     """Regression check for the bug that made mysql upserts a silent no-op, and
@@ -39,7 +48,7 @@ def test_upsert_executes_for_every_dialect(dbType):
     database.upsert(table='people', data=[(1, 'a'), (2, 'b')], chunkSize=100)
 
     if dbType == DatabaseType.POSTGRESQL:
-        assert database.cursor.copy_expert.call_count == 1
+        assert len(_copies(database.cursor)) == 1
         database.cursor.executemany.assert_not_called()
     elif dbType == DatabaseType.MSSQL:
         assert 'VALUES (%s, %s), (%s, %s)' in database.cursor.execute.call_args[0][0]
@@ -154,9 +163,8 @@ def test_postgresql_inserts_through_copy_one_batch_at_a_time():
 
     database.insert(table='people', data=[(1, 'a'), (2, 'b'), (3, 'c')], chunkSize=2, columns=['id', 'name'])
 
-    copies = database.cursor.copy_expert.call_args_list
-    assert [call.args[0] for call in copies] == ['COPY people ("id", "name") FROM STDIN'] * 2
-    assert [call.args[1].getvalue() for call in copies] == ['1\ta\n2\tb\n', '3\tc\n']
+    assert _copies(database.cursor) == [('COPY people ("id", "name") FROM STDIN', '1\ta\n2\tb\n'),
+                                        ('COPY people ("id", "name") FROM STDIN', '3\tc\n')]
     database.cursor.executemany.assert_not_called()
     assert database.connection.commit.call_count == 2
 
@@ -169,8 +177,8 @@ def test_a_copied_upsert_sends_only_the_last_row_of_each_key():
 
     database.upsert(table='people', data=[(1, 'a'), (2, 'b'), (1, 'c')])
 
-    (copy,) = database.cursor.copy_expert.call_args_list
-    assert copy.args[1].getvalue() == '1\tc\n2\tb\n'
+    ((_, written),) = _copies(database.cursor)
+    assert written == '1\tc\n2\tb\n'
     statements = [call.args[0] for call in database.cursor.execute.call_args_list]
     assert statements[0].startswith('CREATE TEMPORARY TABLE IF NOT EXISTS bauta_upsert_')
     assert 'ON COMMIT DELETE ROWS AS SELECT "id", "name" FROM people WITH NO DATA' in statements[0]

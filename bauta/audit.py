@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Seq
 
 from .configuration import DataJobConfig
 from .databaseDialects import ForeignKey, unqualifiedName
-from .discovery import personalDataHint
+from .discovery import BUILTIN_RULES, DiscoveryRules, personalDataHint
 from .masking import MaskingError, MaskingPlan, keyFingerprint, resolveStrategy
 
 SEVERITIES = ('error', 'warning', 'info')
@@ -165,7 +165,7 @@ def _declaredColumns(plan: MaskingPlan) -> List[Dict[str, Any]]:
 
 
 def _auditMaskedJob(name: str, job: DataJobConfig, returned: Optional[Sequence[str]], findings: List[Finding],
-                    usages: Dict[str, List[_Usage]]) -> Dict[str, Any]:
+                    usages: Dict[str, List[_Usage]], rules: DiscoveryRules) -> Dict[str, Any]:
 
     assert job.masking is not None
     plan = MaskingPlan(key=job.masking.key.get_secret_value(), columns=job.masking.columns, defaultStrategy=job.masking.defaultStrategy)
@@ -180,7 +180,7 @@ def _auditMaskedJob(name: str, job: DataJobConfig, returned: Optional[Sequence[s
             findings.append(Finding('error', name, 'the policy does not match what sourceQuery returns: {}'.format(error)))
 
     for entry in columns:
-        hint = personalDataHint(entry['column'])
+        hint = personalDataHint(entry['column'], rules)
         entry['personalDataHint'] = hint
         if entry['strategy'] == 'keep' and hint:
             findings.append(Finding('warning', name, 'column {} is kept unmasked, but its {}'.format(entry['column'], hint)))
@@ -220,7 +220,7 @@ def _auditMaskedJob(name: str, job: DataJobConfig, returned: Optional[Sequence[s
 def auditJobs(jobs: Mapping[str, DataJobConfig], returnedColumns: Optional[Mapping[str, Sequence[str]]] = None,
               encryption: Optional[Mapping[str, Optional[bool]]] = None, unreachable: Optional[Mapping[str, str]] = None,
               targetColumns: Optional[Mapping[str, Sequence[str]]] = None, foreignKeys: Optional[Mapping[str, Sequence[ForeignKey]]] = None,
-              generatedAt: Optional[datetime.datetime] = None) -> Dict[str, Any]:
+              generatedAt: Optional[datetime.datetime] = None, rules: DiscoveryRules = BUILTIN_RULES) -> Dict[str, Any]:
     """The audit report, as a JSON-ready dict.
 
     `returnedColumns` maps a masked job to the columns its query returns, so
@@ -250,7 +250,7 @@ def auditJobs(jobs: Mapping[str, DataJobConfig], returnedColumns: Optional[Mappi
             findings.append(Finding('error', name, 'sourceQuery could not be checked: {}'.format(unreachable[name])))
 
         if job.masking is not None:
-            entry.update(_auditMaskedJob(name, job, returnedColumns.get(name), findings, usages))
+            entry.update(_auditMaskedJob(name, job, returnedColumns.get(name), findings, usages, rules))
             if encryption.get(job.sourceDatabase) is False:
                 findings.append(Finding('warning', name, 'reads unmasked data from {} over a connection that is not encrypted'.format(job.sourceDatabase)))
         elif job.sourceDatabase in maskedSources and job.sourceDatabase != job.targetDatabase:

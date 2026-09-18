@@ -41,8 +41,8 @@ _PATTERNS: List[Tuple['re.Pattern[str]', str]] = [(re.compile(pattern, flags), r
     # PostgreSQL: ... conflicts with existing key (name)=(ann@example.com).
     (r'(conflicts with (?:existing )?key \((?:(?!\)=\().)*\)=\().*?(\)\.' + POSTGRESQL_FIELD_END + r'|\Z)', re.DOTALL, r'\1' + REDACTED + r'\2'),
     # PostgreSQL: LINE 1: INSERT INTO t VALUES (1, 'ann@example.com', ...  and the
-    # caret line under it. psycopg2 writes values into the statement, and the
-    # server quotes the statement around the error.
+    # caret line under it. psycopg's ClientCursor writes values into the
+    # statement, and the server quotes the statement around the error.
     (r'(\nLINE \d+: ).*?' + POSTGRESQL_FIELD_END, re.DOTALL, r'\1' + REDACTED),
     # PostgreSQL: CONTEXT:  SQL statement "INSERT ... VALUES ('ann@example.com')"
     # and the function it ran in, on the line after.

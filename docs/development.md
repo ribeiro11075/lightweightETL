@@ -7,8 +7,6 @@ pytest
 mypy
 ```
 
-`all` builds psycopg2 from source; see [the README](../README.md#install) for what that needs, or how to use `psycopg2-binary` instead.
-
 
 ## The default test run
 
@@ -20,7 +18,7 @@ mypy
 - Masking end to end through real worker processes (`tests/test_masking_end_to_end.py`), and the masking strategies' properties (`tests/test_masking.py`): determinism, consistency within a domain, one-to-one keys, and preserved types.
 - The shipped examples: every `configuration/` under `example/` is validated against the real models, and every demo is run end to end, so none can drift from what the code accepts.
 
-`tests/conftest.py` stubs `oracledb` and `psycopg2` only when they aren't installed, so the default run needs no native client libraries.
+`tests/conftest.py` stubs `oracledb` and `psycopg` only when they aren't installed, so the default run needs no native client libraries.
 
 
 ## The native masker
@@ -59,8 +57,6 @@ pytest -m integration
 docker compose down
 ```
 
-Without PostgreSQL's build toolchain, install `".[mysql,oracle,mssql,fpe,dev]" psycopg2-binary` instead of `".[all,dev]"`.
-
 | Service | Port | Image |
 | --- | --- | --- |
 | mysql | 3307 | `mysql:8.4` |
@@ -75,8 +71,6 @@ Run them before trusting a change to anything database-facing; they have found b
 
 
 ## Notes
-
-The `postgresql` extra requires the source-built `psycopg2`, the upstream recommendation for production. `psycopg2-binary` is fine for running the tests.
 
 mypy targets Python 3.10, the oldest version the package supports.
 

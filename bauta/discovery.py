@@ -9,62 +9,116 @@ from __future__ import annotations
 import datetime
 import decimal
 import re
-from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 import yaml
 
+from . import builtinDiscovery
+from .builtinDiscovery import isIsoDate
+from .configuration import DiscoveryRulesFile
 from .databaseDialects import ColumnCategory, ForeignKey
 
 DEFAULT_SAMPLE_SIZE = 1000
 
-# A share of sampled values that must match a pattern before it's trusted.
+# A share of sampled values that must match a rule before it's trusted.
 VALUE_MATCH_THRESHOLD = 0.8
-
-EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$')
-PHONE = re.compile(r'^\+?[\d\s().-]{7,}$')
-NATIONAL_ID = re.compile(r'^\d{3}-\d{2}-\d{4}$')
-CARD = re.compile(r'^[\d -]{13,23}$')
-IPV4 = re.compile(r'^(\d{1,3}\.){3}\d{1,3}$')
-UUID_TEXT = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
-
-PERSONAL_TABLE_WORDS = {'customer', 'customers', 'user', 'users', 'person', 'people', 'employee', 'employees', 'contact',
-                        'contacts', 'member', 'members', 'patient', 'patients', 'client', 'clients', 'account', 'accounts',
-                        'student', 'students', 'applicant', 'applicants', 'guest', 'guests'}
 
 FREE_TEXT_AVERAGE_LENGTH = 60
 
-# (words any of which must be in the column name, policy, reason). First match
-# wins, so specific entries come first. Names are matched split on underscores
-# and camelCase and joined whole, so `first_name` and `FIRSTNAME` both match.
-NAME_RULES: Tuple[Tuple[Tuple[str, ...], Dict[str, Any], str], ...] = (
-    (('email', 'emailaddress', 'mail'), {'strategy': 'email'}, 'name suggests an email address'),
-    (('password', 'passwd', 'pwd', 'secret', 'token', 'apikey', 'salt'), {'strategy': 'hash'}, 'name suggests a credential'),
-    (('ssn', 'socialsecurity', 'socialsecuritynumber', 'nationalid', 'taxid', 'tin', 'passport', 'passportnumber',
-      'licensenumber', 'licencenumber', 'driverslicense'),
-     {'strategy': 'key'}, 'name suggests a government identifier; key keeps it unique and shaped'),
-    (('creditcard', 'cardnumber', 'ccnumber', 'pan'), {'strategy': 'digits', 'keepTrailing': 4}, 'name suggests a card number'),
-    (('iban', 'accountnumber', 'routingnumber', 'bankaccount', 'sortcode'), {'strategy': 'digits'}, 'name suggests a bank account'),
-    (('phone', 'phonenumber', 'mobile', 'cell', 'fax', 'telephone', 'tel'), {'strategy': 'digits'}, 'name suggests a phone number'),
-    (('firstname', 'givenname', 'forename'), {'strategy': 'fakeFirstName'}, 'name suggests a first name'),
-    (('lastname', 'surname', 'familyname'), {'strategy': 'fakeLastName'}, 'name suggests a last name'),
-    (('fullname', 'contactname', 'customername', 'displayname', 'personname', 'employeename'), {'strategy': 'fakeName'},
-     'name suggests a person\'s name'),
-    (('username', 'login', 'handle', 'screenname'), {'strategy': 'key'}, 'name suggests a user name; key keeps it unique'),
-    (('company', 'companyname', 'employer', 'organization', 'organisation'), {'strategy': 'fakeCompany'}, 'name suggests a company'),
-    (('ip', 'ipaddress', 'ipaddr'), {'strategy': 'hash'}, 'name suggests an IP address'),
-    (('street', 'address', 'addressline', 'addr', 'line1', 'line2', 'streetaddress'), {'strategy': 'fakeStreetAddress'},
-     'name suggests a street address'),
-    (('city', 'town'), {'strategy': 'fakeCity'}, 'name suggests a city'),
-    (('zip', 'zipcode', 'postal', 'postalcode', 'postcode'), {'strategy': 'digits'}, 'name suggests a postal code'),
-    (('birth', 'birthdate', 'dob', 'birthday', 'dateofbirth'), {'strategy': 'dateShift', 'maxDays': 30}, 'name suggests a date of birth'),
-    (('salary', 'income', 'wage', 'wages', 'compensation', 'bonus'), {'strategy': 'number', 'variance': 0.1},
-     'name suggests compensation'),
-    (('latitude', 'longitude', 'lat', 'lng', 'lon'), {'strategy': 'number', 'variance': 0.01}, 'name suggests a coordinate'),
-    (('gender', 'sex', 'race', 'ethnicity', 'religion', 'nationality'), {'strategy': 'shuffle'},
-     'name suggests a sensitive attribute; shuffle keeps the distribution but is not anonymization'),
-    (('note', 'notes', 'comment', 'comments', 'description', 'remarks', 'memo', 'bio', 'message', 'body', 'freetext'),
-     {'strategy': 'null'}, 'name suggests free text, which can hold PII anywhere; redact keeps the text but only removes identifiers with a known shape'),
+DISCOVERY_FILE = 'discovery.yaml'
+
+
+class NameRule(NamedTuple):
+    """Column-name words, any of which suggests `policy`. `name` is a built-in
+    rule's, for leaving it out; None for one of your own.
+    """
+
+    name: Optional[str]
+    words: FrozenSet[str]
+    policy: Dict[str, Any]
+    reason: str
+
+
+class ValueRule(NamedTuple):
+    """A test enough sampled values must pass for `policy` to apply."""
+
+    name: Optional[str]
+    test: Callable[[str], bool]
+    policy: Dict[str, Any]
+    reason: str
+
+
+class DiscoveryRules(NamedTuple):
+    """The rules in the order they're tried: your own, then the built-in ones
+    left in. The first that matches wins.
+    """
+
+    names: Tuple[NameRule, ...]
+    values: Tuple[ValueRule, ...]
+    personalTables: FrozenSet[str]
+
+    def matchName(self, column: str) -> Optional[NameRule]:
+
+        words = nameWords(column)
+
+        return next((rule for rule in self.names if words & rule.words), None)
+
+
+def nameWords(name: str) -> FrozenSet[str]:
+    """A name's words, lower-cased, plus the whole name run together:
+    `first_name`, `firstName` and `FIRSTNAME` all give `firstname`.
+    """
+
+    split = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name)
+    words = [word for word in re.split(r'[^a-z0-9]+', split.lower()) if word]
+
+    return frozenset(words) | {''.join(words)}
+
+
+def ruleWord(word: str) -> str:
+    """A rule's word as names are matched against it: run together, so a rule
+    written `first_name` matches a `FirstName` column too.
+    """
+
+    return max(nameWords(word), key=len)
+
+
+BUILTIN_RULES = DiscoveryRules(
+    names=tuple(NameRule(name, frozenset(words), policy, reason) for name, words, policy, reason in builtinDiscovery.NAME_RULES),
+    values=tuple(ValueRule(name, test, policy, reason) for name, test, policy, reason in builtinDiscovery.VALUE_RULES),
+    personalTables=builtinDiscovery.PERSONAL_TABLE_WORDS,
     )
+
+
+def _fullMatch(pattern: str) -> Callable[[str], bool]:
+
+    compiled = re.compile(pattern)
+
+    return lambda text: compiled.fullmatch(text) is not None
+
+
+def discoveryRules(rulesFile: Optional[DiscoveryRulesFile] = None) -> DiscoveryRules:
+    """The rules to discover with: a discovery.yaml's own, ahead of the
+    built-in ones it leaves in. The built-in ones alone without a file.
+    """
+
+    if rulesFile is None:
+        return BUILTIN_RULES
+
+    excluded = set(rulesFile.exclude)
+    keeps = (lambda name: name not in excluded) if rulesFile.builtins else (lambda name: False)
+
+    return DiscoveryRules(
+        names=tuple(NameRule(None, frozenset(ruleWord(word) for word in rule.words), dict(rule.policy),
+                             rule.reason or 'name matches a rule in {}'.format(DISCOVERY_FILE)) for rule in rulesFile.names)
+              + tuple(rule for rule in BUILTIN_RULES.names if keeps(rule.name)),
+        values=tuple(ValueRule(None, _fullMatch(rule.pattern), dict(rule.policy),
+                               rule.reason or 'sampled values match /{}/ from {}'.format(rule.pattern, DISCOVERY_FILE))
+                     for rule in rulesFile.values)
+               + tuple(rule for rule in BUILTIN_RULES.values if keeps(rule.name)),
+        personalTables=frozenset(ruleWord(word) for word in rulesFile.personalTables)
+                       | (BUILTIN_RULES.personalTables if rulesFile.builtins else frozenset()),
+        )
 
 
 class Suggestion(NamedTuple):
@@ -80,27 +134,17 @@ class TableProposal(NamedTuple):
     columns: List[Suggestion]
 
 
-def nameWords(name: str) -> Set[str]:
-    """A column name's words, lower-cased, plus the whole name run together:
-    `first_name`, `firstName` and `FIRSTNAME` all give `firstname`.
-    """
-
-    split = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name)
-    words = [word for word in re.split(r'[^a-z0-9]+', split.lower()) if word]
-
-    return set(words) | {''.join(words)}
-
-
-def personalDataHint(column: str) -> Optional[str]:
+def personalDataHint(column: str, rules: DiscoveryRules = BUILTIN_RULES) -> Optional[str]:
     """Why a column's name alone suggests personal data, or None.
 
     The same name rules discovery proposes policies from, without the sampled
-    values -- what `audit` uses to question a column that is kept as it is.
+    values -- what `audit` uses to question a column that is kept as it is. A
+    rule of your own that says `keep` answers None.
     """
 
-    words = nameWords(column)
+    rule = rules.matchName(column)
 
-    return next((reason for ruleWords, policy, reason in NAME_RULES if policy['strategy'] != 'keep' and words & set(ruleWords)), None)
+    return rule.reason if rule is not None and rule.policy['strategy'] != 'keep' else None
 
 
 def _inferCategory(values: Sequence[Any]) -> Optional[ColumnCategory]:
@@ -120,52 +164,35 @@ def _inferCategory(values: Sequence[Any]) -> Optional[ColumnCategory]:
     return None
 
 
-def _luhn(digits: str) -> bool:
-
-    total = 0
-    for position, character in enumerate(reversed(digits)):
-        digit = int(character)
-        if position % 2:
-            digit = digit * 2 - 9 if digit > 4 else digit * 2
-        total += digit
-
-    return total % 10 == 0
-
-
-def _share(values: Sequence[str], test: Any) -> float:
+def _share(values: Sequence[str], test: Callable[[str], bool]) -> float:
 
     return sum(1 for value in values if test(value)) / len(values) if values else 0.0
 
 
-def _classifyValues(texts: Sequence[str]) -> Optional[Tuple[Dict[str, Any], str]]:
-    """What sampled text looks like, if it looks like anything in particular."""
+def _classifyValues(values: Sequence[Any], category: Optional[ColumnCategory], rules: DiscoveryRules) -> Optional[Tuple[Dict[str, Any], str]]:
+    """What sampled values look like, if they look like anything in particular.
 
-    if not texts:
+    Built-in rules read text columns only. Your own read integers too, as
+    their digits -- a tax number is often stored as one -- where the policy
+    suits the column.
+    """
+
+    present = [value for value in values if value is not None]
+    if not present:
         return None
 
-    stripped = [text.strip() for text in texts]
+    texts = [value.strip() for value in present] if all(isinstance(value, str) for value in present) else []
+    digits = [str(value) for value in present] if all(isinstance(value, (str, int)) and not isinstance(value, bool) for value in present) else []
 
-    def isCard(text: str) -> bool:
-        digits = re.sub(r'\D', '', text)
-        return bool(CARD.match(text)) and 13 <= len(digits) <= 19 and _luhn(digits)
+    for rule in rules.values:
+        if rule.name is None:
+            candidates = [text.strip() for text in digits]
+            if candidates and _share(candidates, rule.test) >= VALUE_MATCH_THRESHOLD and _compatible(rule.policy['strategy'], values, category):
+                return dict(rule.policy), rule.reason
+        elif texts and _share(texts, rule.test) >= VALUE_MATCH_THRESHOLD:
+            return dict(rule.policy), rule.reason
 
-    checks = (
-        (lambda text: bool(EMAIL.match(text)), {'strategy': 'email'}, 'sampled values look like email addresses'),
-        (lambda text: bool(NATIONAL_ID.match(text)), {'strategy': 'key', 'charset': 'digits'}, 'sampled values look like national identifiers'),
-        (isCard, {'strategy': 'digits', 'keepTrailing': 4}, 'sampled values look like card numbers'),
-        (lambda text: bool(IPV4.match(text)), {'strategy': 'hash'}, 'sampled values look like IP addresses'),
-        (lambda text: bool(UUID_TEXT.match(text)), {'strategy': 'keep'}, 'sampled values are UUIDs, usually surrogate keys -- review'),
-        # Before phone numbers, which ISO dates would otherwise pass for.
-        (_isIsoDate, {'strategy': 'keep'}, 'sampled values are dates -- review whether they identify anyone'),
-        (lambda text: bool(PHONE.match(text)) and len(re.sub(r'\D', '', text)) >= 7 and not text.isdigit(), {'strategy': 'digits'},
-         'sampled values look like phone numbers'),
-        )
-
-    for test, policy, reason in checks:
-        if _share(stripped, test) >= VALUE_MATCH_THRESHOLD:
-            return dict(policy), reason
-
-    if sum(len(text) for text in texts) / len(texts) > FREE_TEXT_AVERAGE_LENGTH:
+    if texts and sum(len(text) for text in present) / len(present) > FREE_TEXT_AVERAGE_LENGTH:
         return {'strategy': 'null'}, 'sampled values are long free text, which can hold PII anywhere'
 
     return None
@@ -190,16 +217,6 @@ def _isNumeric(values: Sequence[Any], category: Optional[ColumnCategory]) -> boo
 TEXT_STRATEGIES = {'email', 'hash', 'fakeFirstName', 'fakeLastName', 'fakeName', 'fakeCity', 'fakeCompany', 'fakeStreetAddress'}
 
 
-def _isIsoDate(text: str) -> bool:
-
-    try:
-        datetime.datetime.fromisoformat(text.strip())
-    except ValueError:
-        return False
-
-    return True
-
-
 def _compatible(strategy: str, values: Sequence[Any], category: Optional[ColumnCategory]) -> bool:
     """Whether a name-based guess fits what the column holds (`token_count` is
     not a credential). With nothing to contradict it, the name stands.
@@ -216,7 +233,7 @@ def _compatible(strategy: str, values: Sequence[Any], category: Optional[ColumnC
         return kind == ColumnCategory.NUMBER
     if strategy == 'dateShift':
         return kind == ColumnCategory.DATE or (kind != ColumnCategory.NUMBER and bool(present)
-                                                and all(isinstance(value, str) and _isIsoDate(value) for value in present))
+                                                and all(isinstance(value, str) and isIsoDate(value) for value in present))
     if strategy in ('digits', 'key'):
         return kind != ColumnCategory.DATE and all(
             isinstance(value, (str, int)) and not isinstance(value, bool)
@@ -227,12 +244,13 @@ def _compatible(strategy: str, values: Sequence[Any], category: Optional[ColumnC
 
 
 def suggestColumn(table: str, column: str, category: Optional[ColumnCategory], values: Sequence[Any],
-                  keyReference: Optional[Tuple[str, bool]] = None) -> Suggestion:
+                  keyReference: Optional[Tuple[str, bool]] = None, rules: DiscoveryRules = BUILTIN_RULES) -> Suggestion:
     """One column's proposed policy.
 
     `keyReference`, for a key column, is the domain it shares with the other
     end and whether that end is numeric. Keys are decided first, since both
-    ends must agree: `keep` for a numeric surrogate, `key` for text.
+    ends must agree: `keep` for a numeric surrogate, `key` for text. Then the
+    name rules, then the value rules, each in `rules`' order.
     """
 
     if keyReference is not None:
@@ -242,18 +260,16 @@ def suggestColumn(table: str, column: str, category: Optional[ColumnCategory], v
         return Suggestion(column, {'strategy': 'key', 'domain': domain}, 'text key; masked one-to-one so references still match')
 
     words = nameWords(column)
-    for ruleWords, policy, reason in NAME_RULES:
-        if words & set(ruleWords) and _compatible(policy['strategy'], values, category):
-            return Suggestion(column, dict(policy), reason)
+    for rule in rules.names:
+        if words & rule.words and _compatible(rule.policy['strategy'], values, category):
+            return Suggestion(column, dict(rule.policy), rule.reason)
 
-    if 'name' in words and nameWords(table) & PERSONAL_TABLE_WORDS and _compatible('fakeName', values, category):
+    if 'name' in words and nameWords(table) & rules.personalTables and _compatible('fakeName', values, category):
         return Suggestion(column, {'strategy': 'fakeName'}, 'a name column in a table that looks like it holds people')
 
-    texts = [value for value in values if isinstance(value, str)]
-    if texts and len(texts) == len([value for value in values if value is not None]):
-        classified = _classifyValues(texts)
-        if classified is not None:
-            return Suggestion(column, classified[0], classified[1])
+    classified = _classifyValues(values, category, rules)
+    if classified is not None:
+        return Suggestion(column, classified[0], classified[1])
 
     if 'name' in words:
         return Suggestion(column, {'strategy': 'keep'}, 'a name column -- review whether it names a person')
@@ -295,11 +311,12 @@ def keyReferences(table: str, columns: Sequence[str], primaryKey: Sequence[str],
 
 
 def proposeTable(database: Any, table: str, sampleSize: int = DEFAULT_SAMPLE_SIZE, foreignKeys: Optional[List[ForeignKey]] = None,
-                 primaryKeys: Optional[Mapping[str, Sequence[str]]] = None) -> TableProposal:
+                 primaryKeys: Optional[Mapping[str, Sequence[str]]] = None, rules: DiscoveryRules = BUILTIN_RULES) -> TableProposal:
     """Samples `table` and suggests a policy for each of its columns.
 
     `database` is a bauta Database. foreignKeys and primaryKeys can be
     passed in when proposing several tables, so the schema is read once.
+    `rules` is discoveryRules(), with a discovery.yaml's rules or without.
     """
 
     columns, rows = database.sample('SELECT * FROM {}'.format(table), sampleSize)
@@ -326,7 +343,7 @@ def proposeTable(database: Any, table: str, sampleSize: int = DEFAULT_SAMPLE_SIZ
         values = [row[index] for row in rows]
         category = database.dialect.columnCategory(types[index]) if index < len(types) else None
         keyReference = (domains[column], _isNumeric(values, category)) if column in domains else None
-        suggestions.append(suggestColumn(table, column, category, values, keyReference))
+        suggestions.append(suggestColumn(table, column, category, values, keyReference, rules))
 
     return TableProposal(table=table, columns=suggestions)
 

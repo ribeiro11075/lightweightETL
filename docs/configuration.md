@@ -1,6 +1,6 @@
 # Configuration
 
-The field reference. For *why* things behave as they do, see [design.md](design.md). `bauta init` writes a complete set of these files, validated on every test run — editing them is the fastest start.
+The field reference. For *why* things behave as they do, see [design.md](design.md). `example/starter/configuration/` is a complete set of these files, validated on every test run — copying it is the fastest start.
 
 - [Where configuration is found](#where-configuration-is-found)
 - [Credentials](#credentials)
@@ -20,16 +20,16 @@ The CLI looks for a directory holding `database.yaml` and `jobs.yaml`, in this o
 
 `--jobs FILE` and `--databases FILE` override either file individually.
 
-Run state (last-run times and watermarks) goes where `jobs.yaml`'s [`memory`](#file-level) says, or `memory.yaml` beside `jobs.yaml` without it; `--memory FILE` overrides both. Either way it's found relative to the configuration, not the working directory, so a cron entry and a shell started elsewhere share it. See [operations.md](operations.md#run-state).
+Run state (last-run times and watermarks) goes where `jobs.yaml`'s [`memory`](#file-level) says, or `memory.yaml` beside `jobs.yaml` without it. Run history and the masking manifest go where its `history` and `manifest` say, or nowhere. Each can be a file, found relative to `jobs.yaml` rather than the working directory so a cron entry and a shell started elsewhere share it, or a table. A command-line flag overrides each. See [operations.md](operations.md#run-state).
 
 A layout that keeps what you write apart from what runs write:
 
 ```
-configuration/    database.yaml, jobs.yaml (with memory: ../transaction/memory.yaml)
-transaction/      memory.yaml and its locks; point --log, --manifest and --history here too
+configuration/    database.yaml, jobs.yaml (with memory: ../transaction/memory.yaml), and discovery.yaml if you have one
+transaction/      memory.yaml and its locks; history and the manifest belong here too
 ```
 
-`bauta init` sets them up this way. Logs, manifests and history are only written where you name them, relative to the working directory like any other command-line path.
+`example/starter/configuration/` is set up this way. Logs are only written where `--log` names, relative to the working directory like any other command-line path.
 
 
 ## Credentials
@@ -107,7 +107,7 @@ A list runs as written; a single string is split the way a shell would split it,
 
 ### Driver options and TLS
 
-`options` is handed to the driver as it is, so it accepts whatever that driver does: `psycopg2` (any libpq parameter), `mysql.connector`, `oracledb` and `pymssql`. An option that repeats a field above (`host`, say) is refused by `validate`; set the field instead. Values are read from the environment like any other, and are left out of logs.
+`options` is handed to the driver as it is, so it accepts whatever that driver does: `psycopg` (any libpq parameter), `mysql.connector`, `oracledb` and `pymssql`. An option that repeats a field above (`host`, say) is refused by `validate`; set the field instead. Values are read from the environment like any other, and are left out of logs.
 
 Encrypting the connection is the common reason to use it:
 
@@ -156,8 +156,26 @@ jobs:
 | --- | --- | --- |
 | `workers` | required | Worker processes to run jobs concurrently, at least 1. |
 | `cycleSleepSeconds` | optional, `0.5` | Pause between cycles under `--forever`. |
-| `memory` | optional, `memory.yaml` | Where the CLI keeps run state, relative to this file: `../transaction/memory.yaml` keeps it out of the configuration directory. `--memory FILE` overrides it; `validate` prints where it resolves. |
+| `memory` | optional, `memory.yaml` | Where the CLI keeps run state: a file relative to this one (`../transaction/memory.yaml` keeps it out of the configuration directory), or a [table](#tables). `--memory FILE` or `--memory-database ALIAS` overrides it. |
+| `history` | optional, none | Where `run` records each job's outcome after every cycle, and `bauta history` reads it: a JSON-lines file relative to this one, or a [table](#tables). `--history FILE` or `--history-database ALIAS` overrides it. See [run history](operations.md#run-history). |
+| `manifest` | optional, none | Where `run` writes its [masking manifest](masking.md#the-manifest), and `verify-manifest` reads it: a file relative to this one, replaced each run, or a [table](#tables), which keeps every run's. `--manifest FILE` or `--manifest-database ALIAS` overrides it. |
 | `jobs` | required | A map of job name to job definition. |
+
+`validate` prints where all three resolve.
+
+#### Tables
+
+In place of a file path, `memory`, `history` and `manifest` take a table in one of `database.yaml`'s aliases:
+
+```yaml
+memory:
+  database: warehouse
+history:
+  database: warehouse
+  table: etl.run_history
+```
+
+`table` defaults to `bauta_memory`, `bauta_history` or `bauta_manifest`, and `--memory-table`, `--history-table` or `--manifest-table` overrides it. Each table must exist first; [operations.md](operations.md#run-state) has their definitions.
 
 ### Scheduling
 

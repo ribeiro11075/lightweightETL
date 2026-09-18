@@ -211,6 +211,30 @@ def test_database_history_and_key_fingerprints_work_on_every_server(server):
     assert set(memory.read()) == {'a'}
 
 
+def test_a_manifest_stored_in_a_table_comes_back_intact_on_every_server(server):
+    """Stored in pieces of the table's VARCHAR, which every dialect has to hand
+    back byte for byte -- a piece that ends in spaces included -- or the
+    digest stops matching.
+    """
+    from bauta.masking import sealManifest, verifyManifest
+    from bauta.reporting import DATABASE_MANIFEST_SCHEMA, MANIFEST_PART_LENGTH, DatabaseManifests
+
+    _, database, table = server
+    manifests = DatabaseManifests(database.connectionSettings, table=table(DATABASE_MANIFEST_SCHEMA.split('bauta_manifest', 1)[1]))
+    columns = [{'column': 'c{}'.format(index), 'strategy': 'key', 'note': 'é ' * 5} for index in range(60)]
+    first = sealManifest({'jobs': [{'job': 'first', 'columns': columns}]}, signingKey='an-integration-signing-key')
+    second = sealManifest({'jobs': [{'job': 'second', 'columns': columns[:1]}]})
+
+    manifests.write(first, 'run-1')
+    manifests.write(second, 'run-2')
+
+    assert len(database.query('SELECT part FROM {} WHERE run_id = \'run-1\''.format(manifests.table))) > 2
+    assert manifests.read('run-1') == ('run-1', first)
+    assert manifests.read() == ('run-2', second)
+    assert verifyManifest(manifests.read('run-1')[1], signingKey='an-integration-signing-key').signatureValid
+    assert MANIFEST_PART_LENGTH == 2000
+
+
 def test_a_reserved_word_column_loads_and_upserts(server):
     """`rank` and `order` are reserved on at least one server each; the column
     is created as `bauta schema` would, and loaded through both paths.

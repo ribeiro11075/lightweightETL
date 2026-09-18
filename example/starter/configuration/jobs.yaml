@@ -3,9 +3,15 @@
 # database.yaml beside this file.
 workers: 2
 cycleSleepSeconds: 0.5
-# Run state (last runs, watermarks), relative to this file: kept out of the
-# configuration, in a transaction/ folder beside it.
+# What runs write, relative to this file: kept out of the configuration, in a
+# transaction/ folder beside it. Run state (last runs, watermarks); a line per
+# job per cycle, for `bauta history`; and a sealed record of what was masked,
+# for `bauta verify-manifest`. Each can be a table instead:
+#   history:
+#     database: targetDb
 memory: ../transaction/memory.yaml
+history: ../transaction/history.jsonl
+manifest: ../transaction/manifest.json
 jobs:
   loadTable1:
     active: true

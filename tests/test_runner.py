@@ -1322,7 +1322,7 @@ def test_each_cycle_is_reported_to_on_cycle_and_its_failures_are_contained(tmp_p
 
     def report(result: RunResult) -> None:
         seen.append(result)
-        raise RuntimeError('the metrics host is down')
+        raise RuntimeError('the webhook host is down')
 
     result = runDataJobs(jobsFile=jobsFile, databaseConfiguration=sqliteDatabase, memory=FileMemory(tmp_path / 'memory.yaml'), onCycle=report)
 

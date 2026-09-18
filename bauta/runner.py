@@ -719,7 +719,7 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
     one pass, or with runForever until SIGINT or SIGTERM. See "Single runs,
     not a daemon" in docs/design.md.
 
-    `onCycle` receives each cycle's RunResult, for history, metrics or alerts;
+    `onCycle` receives each cycle's RunResult, for history or alerts;
     an exception from it is logged, not raised. A masked upsert job whose key
     changed stops the run before it starts, unless acceptKeyChange.
 

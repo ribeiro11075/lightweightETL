@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 from bauta.cli import _buildParser
-from bauta.configuration import Configuration, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, MaskingConfig, expandEnvironmentVariables
+from bauta.configuration import (Configuration, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, DiscoveryRulesFile, MaskingConfig, NameRuleConfig,
+                                 ValueRuleConfig, expandEnvironmentVariables)
 from bauta.masking import STRATEGIES
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,7 +53,8 @@ MASKING_DOC = ROOT / 'docs' / 'masking.md'
 
 
 @pytest.mark.parametrize('model,document', [(DatabaseConnectionConfig, CONFIGURATION_DOC), (DataJobConfig, CONFIGURATION_DOC),
-                                            (DataJobsFile, CONFIGURATION_DOC), (MaskingConfig, MASKING_DOC)],
+                                            (DataJobsFile, CONFIGURATION_DOC), (MaskingConfig, MASKING_DOC),
+                                            (DiscoveryRulesFile, MASKING_DOC), (NameRuleConfig, MASKING_DOC), (ValueRuleConfig, MASKING_DOC)],
                          ids=lambda value: getattr(value, '__name__', None) or value.name)
 def test_every_configuration_field_is_documented(model, document):
     """A field added to a model without a line in the reference is the most
@@ -63,6 +65,15 @@ def test_every_configuration_field_is_documented(model, document):
     undocumented = [name for name in model.model_fields if '`{}`'.format(name) not in reference]
 
     assert not undocumented, '{} field(s) missing from {}: {}'.format(model.__name__, document.name, ', '.join(undocumented))
+
+
+def test_every_built_in_discovery_rule_is_documented():
+    """`exclude` takes these names, so each must be findable."""
+    from bauta.builtinDiscovery import RULE_NAMES
+
+    reference = MASKING_DOC.read_text()
+
+    assert not [name for name in sorted(RULE_NAMES) if '`{}`'.format(name) not in reference]
 
 
 def test_every_masking_strategy_and_option_is_documented():

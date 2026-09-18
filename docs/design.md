@@ -27,7 +27,7 @@ Streaming is per-driver, because `fetchmany()` bounds nothing if the driver has 
 | oracle | `arraysize` tuned to the chunk |
 | mssql, sqlite | plain — both already stream |
 
-Loads are written a chunk at a time too, each chunk in its own transaction. The MySQL, MariaDB and Oracle drivers already send a chunk in a few round trips; psycopg2 and pymssql send one statement per row, so those two get a bulk path:
+Loads are written a chunk at a time too, each chunk in its own transaction. The MySQL, MariaDB and Oracle drivers already send a chunk in a few round trips; psycopg and pymssql send one statement per row, so those two get a bulk path:
 
 - **PostgreSQL uses `COPY`**, about 100 times faster on 50,000 rows. An upsert copies into a temporary table and merges it with one `INSERT ... ON CONFLICT`. A chunk holding a value `COPY` can't spell safely (an array, a JSON object, an interval) goes row by row instead.
 - **SQL Server uses multi-row statements** of up to a thousand rows: about 6 times faster for inserts and 28 for upserts.
@@ -181,7 +181,7 @@ Masked data jobs retry like any other data job. The watermark is read again on e
 
 ## Structured logs
 
-`--log-format json` writes one object per line, for a log collector (for history, metrics and alerts, see [operations.md](operations.md)):
+`--log-format json` writes one object per line, for a log collector (for history and alerts, see [operations.md](operations.md)):
 
 ```json
 {"timestamp": "2026-09-16 01:00:12.514", "level": "INFO", "logger": "bauta", "message": "Completed loadOrders (4200 row(s))",

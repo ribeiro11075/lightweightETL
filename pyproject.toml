@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bauta"
-version = "0.1.1"
+version = "0.1.2"
 description = "Safe, realistic copies of production across databases: masking, subsets, synthetic data, and the ETL to move them"
 readme = "README.md"
 license = "MIT"
@@ -50,7 +50,9 @@ bauta = "bauta.cli:main"
 
 [project.optional-dependencies]
 mysql = ["mysql-connector-python>=8.4"]
-postgresql = ["psycopg2>=2.9.6"]
+# From 3.2.10, which publishes wheels for every Python this supports, so nothing
+# compiles; 3.2.0's binary extra asks for a version that was never released
+postgresql = ["psycopg[binary]>=3.2.10"]
 oracle = ["oracledb>=2.5"]
 mssql = ["pymssql>=2.3.5"]
 # MariaDB speaks MySQL's wire protocol, and MariaDBDialect reuses MySQLDialect's
@@ -65,14 +67,14 @@ all = ["bauta[mysql,postgresql,oracle,mssql,mariadb,sqlite,fpe]"]
 # The native masker, pinned to this exact version rather than a range: the two
 # must compute identical masks, and masking.py ignores any other version. Left
 # out of `all`, which would otherwise need Rust wherever no wheel is published.
-native = ["bauta-rs==0.1.1"]
+native = ["bauta-rs==0.1.2"]
 dev = ["pytest==9.1.1", "mypy==2.3.1", "types-PyYAML==6.0.12.20260815", "build==1.6.1", "twine==7.0.0"]
 
 [tool.setuptools]
 packages = ["bauta"]
 
 [tool.setuptools.package-data]
-bauta = ["py.typed", "starter/*.yaml"]
+bauta = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

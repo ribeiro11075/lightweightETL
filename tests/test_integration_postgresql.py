@@ -4,16 +4,13 @@ See test_integration_mysql.py for the rationale; this is the same suite against
 the other dialect whose swap()/upsert() SQL had never been proven against a real
 server before -- in particular, PostgreSQLDialect.swapQueries sends three
 semicolon-chained statements in a single cursor.execute() call, relying on
-psycopg2's simple-query protocol to run them all -- an assumption this file
+psycopg's simple-query protocol to run them all -- an assumption this file
 actually tests rather than just asserting the SQL text looks right.
 
 Requires a PostgreSQL server reachable at the settings below (see
-docker-compose.yml: `docker compose up -d postgresql`) and psycopg2 importable.
-The `postgresql` extra pins the source-build `psycopg2` package (the upstream-
-recommended choice for production); if you don't have PostgreSQL's build
-toolchain (pg_config) installed, `pip install psycopg2-binary` instead purely to
-run this suite -- see https://www.psycopg.org/docs/install.html. Skipped
-automatically, with a clear reason, if no driver or no server is available.
+docker-compose.yml: `docker compose up -d postgresql`) and psycopg importable
+(`pip install -e ".[postgresql]"`). Skipped automatically, with a clear
+reason, if no driver or no server is available.
 Excluded from the default `pytest` run (see pyproject.toml's addopts) -- run
 explicitly with `pytest -m integration`.
 """
@@ -21,7 +18,7 @@ import uuid
 
 import pytest
 
-pytest.importorskip('psycopg2', reason='psycopg2 is not installed (pip install psycopg2-binary, or pip install -e ".[postgresql]")')
+pytest.importorskip('psycopg', reason='psycopg is not installed (pip install -e ".[postgresql]")')
 
 from bauta.memory import DatabaseMemory
 from bauta.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
@@ -123,7 +120,7 @@ def test_upsert_from_stage(liveDatabase, peopleTable):
 def test_swap_replaces_target_with_stage_contents(liveDatabase, peopleTable):
     """The interesting case for postgres specifically: swapQueries returns one
     string with three semicolon-chained ALTER TABLE statements, sent through a
-    single cursor.execute() call -- this is the first real proof that psycopg2's
+    single cursor.execute() call -- this is the first real proof that psycopg's
     simple-query protocol actually runs all three rather than just the first.
     """
     stageTable = peopleTable + '_stage'
@@ -251,7 +248,7 @@ def test_stream_returns_real_columns_and_bounded_chunks(liveDatabase, peopleTabl
     thing DatabaseDialect cannot fake: a plain fetchmany() bounds how many rows
     Python builds objects for, but says nothing about how many the driver already
     pulled off the socket. Only a real server proves streamingCursor() actually
-    got a non-buffering cursor -- psycopg2 needs a *named* (server-side) cursor,
+    got a non-buffering cursor -- psycopg needs a *named* (server-side) cursor,
     and mysql.connector needs buffered=False, the inverse of what connect() uses.
 
     The chunk sizes prove fetchmany is bounding the walk; the reassembled rows
@@ -271,7 +268,7 @@ def test_stream_returns_real_columns_and_bounded_chunks(liveDatabase, peopleTabl
 def test_stream_of_an_empty_table_yields_no_chunks_but_still_reports_columns(liveDatabase, peopleTable):
     """cursor.description has to be populated before any row is fetched -- the
     reason stream() pulls its first chunk eagerly rather than describing off a
-    bare execute(), which psycopg2's server-side cursors in particular do not
+    bare execute(), which psycopg's server-side cursors in particular do not
     reliably support.
     """
     columns, chunks = liveDatabase.stream(query='SELECT id, name, amount FROM {}'.format(peopleTable), chunkSize=100)

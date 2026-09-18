@@ -159,7 +159,7 @@ class Database:
         """Runs `query` and returns (columnNames, chunks), chunks being a
         RowStream to iterate and, if it isn't read to the end, to close.
 
-        The first chunk is fetched eagerly, since psycopg2's server-side cursors
+        The first chunk is fetched eagerly, since psycopg's server-side cursors
         only describe their columns once rows are fetched. Nothing here commits,
         which would invalidate such a cursor.
 

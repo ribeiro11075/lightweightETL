@@ -145,3 +145,22 @@ def test_an_integer_key_named_with_a_reserved_word_continues(database):
     _fill(database, ('ranks', 3), ('ranks', 3))
 
     assert [row[0] for row in database.query('SELECT "order" FROM ranks ORDER BY 1')] == list(range(1, 7))
+
+
+def test_your_own_rules_choose_realistic_values_too(tmp_path):
+    from bauta.configuration import Configuration
+    from bauta.discovery import discoveryRules
+
+    path = tmp_path / 'clientes.db'
+    connection = sqlite3.connect(path)
+    connection.execute('CREATE TABLE clientes (id INTEGER PRIMARY KEY, nome VARCHAR(40), phone VARCHAR(20))')
+    connection.close()
+    rules = discoveryRules(Configuration.validateDiscoveryRules({'names': [{'words': ['nome'], 'policy': 'fakeName'},
+                                                                           {'words': ['phone'], 'policy': 'keep'}]}))
+
+    with Database(DatabaseConnectionConfig(type='sqlite', database=str(path))) as opened:
+        _, _, builtIn, _ = planTable(opened, 'clientes', 5)
+        _, _, yours, _ = planTable(opened, 'clientes', 5, rules=rules)
+
+    assert {plan.column: plan.source for plan in builtIn} == {'id': 'primary key', 'nome': 'type', 'phone': 'name'}
+    assert {plan.column: plan.source for plan in yours} == {'id': 'primary key', 'nome': 'name', 'phone': 'type'}
