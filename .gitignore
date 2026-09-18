@@ -27,3 +27,6 @@ env/
 # example runner output (see example/memory/.gitkeep)
 example/memory/*
 !example/memory/.gitkeep
+
+# Rust build artifacts for the optional native masker
+mask-rs/target/

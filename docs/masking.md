@@ -170,9 +170,80 @@ If `mask()` depends on nothing but the value, set `CACHEABLE = True` on the clas
 
 ### Speed
 
-Masking is pure Python, a column at a time. `hash`, `email`, `digits` and the `fake*` strategies manage hundreds of thousands of values a second on one core, and `key` and `fpe` a few tens of thousands, since each value takes several rounds of HMAC or AES.
+Masking runs a column at a time, in pure Python or — where the optional
+`understudy-mask` extension is installed — in a native masker that computes the
+same masks several times faster. See [the native masker](#the-native-masker).
 
-Those six strategies remember what they've masked, up to 16,384 values per column: text of up to 256 characters, integers and UUIDs, which are the types whose equal values always mask the same way. A foreign key or a low-cardinality column repeats values constantly, so this makes them many times faster; a column of unique values, such as a primary key, gains nothing. A column's cache holds a few megabytes at most, and nothing that isn't already in the job's memory.
+**The policy is what decides throughput, by about sevenfold.** One million rows
+of six masked columns, with the extension, on one core:
+
+| Policy | Rows a second |
+| --- | --- |
+| `hash`, `email` and `keep` only | 310,000 |
+| two `key` columns, `email`, two `hash`, `digits` | 113,000 |
+| two `fpe` columns, four cheap ones | 86,000 |
+| five `key` columns | 43,000 |
+
+`key` costs the most because it is the only strategy that has to be a
+*permutation*: it runs a Feistel network per value, where `hash` takes one
+digest. Roughly thirty times the work. Where a column doesn't have to stay
+one-to-one — where nothing joins on it — `hash` does the same hiding far
+cheaper.
+
+`key`'s own cost also varies about threefold with the *shape* of the value,
+because the permutation is cycle-walked into range and some shapes waste more of
+the walk than others. A twelve-digit identifier masks in 3.5 µs and an
+eleven-digit one in 7.0 µs. Nothing to act on; just don't expect two similar
+columns to cost the same.
+
+Six strategies remember what they've masked, up to 16,384 values per column:
+text of up to 256 characters, integers and UUIDs, which are the types whose
+equal values always mask the same way. A foreign key or a low-cardinality column
+repeats values constantly, so this makes them many times faster; a column of
+unique values, such as a primary key, gains nothing. A column's cache holds a
+few megabytes at most, and nothing that isn't already in the job's memory. The
+native masker deduplicates within each chunk instead.
+
+### The native masker
+
+`understudy-mask` is an optional extension that masks in Rust. It is not
+required, it changes no result, and everything works without it.
+
+It lives in `mask-rs/` and is not published yet. Until it is, build and install
+it from the repository:
+
+```
+cd mask-rs/py && maturin build --release
+pip install target/wheels/understudy_mask-*.whl
+```
+
+It builds an abi3 wheel, so one build covers every supported Python.
+
+It covers `key`, `fpe`, `hash`, `email` and `digits`, which is where the time
+goes. Everything else, and every custom strategy, stays in Python. So do
+individual values it doesn't handle — `Decimal`, `UUID`, dates, and text outside
+ASCII — which pass back to the Python implementation one at a time, so a value
+that Python would refuse still refuses, with the same message.
+
+Measured on one million rows of six masked columns, SQLite to SQLite:
+
+| | Rows a second |
+| --- | --- |
+| Python | 21,000 |
+| `understudy-mask` | 93,000 |
+| `understudy-mask`, overlapped with the database | 112,000 |
+
+Ten million rows of the same shape take 99 seconds, holding 80 MB.
+
+**The two implementations compute identical masks**, which is a release
+requirement rather than an aspiration: a difference would not be a wrong answer
+but a silently changed key, and every join between an old copy and a new one
+would stop matching. See [two implementations](security.md#two-implementations)
+for how that is held.
+
+`UNDERSTUDY_NATIVE=0` ignores an installed extension and masks in Python. Use it
+to rule the extension out while diagnosing a difference. The masking manifest
+records which one ran, as `maskedBy`.
 
 
 ## Domains: keeping joins intact

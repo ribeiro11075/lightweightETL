@@ -21,6 +21,55 @@ mypy
 `tests/conftest.py` stubs `oracledb` and `psycopg2` only when they aren't installed, so the default run needs no native client libraries.
 
 
+## The native masker
+
+`mask-rs/` holds `understudy-mask`, the optional Rust extension. It is a
+separate distribution so this package keeps its setuptools build and installs
+anywhere without a Rust toolchain. Nothing in `understudy_data` imports it
+except through a guarded import, so the package is developed and tested without
+it.
+
+```
+cd mask-rs
+cargo test --release              # 918 recorded vectors, NIST FF1, RFC 4231
+cd py && maturin build --release
+pip install target/wheels/understudy_mask-*.whl
+```
+
+Needs Rust 1.83 or newer — PyO3 does, and older toolchains fail to resolve
+rather than fail to build.
+
+Two crates. `core` has no Python dependency, so the constructions are testable
+without an interpreter and could later back something other than this package;
+`py` is the PyO3 layer and holds every conversion.
+
+**The Python implementation is the reference.** Where the two could differ,
+Python is right and the port is the bug — so a change to masking is made in
+Python first, then ported, then the vectors are regenerated:
+
+```
+python3 mask-rs/generate_vectors.py
+```
+
+`tests/test_maskVectors.py` fails if Python drifts from the recorded file, which
+makes regenerating it a deliberate act: the file changing means every already
+masked value has changed too.
+
+Run the Python suite both ways. CI does:
+
+```
+pytest                              # with the extension, if installed
+UNDERSTUDY_NATIVE=0 pytest          # without
+```
+
+`cargo test --release` rather than `cargo test`: two of the tests measure
+throughput to catch a SHA-256 or AES backend that has silently fallen back to a
+software implementation, and a debug build looks exactly like one. Both
+fallbacks have happened — the pure-Rust `sha2` crate runs at a seventh of
+`ring`'s speed, and `aes` 0.8 at a fifteenth of 0.9's — so the checks are not
+hypothetical.
+
+
 ## Integration tests
 
 Six files run the same operations against real servers: `tests/test_integration_{mysql,postgresql,oracle,mssql,mariadb}.py`, plus `test_integration_cross_database.py`, which extracts from MySQL, applies a transform, and loads into PostgreSQL in one job. `test_integration_masking.py` runs against all five servers: foreign-key discovery (composite keys included), subset queries, and masked jobs over each driver's own numeric and date types. `test_integration_schema.py` runs `schema` and a copy for every pair of the six databases, 36 in all, plus `clear` under live foreign keys. `test_integration_keys.py` checks primary-key lookups against a same-named table in another schema, upserts beside UNIQUE constraints and into key-only tables, and swaps of schema-qualified tables. `test_integration_scrubbing.py` makes each server fail on duplicates and bad values, and checks that no value reaches an error, an outcome or a log. `test_integration_connections.py` asks each server whether driver options arrived, whether the connection is encrypted, and where `currentSchema` sends unqualified names. `test_integration_postgresql.py` also round-trips every value type through `COPY`, and `test_integration_mssql.py` through SQL Server's multi-row statements. `tests/test_fpe.py` checks FF1 against NIST's published sample vectors.

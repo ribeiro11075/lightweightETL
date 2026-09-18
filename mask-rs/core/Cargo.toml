@@ -1,0 +1,25 @@
+[package]
+name = "understudy-mask-core"
+description = "Understudy's masking constructions, byte-for-byte as the Python implementation computes them"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aes = "0.9"
+num-bigint = "0.4"
+num-traits = "0.2"
+ring = "0.17.14"
+
+[dev-dependencies]
+serde_json = "1"
+hex = "0.4"
+
+[[bench]]
+name = "speed"
+harness = false
+
+[[bench]]
+name = "backends"
+harness = false

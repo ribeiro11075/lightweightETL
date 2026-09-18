@@ -28,6 +28,7 @@ import decimal
 import hashlib
 import hmac
 import importlib
+import os
 import json
 import math
 import random
@@ -62,6 +63,53 @@ FEISTEL_ROUNDS = 10
 
 # SHA-256's compression block, which is what HMAC pads its key out to.
 HMAC_BLOCK_SIZE = 64
+
+
+def _nativeModule() -> Any:
+    """The `understudy_mask` extension, or None if it isn't installed or is
+    turned off.
+
+    Optional by design: `pip install "understudy-data[fast]"` brings it, and
+    everything works without it. Set UNDERSTUDY_NATIVE=0 to ignore an installed
+    one, which is how the equivalence tests run both implementations and how a
+    deployment rules the extension out while diagnosing a difference.
+
+    The two are tested to produce identical masks (mask-rs/vectors), so which
+    one ran is a question of speed, not of results -- but the manifest records
+    it anyway, since a divergence would otherwise look like nothing at all.
+    """
+
+    global _NATIVE_MODULE
+
+    if _NATIVE_MODULE is _UNSET:
+        if os.environ.get('UNDERSTUDY_NATIVE') == '0':
+            _NATIVE_MODULE = None
+        else:
+            try:
+                import understudy_mask
+                _NATIVE_MODULE = understudy_mask
+            except ImportError:
+                _NATIVE_MODULE = None
+
+    return _NATIVE_MODULE
+
+
+def nativeVersion() -> Optional[str]:
+    """The native masker's version, or None when masking runs in pure Python.
+
+    Recorded in the manifest beside the key fingerprint: two runs that agree on
+    both used the same key *and* the same implementation.
+    """
+
+    module = _nativeModule()
+
+    return getattr(module, '__version__', None) if module is not None else None
+
+
+_UNSET = object()
+_NATIVE_MODULE: Any = _UNSET
+# What the extension puts in `problems` for a value it doesn't mask itself.
+_NATIVE_FALLBACK = 'fallback'
 
 
 class MaskingError(Exception):
@@ -134,6 +182,16 @@ class KeyedHash:
         paddedKey = self._subkey.ljust(HMAC_BLOCK_SIZE, b'\x00')
         self._inner = hashlib.sha256(bytes(byte ^ 0x36 for byte in paddedKey))
         self._outer = hashlib.sha256(bytes(byte ^ 0x5c for byte in paddedKey))
+
+
+    @property
+    def subkey(self) -> bytes:
+        """What a native masker is built from. Not the masking key: the key
+        never leaves the configuration model, and this is already one HMAC away
+        from it.
+        """
+
+        return self._subkey
 
 
     def digest(self, message: bytes, purpose: bytes = b'') -> bytes:
@@ -299,11 +357,33 @@ class Strategy:
     # options -- so its results can be remembered. A custom strategy is not
     # assumed to; set it where that holds.
     CACHEABLE: ClassVar[bool] = False
+    # The name the native masker knows this strategy by, where it has one. A
+    # custom strategy never does, and neither do the strategies whose work is
+    # already cheap or whose patterns Rust's regex engine can't express.
+    NATIVE: ClassVar[Optional[str]] = None
 
     def __init__(self, keyedHash: KeyedHash, options: Mapping[str, Any]) -> None:
         self.keyedHash = keyedHash
         self.options = dict(options)
         self._cache: Dict[Tuple[type, Any], Any] = {}
+        self._native = self._buildNative()
+
+
+    def _buildNative(self) -> Any:
+        """A native masker for this strategy and these options, or None.
+
+        Options the extension doesn't know are not an error: an older extension
+        against a newer package simply masks in Python, which is always correct.
+        """
+
+        module = _nativeModule()
+        if module is None or self.NATIVE is None:
+            return None
+
+        try:
+            return module.Masker(self.keyedHash.subkey, self.NATIVE, self.options)
+        except (ValueError, TypeError):
+            return None
 
 
     @classmethod
@@ -342,10 +422,35 @@ class Strategy:
 
     def maskColumn(self, values: Sequence[Any], chunkIndex: int) -> List[Any]:
 
+        if self._native is not None:
+            return self._maskColumnNatively(values)
+
         if not self.CACHEABLE:
             return [None if value is None else self.mask(value) for value in values]
 
         return [None if value is None else self._maskRemembered(value) for value in values]
+
+
+    def _maskColumnNatively(self, values: Sequence[Any]) -> List[Any]:
+        """The column through the extension, with Python finishing what it
+        doesn't cover: Decimals, UUIDs, dates, non-ASCII text.
+
+        Unfinished positions are resolved in order, so a value Python would
+        have refused still refuses first -- the strategies raise on the first
+        bad value, and a job's error must not depend on which implementation ran.
+        """
+
+        masked, problems = self._native.maskColumn(list(values))
+
+        for index in sorted(problems):
+            problem = problems[index]
+            if problem == _NATIVE_FALLBACK:
+                value = values[index]
+                masked[index] = None if value is None else self.mask(value)
+            else:
+                raise MaskingError(problem[1])
+
+        return masked
 
 
     def _maskRemembered(self, value: Any) -> Any:
@@ -482,6 +587,7 @@ class HashStrategy(Strategy):
     """
 
     NAME = 'hash'
+    NATIVE = 'hash'
     CACHEABLE = True
     OPTIONS = {'length': _integerOption(12, 64), 'prefix': lambda value: '' if value is None else str(value)}
 
@@ -503,6 +609,7 @@ class EmailStrategy(Strategy):
     """
 
     NAME = 'email'
+    NATIVE = 'email'
     CACHEABLE = True
     OPTIONS = {'length': _integerOption(8, 40), 'mailDomain': _textOption, 'keepDomain': _booleanOption}
 
@@ -539,6 +646,7 @@ class DigitsStrategy(Strategy):
     """
 
     NAME = 'digits'
+    NATIVE = 'digits'
     CACHEABLE = True
     OPTIONS = {'keepLeading': _integerOption(0), 'keepTrailing': _integerOption(0)}
 
@@ -1039,6 +1147,7 @@ class KeyStrategy(Strategy):
     """
 
     NAME = 'key'
+    NATIVE = 'key'
     CACHEABLE = True
     OPTIONS = {'charset': _choiceOption('alphanumeric', 'digits', 'hex')}
 
@@ -1159,6 +1268,7 @@ class FPEStrategy(Strategy):
     """
 
     NAME = 'fpe'
+    NATIVE = 'fpe'
     CACHEABLE = True
     OPTIONS = {'charset': _choiceOption(*_FPE_ALPHABETS), 'strict': _booleanOption}
 
@@ -1614,10 +1724,19 @@ class BoundMasking:
         self._passthrough = all(isinstance(strategy, KeepStrategy) for strategy in self.strategies)
 
 
-    def apply(self, rows: Sequence[Tuple[Any, ...]]) -> List[Tuple[Any, ...]]:
+    def apply(self, rows: Sequence[Tuple[Any, ...]], chunkIndex: Optional[int] = None) -> List[Tuple[Any, ...]]:
+        """`chunkIndex` identifies the chunk within the job, and `shuffle` keys
+        its permutation on it.
 
-        chunkIndex = self._chunkIndex
-        self._chunkIndex += 1
+        Passed in by a caller that reads chunks ahead of masking them, where a
+        counter kept here would number them by the order they happened to be
+        masked in. Left out, it counts calls, which is the same thing whenever
+        chunks are masked one after another in source order.
+        """
+
+        if chunkIndex is None:
+            chunkIndex = self._chunkIndex
+            self._chunkIndex += 1
 
         if not rows or self._passthrough:
             return list(rows)
@@ -1659,7 +1778,17 @@ def buildMaskingManifest(outcomes: Sequence[Any], declared: Mapping[str, Mapping
 
     timestamp = generatedAt or datetime.datetime.now(datetime.timezone.utc)
 
-    return {'generatedAt': timestamp.isoformat(timespec='seconds'), 'jobs': jobs}
+    # Which implementation produced these masks. The two are tested to agree
+    # (tests/test_nativeMasking.py, mask-rs/vectors), so this is not expected to
+    # matter -- but a divergence would otherwise be invisible: the key
+    # fingerprint covers the key, not the code, so masks could change while
+    # every fingerprint stayed the same. An auditor comparing two manifests can
+    # see that here.
+    manifest: Dict[str, Any] = {'generatedAt': timestamp.isoformat(timespec='seconds'), 'jobs': jobs}
+    native = nativeVersion()
+    manifest['maskedBy'] = 'understudy-mask {}'.format(native) if native else 'python'
+
+    return manifest
 
 
 INTEGRITY_FIELD = 'integrity'

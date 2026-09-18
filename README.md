@@ -7,6 +7,7 @@
 - **Audit:** report what every job does with data and what a reviewer should question, and seal each run's masking manifest so it can be verified later.
 - **Six databases:** Oracle, SQL Server, PostgreSQL, MySQL, MariaDB and SQLite, as source or target in any combination.
 - **Streaming:** memory stays flat however large the table, and PostgreSQL and SQL Server targets load in bulk.
+- **Fast:** ten million rows of six masked columns in under two minutes on one core with the optional native masker, and under eight without. Either way the masks are the same.
 - **Incremental loads:** extract only what changed since the last successful run.
 - **A dependency graph:** jobs run in order, concurrently where they can, each in its own process with an optional timeout.
 - **Operable:** run history, Prometheus metrics, webhook alerts, run state in a file or a table, and passwords from a command for cloud IAM tokens.
@@ -22,6 +23,8 @@ pip install "understudy-data[postgresql,oracle]"
 ```
 
 Extras: `mysql`, `postgresql`, `oracle`, `mssql`, `mariadb`, `sqlite`, `fpe` (for the `fpe` masking strategy), or `all`. Oracle runs in `oracledb`'s thin mode and SQL Server through `pymssql`, so neither needs a separate client install.
+
+`understudy-mask`, an optional extension in `mask-rs/`, masks in Rust: four to five times the throughput, byte-for-byte identical masks, and nothing to configure. It isn't published yet — build it with `maturin build --release` and install the wheel. See [the native masker](docs/masking.md#the-native-masker).
 
 Or run the container image, which has every driver, with the configuration directory mounted as the working directory:
 

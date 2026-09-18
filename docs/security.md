@@ -6,6 +6,7 @@ What Understudy protects, how, and what it does not. Written for the security or
 - [What is protected, and from whom](#what-is-protected-and-from-whom)
 - [Where unmasked data goes](#where-unmasked-data-goes)
 - [The masking constructions](#the-masking-constructions)
+- [Two implementations](#two-implementations)
 - [What masking does not hide](#what-masking-does-not-hide)
 - [Keys](#keys)
 - [The manifest](#the-manifest)
@@ -74,6 +75,43 @@ expand(m, n, p) = digest(m, p || "#" || counter), counter = 0, 1, ...   truncate
 
 **`key` versus `fpe`.** Both are keyed permutations with the same shape rules. `key` uses HMAC-SHA256 as a Feistel round function. That's the same structure as FF1 and FF3-1, but it's this package's own construction, it hasn't been reviewed as a standard, and it adds no dependency. `fpe` is FF1 as NIST specifies it. **Choose `fpe` where a policy must name a published algorithm.**
 
+### Two implementations
+
+The same constructions exist twice: in Python, and in the optional
+`understudy-mask` extension, which computes them in Rust several times faster
+(see [the native masker](masking.md#the-native-masker)). Which one ran is
+recorded in the manifest as `maskedBy`.
+
+**They are required to agree byte for byte.** A difference would not present as
+a wrong answer. It would present as a changed key: masks that no longer match
+the ones already in a target, joins that silently stop matching, an incremental
+job writing rows its earlier rows can't be linked to. The key fingerprint would
+not change, because the key did not.
+
+How that is held:
+
+- **Recorded vectors.** `mask-rs/vectors/reference.json` holds what the Python
+  implementation produces for every covered strategy over a corpus chosen for
+  boundaries rather than volume: the lengths where a Feistel half stops fitting
+  a machine word, domains of exactly 2\*\*128, `MAXIMUM_KEY_LENGTH`, single-character
+  alphabets, mixed-case hex, and every refusal with its exact message. The Rust
+  tests check against it, and a Python test fails if Python itself drifts from
+  it — so changing masks requires changing the file, deliberately.
+- **Both implementations, same corpus.** `tests/test_nativeMasking.py` runs each
+  strategy and option combination through both and compares masks, types and
+  error messages.
+- **The whole suite, twice.** CI runs it with the extension and with
+  `UNDERSTUDY_NATIVE=0`.
+- **Published vectors.** FF1 is checked against NIST's sample vectors on both
+  sides, and the keyed hash against RFC 4231.
+
+The Rust implementation is not a second design. It is a port, and where the two
+could differ, Python is the reference and the port is the bug. Values whose
+handling depends on Python's own Unicode rules — the refusal of letters and
+digits outside ASCII, `str.isspace()` when an address is stripped, digits
+normalised across scripts — are not reimplemented at all: they are handed back
+to Python per value.
+
 **Small domains.** Format-preserving encryption over small domains has known message-recovery attacks for anyone who holds enough pairs of real and masked values (Bellare, Hoang and Tessaro, 2016; Durak and Vaudenay, 2017). NIST responded by requiring at least a million possible values for FF1. `fpe` follows that rule, and by default masks shorter values with `key` instead; **`strict: true`** refuses them. `key` applies its permutation to domains of any size, down to single digits, so a two-digit value has only 90 possible masks, and an adversary who knows enough real/masked pairs in one domain learns the whole mapping. This is inherent to one-to-one masking of short values, not a flaw in either cipher: use `hash`, `null`, or a longer key space where short identifiers are sensitive.
 
 
@@ -102,7 +140,7 @@ These follow from masking being deterministic and shape-preserving. They are why
 
 ## The manifest
 
-- **Contents.** What was masked, how, under which key fingerprint, from which jobs file (with its SHA-256), with which tool version. Never a value, never a key.
+- **Contents.** What was masked, how, under which key fingerprint, from which jobs file (with its SHA-256), with which tool version, and which masking implementation produced it (`maskedBy`: `python`, or the extension and its version). Never a value, never a key.
 - **Integrity.** A SHA-256 digest of the manifest's content (canonical JSON) catches accidental changes. Anyone can recompute it, so it proves nothing about origin.
 - **Authenticity.** With `UNDERSTUDY_MANIFEST_KEY` set, the manifest is also signed with HMAC-SHA256, and `verify-manifest` requires a signature, so removing one doesn't make an edited manifest pass. This is symmetric: anyone who can verify a manifest can also create one. It shows a manifest came from a holder of the signing key, not which holder. Where that distinction matters, keep the signing key with the auditors' process, not with the team running the jobs.
 

@@ -1,0 +1,15 @@
+[package]
+name = "understudy-mask-py"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "understudy_mask"
+crate-type = ["cdylib"]
+
+[dependencies]
+understudy-mask-core = { path = "../core" }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py310", "num-bigint"] }
+num-bigint = "0.4"

@@ -1,0 +1,5290 @@
+{
+ "domain": "vectors",
+ "key": "a-test-key-that-is-long-enough",
+ "keyedHash": {
+  "below": [
+   {
+    "below": "0",
+    "message": "",
+    "upper": "1"
+   },
+   {
+    "below": "0",
+    "message": "",
+    "upper": "2"
+   },
+   {
+    "below": "0",
+    "message": "",
+    "upper": "7"
+   },
+   {
+    "below": "166",
+    "message": "",
+    "upper": "256"
+   },
+   {
+    "below": "329545",
+    "message": "",
+    "upper": "1000000"
+   },
+   {
+    "below": "11982205729940828827",
+    "message": "",
+    "upper": "18446744073709551616"
+   },
+   {
+    "below": "309632533939957178333830644203340131213",
+    "message": "",
+    "upper": "340282366920938463463374607431768211457"
+   },
+   {
+    "below": "0",
+    "message": "00",
+    "upper": "1"
+   },
+   {
+    "below": "1",
+    "message": "00",
+    "upper": "2"
+   },
+   {
+    "below": "2",
+    "message": "00",
+    "upper": "7"
+   },
+   {
+    "below": "58",
+    "message": "00",
+    "upper": "256"
+   },
+   {
+    "below": "566322",
+    "message": "00",
+    "upper": "1000000"
+   },
+   {
+    "below": "4229532531099101172",
+    "message": "00",
+    "upper": "18446744073709551616"
+   },
+   {
+    "below": "1300771066295905040522786139115975431",
+    "message": "00",
+    "upper": "340282366920938463463374607431768211457"
+   },
+   {
+    "below": "0",
+    "message": "61",
+    "upper": "1"
+   },
+   {
+    "below": "1",
+    "message": "61",
+    "upper": "2"
+   },
+   {
+    "below": "5",
+    "message": "61",
+    "upper": "7"
+   },
+   {
+    "below": "98",
+    "message": "61",
+    "upper": "256"
+   },
+   {
+    "below": "156259",
+    "message": "61",
+    "upper": "1000000"
+   },
+   {
+    "below": "7071670289047646989",
+    "message": "61",
+    "upper": "18446744073709551616"
+   },
+   {
+    "below": "97472949708289500518846624587643624052",
+    "message": "61",
+    "upper": "340282366920938463463374607431768211457"
+   },
+   {
+    "below": "0",
+    "message": "68656c6c6f",
+    "upper": "1"
+   },
+   {
+    "below": "1",
+    "message": "68656c6c6f",
+    "upper": "2"
+   },
+   {
+    "below": "5",
+    "message": "68656c6c6f",
+    "upper": "7"
+   },
+   {
+    "below": "47",
+    "message": "68656c6c6f",
+    "upper": "256"
+   },
+   {
+    "below": "681536",
+    "message": "68656c6c6f",
+    "upper": "1000000"
+   },
+   {
+    "below": "3404745268706383547",
+    "message": "68656c6c6f",
+    "upper": "18446744073709551616"
+   },
+   {
+    "below": "74784180678384268422975262193410960347",
+    "message": "68656c6c6f",
+    "upper": "340282366920938463463374607431768211457"
+   }
+  ],
+  "digest": [
+   {
+    "digest": "d784a029a29fb0f3a324dec979bc03aa72edf5cec84725a97c83e22e3ca3eb83",
+    "message": "",
+    "purpose": ""
+   },
+   {
+    "digest": "c97c3f797a112db44c6d4783b0e503a234adc73f8befeff3ad8374feab1f1a25",
+    "message": "",
+    "purpose": "696e7465676572"
+   },
+   {
+    "digest": "52543022c868bbb171264d56adfa60c397c23b337e1ce27c5dd4264862fffc43",
+    "message": "",
+    "purpose": "6e65676174697665"
+   },
+   {
+    "digest": "5699a6c432983705b0473072f6e104a633e21251b24cf1435da8b7997d8d4007",
+    "message": "",
+    "purpose": "746578747c6865787c38"
+   },
+   {
+    "digest": "03c527cc7df268e87862df9f87761443e7cc64afa4ad82475f962c9a94d59396",
+    "message": "00",
+    "purpose": ""
+   },
+   {
+    "digest": "f08ea6b72c17cc4c62a9a45f5b0e69173bcb4ae5088dc03d8979d0001876a437",
+    "message": "00",
+    "purpose": "696e7465676572"
+   },
+   {
+    "digest": "6318c8eb68260820e203135bbec502a11fd0b0f6f1a7a23d5f0a2fc32dd1fafe",
+    "message": "00",
+    "purpose": "6e65676174697665"
+   },
+   {
+    "digest": "2d073a061595ac9af5bc121e4f5c14ce39d86688da47fada20f5d75df9b37ab3",
+    "message": "00",
+    "purpose": "746578747c6865787c38"
+   },
+   {
+    "digest": "a3d26279f9f4845356dd301b82be6769559e23c7150fb38239b0ca27e3dc8d53",
+    "message": "61",
+    "purpose": ""
+   },
+   {
+    "digest": "231f1924f7c0c0fbe2d615e1eabdd619d591506281d4ee5d5554e1a255722387",
+    "message": "61",
+    "purpose": "696e7465676572"
+   },
+   {
+    "digest": "230b6600e171bb614ee35d378835d9072b0f5c7d97eb1a255f90a3e15a342dc1",
+    "message": "61",
+    "purpose": "6e65676174697665"
+   },
+   {
+    "digest": "8044073fb6ca78a5ca49afc7bee0b6207e43f8eaad803cc13a27b69632d1ef68",
+    "message": "61",
+    "purpose": "746578747c6865787c38"
+   },
+   {
+    "digest": "202600ef78ce164fc8a2b51a124bebf2821947ad1f6a83cc4a9ea2cfffab95c3",
+    "message": "68656c6c6f",
+    "purpose": ""
+   },
+   {
+    "digest": "bee68be5193aad6f85f38d10136ef013762e1cc4ca244f8c26b0ba55882ff50a",
+    "message": "68656c6c6f",
+    "purpose": "696e7465676572"
+   },
+   {
+    "digest": "1289e8e42931547e4b3ee9e083b6cf760b6dc95877c7152e48d5dc46b37edcc3",
+    "message": "68656c6c6f",
+    "purpose": "6e65676174697665"
+   },
+   {
+    "digest": "635d34bca275c348a2af690a8bbbe7819ffb2ea11a6d9241f942a47b6f4df191",
+    "message": "68656c6c6f",
+    "purpose": "746578747c6865787c38"
+   },
+   {
+    "digest": "ab6c8fb352b713e38befd727e87a7b6270ff72d1d88260989984b7b117eb157b",
+    "message": "787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "purpose": ""
+   },
+   {
+    "digest": "2db1fa684df38f4581d8d97e9eab7a31ae273c27afd7c66a8f3f24010ca04c09",
+    "message": "787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "purpose": "696e7465676572"
+   },
+   {
+    "digest": "8775f837e444a38004b316cff6ff59b81ca3ecf6fd45aaf12399b7e0722b01db",
+    "message": "787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "purpose": "6e65676174697665"
+   },
+   {
+    "digest": "9a1383b20cff5e0e9ebb3913eff44d81013d110f12afa219d7583e749c74b562",
+    "message": "787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "purpose": "746578747c6865787c38"
+   },
+   {
+    "digest": "89813a517bb618ca77d1acf5c6949c361a018e12937b23e50fecc0c7f2915270",
+    "message": "78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "purpose": ""
+   },
+   {
+    "digest": "50edc3e9bd336d6c483d5cc8ca631c6eecca8ead738b57536c5ec7aaf6c4723f",
+    "message": "78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "purpose": "696e7465676572"
+   },
+   {
+    "digest": "706d04de9d2de5732efef94b88b059065b69f9df3f23cdf2fe71295e03e2d7a8",
+    "message": "78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "purpose": "6e65676174697665"
+   },
+   {
+    "digest": "ee543f222080caa321e3fc58302222744956501889f8faae0752db09da948a96",
+    "message": "78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "purpose": "746578747c6865787c38"
+   },
+   {
+    "digest": "6150524ddf2e22fdcab814151cf18087460bd31e802df45fabe5f7d37b483f0a",
+    "message": "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "purpose": ""
+   },
+   {
+    "digest": "88fcc87cdd452e68238887aacdf97dcf4db49a5d02a07422e56d3bcac20957c7",
+    "message": "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "purpose": "696e7465676572"
+   },
+   {
+    "digest": "aebe4a60260e6a72cc2b8a11487975ce40079c4d227182acf50dd9e5868b5323",
+    "message": "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "purpose": "6e65676174697665"
+   },
+   {
+    "digest": "947d40235a0ac77bbfeac570339ce1fd8a7372f7fbb954b8c9bf8e1b54360946",
+    "message": "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "purpose": "746578747c6865787c38"
+   },
+   {
+    "digest": "d9fe93a19ed3ed87d30cba05c35771f95ec6732bd2ada4a2e77cdd8d89ecd711",
+    "message": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "purpose": ""
+   },
+   {
+    "digest": "235a508af5f6a78fc500536bf75d7ccbc300a096a5f61582b201710b7236f757",
+    "message": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "purpose": "696e7465676572"
+   },
+   {
+    "digest": "3171acddbbf321ef4d5768d15841131955a43b10bd9bf424b1af551e64bbfb18",
+    "message": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "purpose": "6e65676174697665"
+   },
+   {
+    "digest": "2d3b76baa94adb416a0a2da3af1e3e6e01f9a777f6e41d974ff2467b63d2cb85",
+    "message": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "purpose": "746578747c6865787c38"
+   }
+  ],
+  "expand": [
+   {
+    "expand": "f2",
+    "length": 1,
+    "message": ""
+   },
+   {
+    "expand": "f24fd2c51be81b",
+    "length": 7,
+    "message": ""
+   },
+   {
+    "expand": "f24fd2c51be81b3424bd1f8edecc33746f0d2b0f2c3ef13db42384ac9361fd",
+    "length": 31,
+    "message": ""
+   },
+   {
+    "expand": "f24fd2c51be81b3424bd1f8edecc33746f0d2b0f2c3ef13db42384ac9361fda7",
+    "length": 32,
+    "message": ""
+   },
+   {
+    "expand": "f24fd2c51be81b3424bd1f8edecc33746f0d2b0f2c3ef13db42384ac9361fda756",
+    "length": 33,
+    "message": ""
+   },
+   {
+    "expand": "f24fd2c51be81b3424bd1f8edecc33746f0d2b0f2c3ef13db42384ac9361fda756a64958a07ec5f29b44622eebb5f19f66536a3f42f28fba8d386d5cc7e3310f",
+    "length": 64,
+    "message": ""
+   },
+   {
+    "expand": "f24fd2c51be81b3424bd1f8edecc33746f0d2b0f2c3ef13db42384ac9361fda756a64958a07ec5f29b44622eebb5f19f66536a3f42f28fba8d386d5cc7e3310ff9",
+    "length": 65,
+    "message": ""
+   },
+   {
+    "expand": "f24fd2c51be81b3424bd1f8edecc33746f0d2b0f2c3ef13db42384ac9361fda756a64958a07ec5f29b44622eebb5f19f66536a3f42f28fba8d386d5cc7e3310ff9065dd1a32616a0aa24ec0784316c8d75306b7549d1bf70686954250e92edb2f25a330799dec83fd927f719b68a98d0d6c3c56c4ed0a2b15b18018aeca4b21c5312656410617c26a1251b5477d686683c87da2dfb42be6f17376c19f3de889bbe19cc5200396ed4c2933e676387019cbafe22d850b2a2cffe9767669a9b24299ca7f19dd077dad1",
+    "length": 200,
+    "message": ""
+   },
+   {
+    "expand": "c4",
+    "length": 1,
+    "message": "00"
+   },
+   {
+    "expand": "c43ae93bbe616f",
+    "length": 7,
+    "message": "00"
+   },
+   {
+    "expand": "c43ae93bbe616f69db1f08beeff47eb07d74a10834e5dc6af9c74518bfe61c",
+    "length": 31,
+    "message": "00"
+   },
+   {
+    "expand": "c43ae93bbe616f69db1f08beeff47eb07d74a10834e5dc6af9c74518bfe61c30",
+    "length": 32,
+    "message": "00"
+   },
+   {
+    "expand": "c43ae93bbe616f69db1f08beeff47eb07d74a10834e5dc6af9c74518bfe61c30e5",
+    "length": 33,
+    "message": "00"
+   },
+   {
+    "expand": "c43ae93bbe616f69db1f08beeff47eb07d74a10834e5dc6af9c74518bfe61c30e53ab2516d921ee7f4a7ab926a775ef433adaf89671523e3709e049a7ecb214d",
+    "length": 64,
+    "message": "00"
+   },
+   {
+    "expand": "c43ae93bbe616f69db1f08beeff47eb07d74a10834e5dc6af9c74518bfe61c30e53ab2516d921ee7f4a7ab926a775ef433adaf89671523e3709e049a7ecb214dc8",
+    "length": 65,
+    "message": "00"
+   },
+   {
+    "expand": "c43ae93bbe616f69db1f08beeff47eb07d74a10834e5dc6af9c74518bfe61c30e53ab2516d921ee7f4a7ab926a775ef433adaf89671523e3709e049a7ecb214dc817e7aa555df5d78738d738a68c34324aa0d52fb67356527aeb04e4da608bf5d363e5a442f33c374ec4b90400775faeec2e8b19c31e2b9231a2382d4ad94309ca184a763f23fb801dda8d1d996093168419afb34cacf23cc416b11d7a1e6abefd4794b38edc5f79a61b0cc47d1a7679cabec005a7274ba4e735de950fa206795013e446b8269daa",
+    "length": 200,
+    "message": "00"
+   },
+   {
+    "expand": "1d",
+    "length": 1,
+    "message": "61"
+   },
+   {
+    "expand": "1d4fd004582a38",
+    "length": 7,
+    "message": "61"
+   },
+   {
+    "expand": "1d4fd004582a383ada6b527770699f2e72689f078bcf094f6109f3b9805590",
+    "length": 31,
+    "message": "61"
+   },
+   {
+    "expand": "1d4fd004582a383ada6b527770699f2e72689f078bcf094f6109f3b980559052",
+    "length": 32,
+    "message": "61"
+   },
+   {
+    "expand": "1d4fd004582a383ada6b527770699f2e72689f078bcf094f6109f3b98055905285",
+    "length": 33,
+    "message": "61"
+   },
+   {
+    "expand": "1d4fd004582a383ada6b527770699f2e72689f078bcf094f6109f3b9805590528562239ea91b5e730df1af3e32be653ea461d1a8e7e4e06a9a807fc61f1f56fd",
+    "length": 64,
+    "message": "61"
+   },
+   {
+    "expand": "1d4fd004582a383ada6b527770699f2e72689f078bcf094f6109f3b9805590528562239ea91b5e730df1af3e32be653ea461d1a8e7e4e06a9a807fc61f1f56fdbb",
+    "length": 65,
+    "message": "61"
+   },
+   {
+    "expand": "1d4fd004582a383ada6b527770699f2e72689f078bcf094f6109f3b9805590528562239ea91b5e730df1af3e32be653ea461d1a8e7e4e06a9a807fc61f1f56fdbb7a749853e53e5dd93fd8ab4751f0ecba5e6e27b04cc98cc68e0772e84e884ee9977308d0fff2788b1d529586ac2b00596fe60060eb81566ff81bfb0d804594255cbe8f380c6a9985f55252d5f716d2181ca4d197f050f6e649abc9308265ad0cd8b9faccec56a702df4e0fdbeb8b1c75943fcd8ff1f0a35ee57cdc69066d9c9af0f896befb47eb",
+    "length": 200,
+    "message": "61"
+   },
+   {
+    "expand": "2c",
+    "length": 1,
+    "message": "68656c6c6f"
+   },
+   {
+    "expand": "2cadcf67eb4152",
+    "length": 7,
+    "message": "68656c6c6f"
+   },
+   {
+    "expand": "2cadcf67eb415234d80435b02e2c496423a4cc94ec2fdb996e5dfd90e8bf09",
+    "length": 31,
+    "message": "68656c6c6f"
+   },
+   {
+    "expand": "2cadcf67eb415234d80435b02e2c496423a4cc94ec2fdb996e5dfd90e8bf0976",
+    "length": 32,
+    "message": "68656c6c6f"
+   },
+   {
+    "expand": "2cadcf67eb415234d80435b02e2c496423a4cc94ec2fdb996e5dfd90e8bf09763d",
+    "length": 33,
+    "message": "68656c6c6f"
+   },
+   {
+    "expand": "2cadcf67eb415234d80435b02e2c496423a4cc94ec2fdb996e5dfd90e8bf09763d2f4015c863ef96bbbd80e386ba38fe21f8ea8f5c91d783766f79c87f8ea9e6",
+    "length": 64,
+    "message": "68656c6c6f"
+   },
+   {
+    "expand": "2cadcf67eb415234d80435b02e2c496423a4cc94ec2fdb996e5dfd90e8bf09763d2f4015c863ef96bbbd80e386ba38fe21f8ea8f5c91d783766f79c87f8ea9e645",
+    "length": 65,
+    "message": "68656c6c6f"
+   },
+   {
+    "expand": "2cadcf67eb415234d80435b02e2c496423a4cc94ec2fdb996e5dfd90e8bf09763d2f4015c863ef96bbbd80e386ba38fe21f8ea8f5c91d783766f79c87f8ea9e6453132d18398c378fbd87dc8c78032f9ac48c9608fd10974c59d5a8d3d7c7fced28f0fc404a93e0c2fedd4c78d9a93e8d24e0510da26a60330197cda8518267cadbad2b6dfcd418c232c9dea4dfbd281cc3f9799c08962142cde3a71c71ea8c250a20d99610449455738ca628d2acf8f5879d9179edc1285eecabd4a62c71537fffc18893a2bc3b3",
+    "length": 200,
+    "message": "68656c6c6f"
+   }
+  ],
+  "permute": [
+   {
+    "permute": "0",
+    "size": "1",
+    "value": "0"
+   },
+   {
+    "permute": "1",
+    "size": "1",
+    "value": "1"
+   },
+   {
+    "permute": "1",
+    "size": "2",
+    "value": "0"
+   },
+   {
+    "permute": "0",
+    "size": "2",
+    "value": "1"
+   },
+   {
+    "permute": "2",
+    "size": "3",
+    "value": "0"
+   },
+   {
+    "permute": "1",
+    "size": "3",
+    "value": "1"
+   },
+   {
+    "permute": "0",
+    "size": "3",
+    "value": "2"
+   },
+   {
+    "permute": "2",
+    "size": "4",
+    "value": "0"
+   },
+   {
+    "permute": "1",
+    "size": "4",
+    "value": "1"
+   },
+   {
+    "permute": "0",
+    "size": "4",
+    "value": "2"
+   },
+   {
+    "permute": "3",
+    "size": "4",
+    "value": "3"
+   },
+   {
+    "permute": "4",
+    "size": "5",
+    "value": "0"
+   },
+   {
+    "permute": "2",
+    "size": "5",
+    "value": "1"
+   },
+   {
+    "permute": "1",
+    "size": "5",
+    "value": "2"
+   },
+   {
+    "permute": "0",
+    "size": "5",
+    "value": "4"
+   },
+   {
+    "permute": "3",
+    "size": "7",
+    "value": "0"
+   },
+   {
+    "permute": "1",
+    "size": "7",
+    "value": "1"
+   },
+   {
+    "permute": "2",
+    "size": "7",
+    "value": "3"
+   },
+   {
+    "permute": "6",
+    "size": "7",
+    "value": "6"
+   },
+   {
+    "permute": "7",
+    "size": "8",
+    "value": "0"
+   },
+   {
+    "permute": "6",
+    "size": "8",
+    "value": "1"
+   },
+   {
+    "permute": "2",
+    "size": "8",
+    "value": "4"
+   },
+   {
+    "permute": "5",
+    "size": "8",
+    "value": "7"
+   },
+   {
+    "permute": "4",
+    "size": "9",
+    "value": "0"
+   },
+   {
+    "permute": "5",
+    "size": "9",
+    "value": "1"
+   },
+   {
+    "permute": "3",
+    "size": "9",
+    "value": "4"
+   },
+   {
+    "permute": "0",
+    "size": "9",
+    "value": "8"
+   },
+   {
+    "permute": "9",
+    "size": "15",
+    "value": "0"
+   },
+   {
+    "permute": "11",
+    "size": "15",
+    "value": "1"
+   },
+   {
+    "permute": "0",
+    "size": "15",
+    "value": "14"
+   },
+   {
+    "permute": "12",
+    "size": "15",
+    "value": "7"
+   },
+   {
+    "permute": "11",
+    "size": "16",
+    "value": "0"
+   },
+   {
+    "permute": "7",
+    "size": "16",
+    "value": "1"
+   },
+   {
+    "permute": "9",
+    "size": "16",
+    "value": "8"
+   },
+   {
+    "permute": "14",
+    "size": "16",
+    "value": "15"
+   },
+   {
+    "permute": "4",
+    "size": "17",
+    "value": "0"
+   },
+   {
+    "permute": "0",
+    "size": "17",
+    "value": "1"
+   },
+   {
+    "permute": "11",
+    "size": "17",
+    "value": "8"
+   },
+   {
+    "permute": "9",
+    "size": "17",
+    "value": "16"
+   },
+   {
+    "permute": "6",
+    "size": "31",
+    "value": "0"
+   },
+   {
+    "permute": "23",
+    "size": "31",
+    "value": "1"
+   },
+   {
+    "permute": "10",
+    "size": "31",
+    "value": "30"
+   },
+   {
+    "permute": "7",
+    "size": "31",
+    "value": "15"
+   },
+   {
+    "permute": "16",
+    "size": "32",
+    "value": "0"
+   },
+   {
+    "permute": "5",
+    "size": "32",
+    "value": "1"
+   },
+   {
+    "permute": "29",
+    "size": "32",
+    "value": "16"
+   },
+   {
+    "permute": "23",
+    "size": "32",
+    "value": "31"
+   },
+   {
+    "permute": "14",
+    "size": "33",
+    "value": "0"
+   },
+   {
+    "permute": "20",
+    "size": "33",
+    "value": "1"
+   },
+   {
+    "permute": "10",
+    "size": "33",
+    "value": "32"
+   },
+   {
+    "permute": "12",
+    "size": "33",
+    "value": "16"
+   },
+   {
+    "permute": "9",
+    "size": "63",
+    "value": "0"
+   },
+   {
+    "permute": "0",
+    "size": "63",
+    "value": "1"
+   },
+   {
+    "permute": "24",
+    "size": "63",
+    "value": "62"
+   },
+   {
+    "permute": "2",
+    "size": "63",
+    "value": "31"
+   },
+   {
+    "permute": "15",
+    "size": "64",
+    "value": "0"
+   },
+   {
+    "permute": "48",
+    "size": "64",
+    "value": "1"
+   },
+   {
+    "permute": "58",
+    "size": "64",
+    "value": "32"
+   },
+   {
+    "permute": "29",
+    "size": "64",
+    "value": "63"
+   },
+   {
+    "permute": "10",
+    "size": "65",
+    "value": "0"
+   },
+   {
+    "permute": "62",
+    "size": "65",
+    "value": "1"
+   },
+   {
+    "permute": "2",
+    "size": "65",
+    "value": "32"
+   },
+   {
+    "permute": "15",
+    "size": "65",
+    "value": "64"
+   },
+   {
+    "permute": "15",
+    "size": "100",
+    "value": "0"
+   },
+   {
+    "permute": "81",
+    "size": "100",
+    "value": "1"
+   },
+   {
+    "permute": "6",
+    "size": "100",
+    "value": "50"
+   },
+   {
+    "permute": "80",
+    "size": "100",
+    "value": "99"
+   },
+   {
+    "permute": "24",
+    "size": "255",
+    "value": "0"
+   },
+   {
+    "permute": "179",
+    "size": "255",
+    "value": "1"
+   },
+   {
+    "permute": "244",
+    "size": "255",
+    "value": "254"
+   },
+   {
+    "permute": "41",
+    "size": "255",
+    "value": "127"
+   },
+   {
+    "permute": "148",
+    "size": "256",
+    "value": "0"
+   },
+   {
+    "permute": "171",
+    "size": "256",
+    "value": "1"
+   },
+   {
+    "permute": "224",
+    "size": "256",
+    "value": "128"
+   },
+   {
+    "permute": "95",
+    "size": "256",
+    "value": "255"
+   },
+   {
+    "permute": "73",
+    "size": "257",
+    "value": "0"
+   },
+   {
+    "permute": "64",
+    "size": "257",
+    "value": "1"
+   },
+   {
+    "permute": "226",
+    "size": "257",
+    "value": "128"
+   },
+   {
+    "permute": "18",
+    "size": "257",
+    "value": "256"
+   },
+   {
+    "permute": "80",
+    "size": "1000",
+    "value": "0"
+   },
+   {
+    "permute": "748",
+    "size": "1000",
+    "value": "1"
+   },
+   {
+    "permute": "329",
+    "size": "1000",
+    "value": "500"
+   },
+   {
+    "permute": "861",
+    "size": "1000",
+    "value": "999"
+   },
+   {
+    "permute": "849496",
+    "size": "1000000",
+    "value": "0"
+   },
+   {
+    "permute": "52355",
+    "size": "1000000",
+    "value": "1"
+   },
+   {
+    "permute": "490704",
+    "size": "1000000",
+    "value": "500000"
+   },
+   {
+    "permute": "884050",
+    "size": "1000000",
+    "value": "12345"
+   },
+   {
+    "permute": "729903",
+    "size": "1000000",
+    "value": "999999"
+   },
+   {
+    "permute": "8945031",
+    "size": "9000000",
+    "value": "0"
+   },
+   {
+    "permute": "5055753",
+    "size": "9000000",
+    "value": "1"
+   },
+   {
+    "permute": "2485701",
+    "size": "9000000",
+    "value": "4500000"
+   },
+   {
+    "permute": "7121252",
+    "size": "9000000",
+    "value": "12345"
+   },
+   {
+    "permute": "8025499",
+    "size": "9000000",
+    "value": "8999999"
+   },
+   {
+    "permute": "41225",
+    "size": "65536",
+    "value": "0"
+   },
+   {
+    "permute": "29134",
+    "size": "65536",
+    "value": "1"
+   },
+   {
+    "permute": "34007",
+    "size": "65536",
+    "value": "32768"
+   },
+   {
+    "permute": "15554",
+    "size": "65536",
+    "value": "12345"
+   },
+   {
+    "permute": "29441",
+    "size": "65536",
+    "value": "65535"
+   },
+   {
+    "permute": "129389",
+    "size": "131072",
+    "value": "0"
+   },
+   {
+    "permute": "111948",
+    "size": "131072",
+    "value": "1"
+   },
+   {
+    "permute": "74722",
+    "size": "131072",
+    "value": "65536"
+   },
+   {
+    "permute": "88560",
+    "size": "131072",
+    "value": "12345"
+   },
+   {
+    "permute": "30043",
+    "size": "131072",
+    "value": "131071"
+   },
+   {
+    "permute": "3479898591",
+    "size": "4294967296",
+    "value": "0"
+   },
+   {
+    "permute": "2424465912",
+    "size": "4294967296",
+    "value": "1"
+   },
+   {
+    "permute": "552655852",
+    "size": "4294967296",
+    "value": "2147483648"
+   },
+   {
+    "permute": "1540837214",
+    "size": "4294967296",
+    "value": "12345"
+   },
+   {
+    "permute": "1355353968",
+    "size": "4294967296",
+    "value": "4294967295"
+   },
+   {
+    "permute": "2414115260",
+    "size": "8589934592",
+    "value": "0"
+   },
+   {
+    "permute": "1935191563",
+    "size": "8589934592",
+    "value": "1"
+   },
+   {
+    "permute": "134060669",
+    "size": "8589934592",
+    "value": "4294967296"
+   },
+   {
+    "permute": "1849574143",
+    "size": "8589934592",
+    "value": "12345"
+   },
+   {
+    "permute": "1773606761",
+    "size": "8589934592",
+    "value": "8589934591"
+   },
+   {
+    "permute": "233135461475413",
+    "size": "281474976710656",
+    "value": "0"
+   },
+   {
+    "permute": "207211919068914",
+    "size": "281474976710656",
+    "value": "1"
+   },
+   {
+    "permute": "86997211951612",
+    "size": "281474976710656",
+    "value": "140737488355328"
+   },
+   {
+    "permute": "1295660750978",
+    "size": "281474976710656",
+    "value": "12345"
+   },
+   {
+    "permute": "140364112605469",
+    "size": "281474976710656",
+    "value": "281474976710655"
+   },
+   {
+    "permute": "386057179254954",
+    "size": "562949953421312",
+    "value": "0"
+   },
+   {
+    "permute": "427330341485548",
+    "size": "562949953421312",
+    "value": "1"
+   },
+   {
+    "permute": "382771516662070",
+    "size": "562949953421312",
+    "value": "281474976710656"
+   },
+   {
+    "permute": "214243773429984",
+    "size": "562949953421312",
+    "value": "12345"
+   },
+   {
+    "permute": "9953704081526",
+    "size": "562949953421312",
+    "value": "562949953421311"
+   },
+   {
+    "permute": "188213005522153829399172088643558078956",
+    "size": "340282366920938463463374607431768211456",
+    "value": "0"
+   },
+   {
+    "permute": "239484589248623290438519504585944229216",
+    "size": "340282366920938463463374607431768211456",
+    "value": "1"
+   },
+   {
+    "permute": "5684677692854118825569734237654795391",
+    "size": "340282366920938463463374607431768211456",
+    "value": "170141183460469231731687303715884105728"
+   },
+   {
+    "permute": "27417260012389634450168819589739168021",
+    "size": "340282366920938463463374607431768211456",
+    "value": "12345"
+   },
+   {
+    "permute": "307380660645598662713096076686008452332",
+    "size": "340282366920938463463374607431768211456",
+    "value": "340282366920938463463374607431768211455"
+   },
+   {
+    "permute": "4347301110639",
+    "size": "4569760000000",
+    "value": "0"
+   },
+   {
+    "permute": "153031918160",
+    "size": "4569760000000",
+    "value": "1"
+   },
+   {
+    "permute": "2476741080232",
+    "size": "4569760000000",
+    "value": "2284880000000"
+   },
+   {
+    "permute": "2105518145131",
+    "size": "4569760000000",
+    "value": "12345"
+   },
+   {
+    "permute": "3325962762113",
+    "size": "4569760000000",
+    "value": "4569759999999"
+   },
+   {
+    "permute": "83146555954371",
+    "size": "218340105584896",
+    "value": "0"
+   },
+   {
+    "permute": "52028447628922",
+    "size": "218340105584896",
+    "value": "1"
+   },
+   {
+    "permute": "158864596699474",
+    "size": "218340105584896",
+    "value": "109170052792448"
+   },
+   {
+    "permute": "94832138377034",
+    "size": "218340105584896",
+    "value": "12345"
+   },
+   {
+    "permute": "40556384872826",
+    "size": "218340105584896",
+    "value": "218340105584895"
+   },
+   {
+    "permute": "614909493972351035397661226304122784",
+    "size": "704423425546998022968330264616370176",
+    "value": "0"
+   },
+   {
+    "permute": "267991250130365175488721408333607520",
+    "size": "704423425546998022968330264616370176",
+    "value": "1"
+   },
+   {
+    "permute": "553208303620086603373065445567038994",
+    "size": "704423425546998022968330264616370176",
+    "value": "352211712773499011484165132308185088"
+   },
+   {
+    "permute": "234643867437367831406413822486310559",
+    "size": "704423425546998022968330264616370176",
+    "value": "12345"
+   },
+   {
+    "permute": "232333957037988521547636131501779317",
+    "size": "704423425546998022968330264616370176",
+    "value": "704423425546998022968330264616370175"
+   },
+   {
+    "permute": "2092127710749448119729857929278648462800",
+    "size": "2707803647802660400290261537185326956544",
+    "value": "0"
+   },
+   {
+    "permute": "1600785297432113470356663209415954828596",
+    "size": "2707803647802660400290261537185326956544",
+    "value": "1"
+   },
+   {
+    "permute": "26811208914207742603436966701285477671",
+    "size": "2707803647802660400290261537185326956544",
+    "value": "1353901823901330200145130768592663478272"
+   },
+   {
+    "permute": "2197405502228044328887128291420690011885",
+    "size": "2707803647802660400290261537185326956544",
+    "value": "12345"
+   },
+   {
+    "permute": "565559970804936467191251071393629127596",
+    "size": "2707803647802660400290261537185326956544",
+    "value": "2707803647802660400290261537185326956543"
+   },
+   {
+    "permute": "7739745506371505974893066858131000719529",
+    "size": "10000000000000000000000000000000000000000",
+    "value": "0"
+   },
+   {
+    "permute": "1137208096616018066439488529435404002325",
+    "size": "10000000000000000000000000000000000000000",
+    "value": "1"
+   },
+   {
+    "permute": "824159611753794680218331776617491311680",
+    "size": "10000000000000000000000000000000000000000",
+    "value": "9999999999999999999999999999999999999999"
+   },
+   {
+    "permute": "1633350639976006463144494696538023505213",
+    "size": "10000000000000000000000000000000000000000",
+    "value": "12345"
+   },
+   {
+    "permute": "662863680532560615982658043628840747818",
+    "size": "10000000000000000000000000000000000000000",
+    "value": "5000000000000000000000000000000000000000"
+   },
+   {
+    "permute": "1648577289253958510305010518707102708868832236188047807623756522882033251463060103817258858160383813490733",
+    "size": "349543612162395953845740577347286517438941455193395301844668705169433181192075446190690551284287073236811776",
+    "value": "0"
+   },
+   {
+    "permute": "127200042128617341451953663415554999529587973741733640492347021038914345650293772152832858997681014159735241",
+    "size": "349543612162395953845740577347286517438941455193395301844668705169433181192075446190690551284287073236811776",
+    "value": "1"
+   },
+   {
+    "permute": "309237836249663017118455289553857059411876327695670541876242580316723839197812688427373260279602968364133524",
+    "size": "349543612162395953845740577347286517438941455193395301844668705169433181192075446190690551284287073236811776",
+    "value": "174771806081197976922870288673643258719470727596697650922334352584716590596037723095345275642143536618405888"
+   },
+   {
+    "permute": "57094583562944126494926571051064863873269148815611247978051269201906913684441863768701719845879569643847501",
+    "size": "349543612162395953845740577347286517438941455193395301844668705169433181192075446190690551284287073236811776",
+    "value": "349543612162395953845740577347286517438941455193395301844668705169433181192075446190690551284287073236811775"
+   },
+   {
+    "permute": "9679487713374779896350591278644259540334891494251843058375753535137574082935508741464264622924999125804404",
+    "size": "349543612162395953845740577347286517438941455193395301844668705169433181192075446190690551284287073236811776",
+    "value": "12345"
+   }
+  ],
+  "unit": [
+   {
+    "message": "",
+    "unit": "0.8418674565933759"
+   },
+   {
+    "message": "00",
+    "unit": "0.014727103638458083"
+   },
+   {
+    "message": "61",
+    "unit": "0.6399289653581537"
+   },
+   {
+    "message": "68656c6c6f",
+    "unit": "0.12557988974077028"
+   },
+   {
+    "message": "787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "unit": "0.669625264434867"
+   },
+   {
+    "message": "78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "unit": "0.5371281098302564"
+   },
+   {
+    "message": "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "unit": "0.38013185883681233"
+   },
+   {
+    "message": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "unit": "0.8515407819348436"
+   }
+  ]
+ },
+ "strategies": {
+  "digits {}": [
+   {
+    "masked": "",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "a",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "8",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "Z",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "ab",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "24",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "user5244017",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "USER5244017",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "1063185486",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "91844123308247200056",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "318886186004997014576",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "1399052486398585085318",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "aaaaaaaaaaaaaaaaaaaaa",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "aaaaaaaaaaaaaaaaaaaaaa",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "A4b4C5d6E3f4G2h6I5j4K",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "deadbeef",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "deadbeefcafebabe1063185486abcdef",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "deadbeefcafebabe7065516312abcdef0",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "DEADBEEF",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "DeadBeef",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "41628042-6648-3539-a877-106551424311",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "user@example.com",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "+0 (263) 204-5622",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "masked": "h\u00e9llo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "masked": "8",
+    "maskedType": "int",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "masked": "3",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "masked": "-3",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "masked": "5",
+    "maskedType": "int",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "masked": "96",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "masked": "-96",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "masked": "79",
+    "maskedType": "int",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "masked": "530",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "masked": "62170",
+    "maskedType": "int",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "masked": "-62170",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "masked": "7387476",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "masked": "9110829688077713097",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "masked": "-9110829688077713097",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "masked": "148507737743568302544616392727152211655",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "masked": "64526195189399557791081077765510786135329",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the digits strategy needs text or an integer, got UUID",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "error": "MaskingError",
+    "message": "the digits strategy needs text or an integer, got bool",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "email {\"keepDomain\": true}": [
+   {
+    "masked": "ud784a029a29f@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "ua3d26279f9f4@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "u986468b726a8@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "u4a2dd991c235@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "u5888fdd4ca5f@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "u64ff8d1c5a1c@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "uec791f0eab33@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "uec791f0eab33@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "u764a63a3ebc6@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "u02a8f654ad28@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "ud5ea4613e34e@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "u3110543e52e2@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "u0a777604ca3b@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "u0f88d79abb52@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "u9c6118825eb4@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "uf96c31f1cbed@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "u56f60ca2d789@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "ub98ef98e7ae2@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "uf96c31f1cbed@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "uf96c31f1cbed@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "u802f2b19e695@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "ufe88562b843e@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "ude706a6abebf@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "ufe5accb163b1@example.com",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "u7b8aa5163ae6@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "masked": "ub599c5746314@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got UUID",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got bool",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "email {}": [
+   {
+    "masked": "ud784a029a29f@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "ua3d26279f9f4@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "u986468b726a8@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "u4a2dd991c235@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "u5888fdd4ca5f@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "u64ff8d1c5a1c@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "uec791f0eab33@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "uec791f0eab33@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "u764a63a3ebc6@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "u02a8f654ad28@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "ud5ea4613e34e@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "u3110543e52e2@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "u0a777604ca3b@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "u0f88d79abb52@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "u9c6118825eb4@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "uf96c31f1cbed@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "u56f60ca2d789@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "ub98ef98e7ae2@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "uf96c31f1cbed@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "uf96c31f1cbed@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "u802f2b19e695@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "ufe88562b843e@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "ude706a6abebf@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "ufe5accb163b1@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "u7b8aa5163ae6@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "masked": "ub599c5746314@example.test",
+    "maskedType": "str",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got int",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got UUID",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "error": "MaskingError",
+    "message": "the email strategy needs text, got bool",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "fakeCity {}": [
+   {
+    "masked": "Ravenswood",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "Pinecrest",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "Marlow",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "Port Albany",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "Rosedale",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "Crestwood",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "Clearwater",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "Elmstead",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "Ashford",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "Ravenswood",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "Riverton",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "Oakridge",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "Clearwater",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "Highbridge",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "Ravenswood",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "Pinecrest",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "Kingsley",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "Maple Grove",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "Silverton",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "Millbrook",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "Hartwell",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "Rosedale",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "Ravenswood",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "Pinecrest",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "Kingsley",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "masked": "Highbridge",
+    "maskedType": "str",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "masked": "Marlow",
+    "maskedType": "str",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "masked": "Lakemont",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "masked": "Elmstead",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "masked": "Pinecrest",
+    "maskedType": "str",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "masked": "Riverton",
+    "maskedType": "str",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "masked": "Maple Grove",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "masked": "Hartwell",
+    "maskedType": "str",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "masked": "Elmstead",
+    "maskedType": "str",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "masked": "Northgate",
+    "maskedType": "str",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "masked": "Sandhurst",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "masked": "Greystone",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "masked": "Silverton",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "masked": "Sandhurst",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "masked": "Clearwater",
+    "maskedType": "str",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "masked": "Ravenswood",
+    "maskedType": "str",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "masked": "Hartwell",
+    "maskedType": "str",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "masked": "Lakemont",
+    "maskedType": "str",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "fakeFirstName {}": [
+   {
+    "masked": "Grace",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "Zoe",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "Lara",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "Yara",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "Yusuf",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "Emeka",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "Leo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "Mila",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "Kofi",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "Lucas",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "Victor",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "Chen",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "Isaac",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "Oscar",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "Oscar",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "Hana",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "Emeka",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "Quinn",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "Nadia",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "Hana",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "Camila",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "Carlos",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "Ivan",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "Grace",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "Jada",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "masked": "Fatima",
+    "maskedType": "str",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "masked": "Lara",
+    "maskedType": "str",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "masked": "Mei",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "masked": "Isaac",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "masked": "Jonas",
+    "maskedType": "str",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "masked": "Isaac",
+    "maskedType": "str",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "masked": "Oscar",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "masked": "Sara",
+    "maskedType": "str",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "masked": "Ethan",
+    "maskedType": "str",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "masked": "Omar",
+    "maskedType": "str",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "masked": "Rosa",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "masked": "Anya",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "masked": "Elif",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "masked": "Yara",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "masked": "Jada",
+    "maskedType": "str",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "masked": "Ada",
+    "maskedType": "str",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "masked": "Camila",
+    "maskedType": "str",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "masked": "Mei",
+    "maskedType": "str",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "fakeName {}": [
+   {
+    "masked": "Grace Wagner",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "Zoe Rossi",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "Lara Hayes",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "Yara Diallo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "Yusuf Wong",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "Emeka Castillo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "Leo Dahl",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "Mila Bianchi",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "Kofi Perez",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "Lucas Mendes",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "Victor Castillo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "Chen Tanaka",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "Isaac Diallo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "Oscar Zhang",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "Oscar Nakamura",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "Hana Ziegler",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "Emeka Lindqvist",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "Quinn Reyes",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "Nadia Kowalski",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "Hana Ferreira",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "Camila Bauer",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "Carlos Larsen",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "Ivan Diallo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "Grace Diallo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "Jada Silva",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "masked": "Fatima Hansen",
+    "maskedType": "str",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "masked": "Lara Hayes",
+    "maskedType": "str",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "masked": "Mei Torres",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "masked": "Isaac Silva",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "masked": "Jonas Torres",
+    "maskedType": "str",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "masked": "Isaac Anand",
+    "maskedType": "str",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "masked": "Oscar Lindqvist",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "masked": "Sara Alvarez",
+    "maskedType": "str",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "masked": "Ethan Nakamura",
+    "maskedType": "str",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "masked": "Omar Sousa",
+    "maskedType": "str",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "masked": "Rosa Bauer",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "masked": "Anya Ito",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "masked": "Elif Diallo",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "masked": "Yara Anand",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "masked": "Jada Jensen",
+    "maskedType": "str",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "masked": "Ada Larsen",
+    "maskedType": "str",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "masked": "Camila Bauer",
+    "maskedType": "str",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "masked": "Mei Torres",
+    "maskedType": "str",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "fpe {\"charset\": \"digits\"}": [
+   {
+    "masked": "",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "a",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "6",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "Z",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "ab",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "10",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "user2837319",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "USER6102246",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "2509614344",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "24910807450384578932",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "608877277392842101364",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "8824180075054260260562",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "aaaaaaaaaaaaaaaaaaaaa",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "aaaaaaaaaaaaaaaaaaaaaa",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "A5b7C2d7E9f6G1h4I3j6K",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "deadbeef",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "deadbeefcafebabe7017422655abcdef",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "deadbeefcafebabe3693119308abcdef2",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "DEADBEEF",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "DeadBeef",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "63264800-7665-5542-a179-861465928718",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "user@example.com",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "+6 (871) 372-6411",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "masked": "h\u00e9llo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "masked": "0",
+    "maskedType": "int",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "masked": "6",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "masked": "-4",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "masked": "2",
+    "maskedType": "int",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "masked": "22",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "masked": "-20",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "masked": "93",
+    "maskedType": "int",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "masked": "669",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "masked": "87152",
+    "maskedType": "int",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "masked": "-23667",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "masked": "9633775",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "masked": "8157786578642552450",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "masked": "-5837930443395146974",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "masked": "458185397188166957950385805167892436253",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "masked": "68854602351613992262787500205714571618808",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "masked": "8a9c6544-703d-9aca-37bb-c7789525e2ac",
+    "maskedType": "UUID",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy cannot mask a bool",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "fpe {\"charset\": \"hex\"}": [
+   {
+    "masked": "",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "e",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "8",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "Z",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "b4",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "8e",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "us2rec94820",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "US4R7A8ECE9",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "7957928f57",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "0041c03c33d93a092312",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "ac3bacc8f27af3298238a",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "81e47d88f35df10ea8050c",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "a713fc21ae27e6b648039",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "cce4010445a523ade24348",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "5909a689491dG6h7I5j6K",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "cb05740b",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "abaeec85834fa4a7d3da47e9ea4ad529",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "582b4fb82e647d476c728fc7f3a09d626",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "CB05740B",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "cb05740b",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "8a9c6544-703d-9aca-37bb-c7789525e2ac",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "us9r@0xempl7.0om",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "+1 (09e) c7b-61f8",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "masked": "h\u00e9llo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "masked": "0",
+    "maskedType": "int",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "masked": "6",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "masked": "-4",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "masked": "2",
+    "maskedType": "int",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "masked": "22",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "masked": "-20",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "masked": "93",
+    "maskedType": "int",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "masked": "669",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "masked": "87152",
+    "maskedType": "int",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "masked": "-23667",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "masked": "9633775",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "masked": "8157786578642552450",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "masked": "-5837930443395146974",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "masked": "458185397188166957950385805167892436253",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "masked": "68854602351613992262787500205714571618808",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "masked": "8a9c6544-703d-9aca-37bb-c7789525e2ac",
+    "maskedType": "UUID",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy cannot mask a bool",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "fpe {\"strict\": true}": [
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 4 alphanumeric characters in a value; this one has fewer",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 4 alphanumeric characters in a value; this one has fewer",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 4 alphanumeric characters in a value; this one has fewer",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 4 alphanumeric characters in a value; this one has fewer",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 4 alphanumeric characters in a value; this one has fewer",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 4 alphanumeric characters in a value; this one has fewer",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "Wg2jScsVgep",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "wyxAEQoBrMc",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "j3FA8kvNVq",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "OQ4OApHtBsxhy8YBqHlm",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "D1nHdnIqVHcUJwXSPp11G",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "ml3WQ01bkt8MJPqBt23WRf",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "1aGqjjqilKcFdagwtqajO",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "40T48PfIOLNPt8xhgVNXzt",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "nt5Skfw3BEdTffK9UwV6j",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "BOZTQhrQ",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "dcgkmsSeLjdUBfTnHPI8NcWignlTf8zE",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "wIAedTZ0dIa6MdSNIH5pIZhxwL7joiyZo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "NVrlljFf",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "GaIWgXzv",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "79pSqfy0-E9q0-Yjon-okf7-Y2ewSl4gH8Eu",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "6EC4t5n4mm6CKtyV2ojibp6EAl5x5zMjfxbfe4jijMGlu8fgEdEE9cksGSUNYMKqnImAx6csFt0wpoaDP3mAA4z2Z6F0KrXxRIQ7tOopboMINkxLEMnihXTkIKNNoZGyzfcVqLAfVoW1MULK7z3F5k511Q5xAkjn9nM5gH9ciGYTCOQU3TBYtreA9u6uiW33fCeuDAEYB8Ww3Gok0NbBdbMz5FI16FWQxNDM1QsSS2UNEQ1MqK0NlDEalfXt2uA",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "HTdQsF0VcHUUrzfeZSvbUkTxmH1Zo0OSigBvKKnehqG1NL7lajNn2w4hO61ijTQJWhnGmtuoOkN4FzQPoTd186PZ87ipopZyEqGUB0bv18oYOEEAd2JdFy0CYwrg0rmsuEvxmfFP9vMGk22YWqnH6zMp3L6nBds7ACP8wWJwm1f0fvPt3GToeM5wZUVfYS6aR8k06wIRc7T4x9t5x8Yd6pZB3h0Vkh2fSgFBfPfsg1lHtnChIWgtrPt3GrMe0SUM",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "kQ0p@xnfSUDV.jen",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "+l (4mO) NYe-beTz",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy masks only ASCII letters and digits, and this value has letters or digits in another script, which it would copy unmasked; use hash, a fake strategy or null for such text",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 6 digits in a value; this one has fewer",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 6 digits in a value; this one has fewer",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 6 digits in a value; this one has fewer",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 6 digits in a value; this one has fewer",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 6 digits in a value; this one has fewer",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 6 digits in a value; this one has fewer",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 6 digits in a value; this one has fewer",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 6 digits in a value; this one has fewer",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 6 digits in a value; this one has fewer",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy is strict, and FF1 needs at least 6 digits in a value; this one has fewer",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "masked": "9633775",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "masked": "8157786578642552450",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "masked": "-5837930443395146974",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "masked": "458185397188166957950385805167892436253",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "masked": "68854602351613992262787500205714571618808",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "masked": "8a9c6544-703d-9aca-37bb-c7789525e2ac",
+    "maskedType": "UUID",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy cannot mask a bool",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "fpe {}": [
+   {
+    "masked": "",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "r",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "6",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "O",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "iv",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "88",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "Wg2jScsVgep",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "wyxAEQoBrMc",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "j3FA8kvNVq",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "OQ4OApHtBsxhy8YBqHlm",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "D1nHdnIqVHcUJwXSPp11G",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "ml3WQ01bkt8MJPqBt23WRf",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "1aGqjjqilKcFdagwtqajO",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "40T48PfIOLNPt8xhgVNXzt",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "nt5Skfw3BEdTffK9UwV6j",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "BOZTQhrQ",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "dcgkmsSeLjdUBfTnHPI8NcWignlTf8zE",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "wIAedTZ0dIa6MdSNIH5pIZhxwL7joiyZo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "NVrlljFf",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "GaIWgXzv",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "79pSqfy0-E9q0-Yjon-okf7-Y2ewSl4gH8Eu",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "6EC4t5n4mm6CKtyV2ojibp6EAl5x5zMjfxbfe4jijMGlu8fgEdEE9cksGSUNYMKqnImAx6csFt0wpoaDP3mAA4z2Z6F0KrXxRIQ7tOopboMINkxLEMnihXTkIKNNoZGyzfcVqLAfVoW1MULK7z3F5k511Q5xAkjn9nM5gH9ciGYTCOQU3TBYtreA9u6uiW33fCeuDAEYB8Ww3Gok0NbBdbMz5FI16FWQxNDM1QsSS2UNEQ1MqK0NlDEalfXt2uA",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "HTdQsF0VcHUUrzfeZSvbUkTxmH1Zo0OSigBvKKnehqG1NL7lajNn2w4hO61ijTQJWhnGmtuoOkN4FzQPoTd186PZ87ipopZyEqGUB0bv18oYOEEAd2JdFy0CYwrg0rmsuEvxmfFP9vMGk22YWqnH6zMp3L6nBds7ACP8wWJwm1f0fvPt3GToeM5wZUVfYS6aR8k06wIRc7T4x9t5x8Yd6pZB3h0Vkh2fSgFBfPfsg1lHtnChIWgtrPt3GrMe0SUM",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "kQ0p@xnfSUDV.jen",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "+l (4mO) NYe-beTz",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy masks only ASCII letters and digits, and this value has letters or digits in another script, which it would copy unmasked; use hash, a fake strategy or null for such text",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "masked": "0",
+    "maskedType": "int",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "masked": "6",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "masked": "-4",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "masked": "2",
+    "maskedType": "int",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "masked": "22",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "masked": "-20",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "masked": "93",
+    "maskedType": "int",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "masked": "669",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "masked": "87152",
+    "maskedType": "int",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "masked": "-23667",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "masked": "9633775",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "masked": "8157786578642552450",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "masked": "-5837930443395146974",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "masked": "458185397188166957950385805167892436253",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "masked": "68854602351613992262787500205714571618808",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "masked": "8a9c6544-703d-9aca-37bb-c7789525e2ac",
+    "maskedType": "UUID",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "error": "MaskingError",
+    "message": "the fpe strategy cannot mask a bool",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "hash {\"length\": 20, \"prefix\": \"c_\"}": [
+   {
+    "masked": "c_d784a029a29fb0f3a324",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "c_a3d26279f9f4845356dd",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "c_986468b726a884923637",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "c_efe1fb23f11d73cf3810",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "c_5888fdd4ca5f7ad94372",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "c_64ff8d1c5a1c173a51f8",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "c_ec791f0eab336ee65dd6",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "c_7a0aac3faa231f888060",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "c_764a63a3ebc6c148fd48",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "c_02a8f654ad28a7292709",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "c_d5ea4613e34eea8a19c1",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "c_3110543e52e2a520c226",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "c_0a777604ca3bebd7fee4",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "c_0f88d79abb521238751a",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "c_3ae71231c6db094ee9a1",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "c_f96c31f1cbedc173fd95",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "c_56f60ca2d7893b99e37d",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "c_b98ef98e7ae2142b672a",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "c_bd8a3659365d6ebd6d39",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "c_9557ffa03d9cee0971c9",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "c_802f2b19e695207f191e",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "c_fe88562b843e8b45515d",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "c_de706a6abebf9e3b96c4",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "c_fe5accb163b137d6f20c",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "c_7b8aa5163ae6d797e941",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "masked": "c_b599c57463148b384770",
+    "maskedType": "str",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "masked": "c_986468b726a884923637",
+    "maskedType": "str",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "masked": "c_1df8a279a1859d29fbcc",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "masked": "c_1a5d66b1d866658e8a7f",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "masked": "c_d4585a07e866bb96fc3e",
+    "maskedType": "str",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "masked": "c_c2a70adba6a4a370b9e4",
+    "maskedType": "str",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "masked": "c_35fea5aa3275be0c5a47",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "masked": "c_fc61176d4514490954a6",
+    "maskedType": "str",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "masked": "c_5393a0771f4c7e79129c",
+    "maskedType": "str",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "masked": "c_bf0b8c13174039f2dde0",
+    "maskedType": "str",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "masked": "c_bcd7849a571d4ed32d3a",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "masked": "c_1f0d1065ec1fe6333bcc",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "masked": "c_745b0786060dbd5083f3",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "masked": "c_db9a980c76e151e10fc6",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "masked": "c_19a5fdd1b098a76c12c4",
+    "maskedType": "str",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "masked": "c_7f6731f2db1c8a6d08a5",
+    "maskedType": "str",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "masked": "c_802f2b19e695207f191e",
+    "maskedType": "str",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "masked": "c_1df8a279a1859d29fbcc",
+    "maskedType": "str",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "hash {}": [
+   {
+    "masked": "d784a029a29fb0f3",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "a3d26279f9f48453",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "986468b726a88492",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "efe1fb23f11d73cf",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "5888fdd4ca5f7ad9",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "64ff8d1c5a1c173a",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "ec791f0eab336ee6",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "7a0aac3faa231f88",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "764a63a3ebc6c148",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "02a8f654ad28a729",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "d5ea4613e34eea8a",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "3110543e52e2a520",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "0a777604ca3bebd7",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "0f88d79abb521238",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "3ae71231c6db094e",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "f96c31f1cbedc173",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "56f60ca2d7893b99",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "b98ef98e7ae2142b",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "bd8a3659365d6ebd",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "9557ffa03d9cee09",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "802f2b19e695207f",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "fe88562b843e8b45",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "de706a6abebf9e3b",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "fe5accb163b137d6",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "7b8aa5163ae6d797",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "masked": "b599c57463148b38",
+    "maskedType": "str",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "masked": "986468b726a88492",
+    "maskedType": "str",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "masked": "1df8a279a1859d29",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "masked": "1a5d66b1d866658e",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "masked": "d4585a07e866bb96",
+    "maskedType": "str",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "masked": "c2a70adba6a4a370",
+    "maskedType": "str",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "masked": "35fea5aa3275be0c",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "masked": "fc61176d45144909",
+    "maskedType": "str",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "masked": "5393a0771f4c7e79",
+    "maskedType": "str",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "masked": "bf0b8c13174039f2",
+    "maskedType": "str",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "masked": "bcd7849a571d4ed3",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "masked": "1f0d1065ec1fe633",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "masked": "745b0786060dbd50",
+    "maskedType": "str",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "masked": "db9a980c76e151e1",
+    "maskedType": "str",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "masked": "19a5fdd1b098a76c",
+    "maskedType": "str",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "masked": "7f6731f2db1c8a6d",
+    "maskedType": "str",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "masked": "802f2b19e695207f",
+    "maskedType": "str",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "masked": "1df8a279a1859d29",
+    "maskedType": "str",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "key {\"charset\": \"digits\"}": [
+   {
+    "masked": "",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "a",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "6",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "Z",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "ab",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "10",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "user8084157",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "USER9181540",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "8947759655",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "53956133884558545814",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "583232055136221272405",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "1563451104932361924295",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "aaaaaaaaaaaaaaaaaaaaa",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "aaaaaaaaaaaaaaaaaaaaaa",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "A2b0C0d7E1f3G0h7I4j8K",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "deadbeef",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "deadbeefcafebabe4459118453abcdef",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "deadbeefcafebabe7032569795abcdef5",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "DEADBEEF",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "DeadBeef",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "70548258-9134-9774-a466-939934046216",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "user@example.com",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "+3 (025) 435-3183",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "masked": "h\u00e9llo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "masked": "0",
+    "maskedType": "int",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "masked": "6",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "masked": "-4",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "masked": "2",
+    "maskedType": "int",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "masked": "22",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "masked": "-20",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "masked": "93",
+    "maskedType": "int",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "masked": "669",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "masked": "87152",
+    "maskedType": "int",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "masked": "-23667",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "masked": "8550140",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "masked": "3551657442350539689",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "masked": "-3150101091706892700",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "masked": "995576095220970844394208460336583373491",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "masked": "36217502567050207383374215826536409074868",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "masked": "281e3983-ee4b-917d-4729-1bece54cf87c",
+    "maskedType": "UUID",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "error": "MaskingError",
+    "message": "the key strategy cannot mask a bool",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "key {\"charset\": \"hex\"}": [
+   {
+    "masked": "",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "e",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "8",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "Z",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "b4",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "8e",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "us2r7dfcb63",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "US5R64A80B9",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "5d906b1ba6",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "199db833842b24e5804a",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "e3b31a117d580487cada8",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "298c1619c07f7506cc6ec4",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "c20cacbe1ce356797b396",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "55914e6176da9e8efbe38b",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "61bd38a3fa03Gbh5IcjbK",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "e3722c95",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "ad2d45daff6ac5a4c78de0c0aa1f92b7",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "d9faebd4c88cd04979b2187a7724752f9",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "E3722C95",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "e3722c95",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "281e3983-ee4b-917d-4729-1bece54cf87c",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "uscr@1x6mpl7.7om",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "+9 (d8b) 761-dfdc",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "masked": "h\u00e9llo",
+    "maskedType": "str",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "masked": "0",
+    "maskedType": "int",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "masked": "6",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "masked": "-4",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "masked": "2",
+    "maskedType": "int",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "masked": "22",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "masked": "-20",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "masked": "93",
+    "maskedType": "int",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "masked": "669",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "masked": "87152",
+    "maskedType": "int",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "masked": "-23667",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "masked": "8550140",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "masked": "3551657442350539689",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "masked": "-3150101091706892700",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "masked": "995576095220970844394208460336583373491",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "masked": "36217502567050207383374215826536409074868",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "masked": "281e3983-ee4b-917d-4729-1bece54cf87c",
+    "maskedType": "UUID",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "error": "MaskingError",
+    "message": "the key strategy cannot mask a bool",
+    "type": "bool",
+    "value": "True"
+   }
+  ],
+  "key {}": [
+   {
+    "masked": "",
+    "maskedType": "str",
+    "type": "str",
+    "value": ""
+   },
+   {
+    "masked": "r",
+    "maskedType": "str",
+    "type": "str",
+    "value": "a"
+   },
+   {
+    "masked": "6",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0"
+   },
+   {
+    "masked": "O",
+    "maskedType": "str",
+    "type": "str",
+    "value": "Z"
+   },
+   {
+    "masked": "iv",
+    "maskedType": "str",
+    "type": "str",
+    "value": "ab"
+   },
+   {
+    "masked": "88",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00"
+   },
+   {
+    "masked": "wqwt9753204",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user0000001"
+   },
+   {
+    "masked": "WQWT9753204",
+    "maskedType": "str",
+    "type": "str",
+    "value": "USER0000001"
+   },
+   {
+    "masked": "2810891523",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789"
+   },
+   {
+    "masked": "83445970045917317320",
+    "maskedType": "str",
+    "type": "str",
+    "value": "01234567890123456789"
+   },
+   {
+    "masked": "130550794884368631429",
+    "maskedType": "str",
+    "type": "str",
+    "value": "012345678901234567890"
+   },
+   {
+    "masked": "3664306933932934090313",
+    "maskedType": "str",
+    "type": "str",
+    "value": "0123456789012345678901"
+   },
+   {
+    "masked": "sallxxfmzgugdbbpftqdw",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "gqysdgmugmnizjymtydlqj",
+    "maskedType": "str",
+    "type": "str",
+    "value": "aaaaaaaaaaaaaaaaaaaaaa"
+   },
+   {
+    "masked": "L2j3V6z5S0w5I3t3G3y1P",
+    "maskedType": "str",
+    "type": "str",
+    "value": "A1b2C3d4E5f6G7h8I9j0K"
+   },
+   {
+    "masked": "psraxrzx",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeef"
+   },
+   {
+    "masked": "quqijqefiazginde8031956532mabqtl",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef"
+   },
+   {
+    "masked": "ravtzqxtoqwnnolg7711165953wohdnc1",
+    "maskedType": "str",
+    "type": "str",
+    "value": "deadbeefcafebabe0123456789abcdef0"
+   },
+   {
+    "masked": "PSRAXRZX",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DEADBEEF"
+   },
+   {
+    "masked": "PsraXrzx",
+    "maskedType": "str",
+    "type": "str",
+    "value": "DeadBeef"
+   },
+   {
+    "masked": "08980628-4929-8383-l723-638615927603",
+    "maskedType": "str",
+    "type": "str",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": "lwohykggdiavrbqijmildsqplvexclqrwmwnejojzqighgfmkpkaxcdwuknzsljzmwebwucauleslrljxvmaavtjamsrryjruxjzjxpeezalvbifdfsggamijurhqjmlsnkcocdujjjhxwimmceyxdhahaymvdlqbzkkjzkwulmalvfyeseuzxkcarxkktqsijivfpvemokknuvqtzxxaeecplyvoyptougwrwpyhkxwbdbzvyfsbbyvipapfth",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "eddxizwgznjxenxecavdibpjlrqgfeuzjwyohjybisxzkvvibrjgjjyaqdbdxlvbjsnpklabpsznfammupqoksklstwcgryzzroqnyoqtggvtmydgaijwxycnrvagoiofgbgfjcxxahblglwyeudtznoapnvgxnnjdbxypibbgqwatpqegkfsrpzelfcfphkpargujfhtbmmqbxspqvehnodiychgvnyyarymhuqlygowwmounftgcdmzsimlbbz",
+    "maskedType": "str",
+    "type": "str",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "masked": "qxlg@amxbvky.gcz",
+    "maskedType": "str",
+    "type": "str",
+    "value": "user@example.com"
+   },
+   {
+    "masked": "+8 (554) 316-1250",
+    "maskedType": "str",
+    "type": "str",
+    "value": "+1 (555) 010-9999"
+   },
+   {
+    "error": "MaskingError",
+    "message": "the key strategy masks only ASCII letters and digits, and this value has letters or digits in another script, which it would copy unmasked; use hash, a fake strategy or null for such text",
+    "type": "str",
+    "value": "h\u00e9llo"
+   },
+   {
+    "masked": "0",
+    "maskedType": "int",
+    "type": "int",
+    "value": "0"
+   },
+   {
+    "masked": "6",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1"
+   },
+   {
+    "masked": "-4",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1"
+   },
+   {
+    "masked": "2",
+    "maskedType": "int",
+    "type": "int",
+    "value": "9"
+   },
+   {
+    "masked": "22",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10"
+   },
+   {
+    "masked": "-20",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-10"
+   },
+   {
+    "masked": "93",
+    "maskedType": "int",
+    "type": "int",
+    "value": "99"
+   },
+   {
+    "masked": "669",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100"
+   },
+   {
+    "masked": "87152",
+    "maskedType": "int",
+    "type": "int",
+    "value": "12345"
+   },
+   {
+    "masked": "-23667",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-12345"
+   },
+   {
+    "masked": "8550140",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000"
+   },
+   {
+    "masked": "3551657442350539689",
+    "maskedType": "int",
+    "type": "int",
+    "value": "1000000000000000000"
+   },
+   {
+    "masked": "-3150101091706892700",
+    "maskedType": "int",
+    "type": "int",
+    "value": "-1000000000000000000"
+   },
+   {
+    "masked": "995576095220970844394208460336583373491",
+    "maskedType": "int",
+    "type": "int",
+    "value": "100000000000000000000000000000000000000"
+   },
+   {
+    "masked": "36217502567050207383374215826536409074868",
+    "maskedType": "int",
+    "type": "int",
+    "value": "10000000000000000000000000000000000000000"
+   },
+   {
+    "masked": "281e3983-ee4b-917d-4729-1bece54cf87c",
+    "maskedType": "UUID",
+    "type": "UUID",
+    "value": "00000000-0000-4000-a000-000000000000"
+   },
+   {
+    "masked": null,
+    "maskedType": "NoneType",
+    "type": "NoneType",
+    "value": null
+   },
+   {
+    "error": "MaskingError",
+    "message": "the key strategy cannot mask a bool",
+    "type": "bool",
+    "value": "True"
+   }
+  ]
+ }
+}

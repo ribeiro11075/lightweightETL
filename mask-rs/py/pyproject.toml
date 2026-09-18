@@ -1,0 +1,22 @@
+# The extension ships as its own distribution: `understudy-data` keeps its
+# setuptools build and stays installable anywhere, with no Rust needed to
+# install it from source. `pip install "understudy-data[fast]"` brings this.
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "understudy-mask"
+description = "The native masking core for Understudy. Optional: understudy-data works without it."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    ]
+dynamic = ["version"]
+
+[tool.maturin]
+# abi3 so one wheel per platform covers every supported Python.
+features = ["pyo3/extension-module"]
+module-name = "understudy_mask"

@@ -26,6 +26,18 @@ def strategy(name, key=KEY, domain='test', **options):
     return STRATEGIES[name](KeyedHash(key, domain), STRATEGIES[name].validateOptions(options))
 
 
+def pythonStrategy(name, **options):
+    """A strategy with the native masker off, for the tests that are about the
+    Python implementation itself -- its cache, which the extension replaces with
+    per-batch deduplication. What both must agree on is masks, not bookkeeping.
+    """
+
+    built = strategy(name, **options)
+    built._native = None
+
+    return built
+
+
 def maskOne(name, value, **options):
     return strategy(name, **options).maskColumn([value], 0)[0]
 
@@ -867,7 +879,7 @@ def test_remembered_masks_are_the_masks_themselves(name, options, values):
 
 
 def test_only_values_whose_equals_always_mask_alike_are_remembered():
-    remembered = strategy('hash')
+    remembered = pythonStrategy('hash')
 
     remembered.maskColumn([41, True, decimal.Decimal('41'), 41.0, datetime.date(2020, 1, 1), 'x' * 257, 'short', uuid.UUID(int=1), None], 0)
 
@@ -878,7 +890,7 @@ def test_the_cache_is_bounded(monkeypatch):
     import understudy_data.masking as masking
 
     monkeypatch.setattr(masking, 'MASK_CACHE_SIZE', 10)
-    remembered = strategy('hash')
+    remembered = pythonStrategy('hash')
 
     for start in range(0, 100, 7):
         assert remembered.maskColumn(list(range(start, start + 7)), 0) == [maskOne('hash', value) for value in range(start, start + 7)]

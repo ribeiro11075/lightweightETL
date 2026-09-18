@@ -1,0 +1,18 @@
+# Two crates rather than one: `core` knows nothing about Python, so the same
+# masking can later back a Rust CLI or a PostgreSQL extension, and its tests
+# run without an interpreter. `py` is the PyO3 layer and holds every unsafe
+# boundary and every type conversion.
+[workspace]
+members = ["core", "py"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+license = "MIT"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
