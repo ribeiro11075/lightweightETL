@@ -5,6 +5,8 @@ Running `understudy` unattended: where its state lives, and how to know what it 
 - [Run state](#run-state)
 - [Run history](#run-history)
 - [Metrics](#metrics)
+- [Throughput](#throughput)
+- [Environment variables](#environment-variables)
 - [Notifications](#notifications)
 - [A deployment, put together](#a-deployment-put-together)
 
@@ -100,6 +102,67 @@ A job that isn't part of a cycle, because it's inside its `refresh` window, keep
 - alert: EtlJobStale
   expr: time() - understudy_job_last_success_timestamp_seconds > 3 * 3600
 ```
+
+
+## Throughput
+
+Three things decide how fast a job moves rows, in this order.
+
+**The masking policy**, by about sevenfold. `key` is the expensive strategy
+because it must be a permutation; `hash` hides just as much for a thirtieth of
+the work, wherever a column doesn't have to stay one-to-one. See
+[speed](masking.md#speed).
+
+**The native masker.** `pip install "understudy-data[fast]"` masks `key`, `fpe`,
+`hash`, `email` and `digits` in Rust, for four to five times the throughput on
+the same policy. Optional, identical results, nothing to configure. Ten million
+rows of six masked columns take 99 seconds with it and about eight minutes
+without.
+
+**`chunkSize`, but not the way it looks.** Larger chunks are not faster: from
+500 rows to 200,000, a local database finishes the same job in 8.6 to 9.2
+seconds. What `chunkSize` controls is how much *round-trip latency* a job pays,
+because each chunk costs one trip out and one back. Against a database 25 ms
+away, the same million rows take 123 seconds at `chunkSize: 500` and 8.8 at
+`chunkSize: 10000`.
+
+The threshold is where a chunk's masking outlasts its round trips:
+
+```
+chunkSize  >  2 x latency / per-row masking cost
+```
+
+At 5 ms that is a few thousand rows; at 25 ms, six thousand or so. Above it,
+latency disappears and further increases only cost memory. A policy of cheap
+strategies needs *larger* chunks than an expensive one, having less work to hide
+the waiting behind.
+
+Where the masker is native, reading, masking and writing overlap rather than
+taking turns, which absorbs what is left (`UNDERSTUDY_PIPELINE`, under
+[environment variables](#environment-variables)). A job then holds about three
+chunks rather than one — still bounded by `chunkSize`, not by table size. Ten
+million rows held 80 MB.
+
+If a job is slower than this suggests, the database is usually the reason rather
+than the masking: check the target's indexes and constraints during a bulk load,
+and prefer a stage table (`targetTableStage`) so the final table is written once.
+
+
+## Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `UNDERSTUDY_CONFIG` | where to look for configuration |
+| `UNDERSTUDY_NOTIFY_URL` | webhook for failed cycles |
+| `UNDERSTUDY_MANIFEST_KEY` | signs and verifies masking manifests |
+| `UNDERSTUDY_NATIVE=0` | mask in Python even where the extension is installed |
+| `UNDERSTUDY_PIPELINE=0` / `=1` | force reading, masking and writing to take turns, or to overlap |
+
+The last two are diagnostic. `UNDERSTUDY_NATIVE=0` rules the extension out when
+a result looks wrong — the two are tested to agree, so a difference would be a
+bug worth reporting. `UNDERSTUDY_PIPELINE` overrides the default, which is to
+overlap only where the native masker is installed: pure-Python masking is slow
+enough to swamp any wait worth hiding, so overlapping it costs about 2%.
 
 
 ## Notifications

@@ -3,16 +3,20 @@ from __future__ import annotations
 import contextlib
 import logging
 import multiprocessing as mp
+import os
+import queue
 import signal
+import threading
 import time
 from multiprocessing.connection import wait as waitForAny
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Mapping, NamedTuple, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 from .configuration import ConfigurationError, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, InsertStrategy
 from .database import Database
 from .dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 from .log import LOGGER_NAME, ConnectionForwarder, Log, forwardToConnection, handleForwardedRecord
+from . import masking as maskingModule
 from .masking import BoundMasking, MaskingError, MaskingPlan, buildMaskingManifest, keyFingerprint
 from .memory import MemoryBackend
 from .scrubbing import describeError
@@ -36,6 +40,26 @@ TERMINATE_GRACE_SECONDS = 5.0
 # How long a job may take to exit once it has sent its outcome, before it is
 # stopped. It has nothing left to do by then but close its connections.
 EXIT_GRACE_SECONDS = 10.0
+
+# How many chunks each side of the masking worker may queue. One is enough for
+# the reader, the masker and the writer to all have work: a job then holds three
+# chunks at once -- one being read, one being masked, one being written --
+# against the one a strictly sequential loop holds. Raising it buys no more
+# overlap and costs a chunk of memory each.
+#
+# Still cheaper than the alternative. Fewer, larger chunks also hide latency,
+# but at 10 ms a round trip three chunks of 5,000 rows beat one of 20,000 on
+# both counts: 2.24s against 2.63s, holding 15,000 rows rather than 20,000.
+PIPELINE_DEPTH = 1
+
+# Ends the chunk stream, on either queue.
+_FINISHED = object()
+
+# How long a blocked reader waits before checking whether it should stop.
+_PIPELINE_POLL_SECONDS = 0.2
+
+# How long to wait for the writer after the sending side has already failed.
+_PIPELINE_JOIN_SECONDS = 30.0
 
 # The longest wait between two attempts at a job. Backoff doubles from
 # retryDelaySeconds, so without a ceiling `retries: 12` would wait 5.7 hours in
@@ -190,7 +214,10 @@ def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: D
     """Runs one data job to completion, raising on failure.
 
     Rows are pulled, transformed and written a chunk at a time, so peak memory is
-    bounded by chunkSize rather than by the result set. Extract and load
+    bounded by chunkSize rather than by the result set -- by a small multiple of
+    it, in fact: masking runs on a worker thread so that it and the database
+    overlap, which leaves up to three chunks in hand at once (PIPELINE_DEPTH).
+    Extract and load
     interleave, so a source failing part-way leaves the rows already yielded
     written. That is invisible for `swap` and stage-backed `upsert`, which only
     touch targetTableFinal in their last step; a stage-less `upsert` writes
@@ -272,18 +299,8 @@ def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: D
         rowCount = 0
         highWatermark = None
 
-        for chunk in chunks:
-
-            if watermarkIndex is not None:
-                for row in chunk:
-                    value = row[watermarkIndex]
-                    if value is not None and (highWatermark is None or value > highWatermark):
-                        highWatermark = value
-
-            rows = transform.apply(chunk)
-
-            if masking is not None:
-                rows = masking.apply(rows)
+        def writeChunk(rows: List[Any], watermark: Any) -> None:
+            nonlocal rowCount, highWatermark
 
             if streamsDirectlyIntoTarget:
                 targetDatabase.upsert(table=loadTable, data=rows, chunkSize=jobConfig.chunkSize, columns=columns)
@@ -291,7 +308,33 @@ def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: D
                 targetDatabase.insert(table=loadTable, data=rows, chunkSize=jobConfig.chunkSize, columns=columns)
 
             rowCount += len(rows)
+            # Only now: a job that dies part-way must not record a watermark
+            # covering rows it never landed, or the next run starts past them.
+            if watermark is not None and (highWatermark is None or watermark > highWatermark):
+                highWatermark = watermark
+
             logger.debug('Loaded {} row(s) into {} ({} so far)'.format(len(rows), loadTable, rowCount))
+
+        def prepareChunk(chunkIndex: int, chunk: List[Tuple[Any, ...]]) -> List[Any]:
+            rows = transform.apply(chunk)
+
+            if masking is not None:
+                # Numbered by where the chunk was read rather than by when it
+                # was masked: `shuffle` keys its permutation on this.
+                rows = masking.apply(rows, chunkIndex=chunkIndex)
+
+            return rows
+
+        with _MaskAhead(prepareChunk, _pipelineDepth()) as preparing:
+
+            for chunkIndex, chunk in enumerate(chunks):
+                watermark = _highestWatermark(chunk, watermarkIndex)
+
+                for rows, chunkWatermark in preparing.send(chunkIndex, chunk, watermark):
+                    writeChunk(rows, chunkWatermark)
+
+            for rows, chunkWatermark in preparing.finish():
+                writeChunk(rows, chunkWatermark)
 
         logger.info('Streamed {} row(s) from {} into {}'.format(rowCount, jobConfig.sourceDatabase, loadTable))
 
@@ -313,6 +356,221 @@ def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: D
         maskingApplied = {'columns': [entry._asdict() for entry in masking.manifest]}
 
     return JobOutcome(job=job, status=JobStatus.COMPLETED, rowCount=rowCount, watermark=highWatermark, masking=maskingApplied)
+
+
+def _pipelineDepth() -> int:
+    """PIPELINE_DEPTH, or 0 to read, mask and write strictly in turn.
+
+    On by default only where the native masker is installed, because that is
+    the only place it pays. Overlapping hides the database's round trips behind
+    masking, so what it is worth depends on how much masking there is to hide
+    them behind:
+
+        200,000 rows, 6 masked columns, 5 ms round trip each way
+
+        Python masking, in turn      11.57s
+        Python masking, overlapped   11.79s     0.98x
+        native masking, in turn       2.92s     3.96x
+        native masking, overlapped    2.16s     5.35x
+
+    Pure-Python masking is slow enough to swamp any wait worth hiding, so the
+    handoff costs more than it saves. With the extension the round trips vanish
+    entirely: 2.16s against 2.17s with no latency at all, where the sequential
+    path gives up a quarter of its advantage as the database gets further away.
+
+    UNDERSTUDY_PIPELINE=1 forces it on, =0 forces it off -- the latter for
+    diagnosing a problem with the worker thread out of the picture. Depth 0
+    starts no threads at all rather than sizing a queue differently.
+    """
+
+    setting = os.environ.get('UNDERSTUDY_PIPELINE')
+
+    if setting is not None:
+        return PIPELINE_DEPTH if setting == '1' else 0
+
+    return PIPELINE_DEPTH if maskingModule.nativeVersion() is not None else 0
+
+
+def _highestWatermark(chunk: Sequence[Sequence[Any]], index: Optional[int]) -> Any:
+    """The largest value of the watermark column in one chunk, or None.
+
+    Read from the raw rows, before transforms: a transform may reformat the
+    column, and the next run's predicate needs a value the source can compare.
+    """
+
+    if index is None:
+        return None
+
+    highest = None
+    for row in chunk:
+        value = row[index]
+        if value is not None and (highest is None or value > highest):
+            highest = value
+
+    return highest
+
+
+class _MaskAhead:
+    """Transforms and masks on a worker thread, so the database's round trips
+    and the masker's own work overlap instead of taking turns.
+
+    The database stays on the calling thread, both connections. That is not
+    caution: DBAPI drivers at threadsafety 1 -- mysqlclient and PyMySQL among
+    them -- forbid a connection being used by any thread but its own, and
+    sqlite3 enforces the same through check_same_thread whatever its module
+    threadsafety says. Masking is the part that is ours to move.
+
+    It overlaps despite the GIL because the two sides want different things:
+    drivers release it while they wait on a socket, and the native masker
+    releases it for the whole batch. Pure-Python masking holds it, so there the
+    overlap is only as wide as the driver's waits -- which is still most of them.
+
+    One worker, in order. A stage-less upsert writes straight into the live
+    target, and a key repeated across chunks has to arrive in source order.
+    """
+
+    def __init__(self, prepare: Callable[[int, Any], List[Any]], depth: int) -> None:
+        self._prepare = prepare
+        self._threaded = depth > 0
+        self._inbound: 'queue.Queue[Any]' = queue.Queue(maxsize=max(depth, 1))
+        self._outbound: 'queue.Queue[Any]' = queue.Queue(maxsize=max(depth, 1))
+        self._failure: Optional[BaseException] = None
+        self._pending = 0
+        self._thread = threading.Thread(target=self._work, name='understudy-mask', daemon=True)
+
+
+    def _work(self) -> None:
+
+        while True:
+            item = self._inbound.get()
+            if item is _FINISHED:
+                return
+
+            index, chunk, watermark = item
+            try:
+                prepared = (self._prepare(index, chunk), watermark)
+            except BaseException as error:
+                self._failure = error
+                # The sender may be waiting on a full queue, so it has to be
+                # handed something before it can notice this.
+                with contextlib.suppress(queue.Full):
+                    self._outbound.put(_FINISHED, timeout=_PIPELINE_POLL_SECONDS)
+                return
+
+            self._outbound.put(prepared)
+
+
+    def __enter__(self) -> '_MaskAhead':
+        if self._threaded:
+            self._thread.start()
+
+        return self
+
+
+    def send(self, index: int, chunk: Any, watermark: Any) -> Iterator[Any]:
+        """Queues a chunk, and yields whatever is masked and waiting.
+
+        Yielded rather than returned so the caller writes as results appear,
+        which is what keeps the worker from stalling on a full queue.
+        """
+
+        if not self._threaded:
+            yield self._prepare(index, chunk), watermark
+            return
+
+        item = (index, chunk, watermark)
+
+        while True:
+            self._raiseFailure()
+
+            # Write whatever is finished first. That frees the worker to put its
+            # next result, which is what frees the queue this is about to fill.
+            while self._pending and not self._outbound.empty():
+                yield self._take()
+
+            try:
+                self._inbound.put(item, timeout=_PIPELINE_POLL_SECONDS)
+                self._pending += 1
+                return
+            except queue.Full:
+                # Never block outright: a worker that has stopped -- because
+                # masking raised -- consumes nothing, and waiting on it is a
+                # deadlock rather than a delay.
+                self._checkAlive()
+
+
+    def finish(self) -> Iterator[Any]:
+        """Yields every chunk still in flight, in order, then stops the worker."""
+
+        if not self._threaded:
+            return
+
+        while True:
+            self._raiseFailure()
+            try:
+                self._inbound.put(_FINISHED, timeout=_PIPELINE_POLL_SECONDS)
+                break
+            except queue.Full:
+                while self._pending and not self._outbound.empty():
+                    yield self._take()
+                self._checkAlive()
+
+        while self._pending:
+            yield self._take()
+
+        self._thread.join(timeout=_PIPELINE_JOIN_SECONDS)
+        self._raiseFailure()
+
+
+    def _take(self) -> Any:
+
+        while True:
+            try:
+                item = self._outbound.get(timeout=_PIPELINE_POLL_SECONDS)
+                break
+            except queue.Empty:
+                self._checkAlive()
+
+        if item is _FINISHED:
+            self._pending = 0
+            self._raiseFailure()
+            raise RuntimeError('the masking thread stopped without reporting why')
+
+        self._pending -= 1
+
+        return item
+
+
+    def _checkAlive(self) -> None:
+        """Raises if the worker has stopped, so no wait on it can be unbounded."""
+
+        if self._thread.is_alive():
+            return
+
+        self._raiseFailure()
+        raise RuntimeError('the masking thread stopped without reporting why')
+
+
+    def _raiseFailure(self) -> None:
+
+        if self._failure is not None:
+            raise self._failure
+
+
+    def __exit__(self, *details: Any) -> None:
+        # The ordinary path drains through finish(); this only tidies up after
+        # the caller raised, where the queued chunks are no longer wanted.
+        if not self._threaded or not self._thread.is_alive():
+            return
+
+        with contextlib.suppress(queue.Full):
+            self._inbound.put(_FINISHED, timeout=_PIPELINE_POLL_SECONDS)
+
+        while self._thread.is_alive():
+            try:
+                self._outbound.get_nowait()
+            except queue.Empty:
+                self._thread.join(timeout=_PIPELINE_POLL_SECONDS)
 
 
 # Errors that a second attempt cannot fix. All are raised by this package itself

@@ -170,7 +170,7 @@ jobs:
 | --- | --- | --- |
 | `sourceDatabase` | required | An alias from `database.yaml`. |
 | `sourceQuery` | required | The query to extract with. |
-| `chunkSize` | required, at least 1 | Rows per batch. Extracts stream, so this is the **memory dial**: peak memory is about `chunkSize` × row width however large the source is. |
+| `chunkSize` | required, at least 1 | Rows per batch. Extracts stream, so this is the **memory dial**: peak memory is a few times `chunkSize` × row width however large the source is. A job reads, masks and writes at the same time rather than in turn, so it holds about three chunks — one on each. |
 | `watermarkColumn` | optional | Makes the job incremental. See [incremental loads](design.md#incremental-loads). |
 | `watermarkInitial` | required with `watermarkColumn` | The value bound on the first run, before anything is stored. |
 

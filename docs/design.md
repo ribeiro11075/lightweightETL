@@ -29,6 +29,10 @@ Streaming is per-driver, because `fetchmany()` bounds nothing if the driver has 
 
 Loads are written a chunk at a time too, each chunk in its own transaction. The MySQL, MariaDB and Oracle drivers already send a chunk in a few round trips; psycopg2 and pymssql send one statement per row, so those two get a bulk path. **PostgreSQL targets use `COPY`**: one round trip per chunk, which measured about 100 times faster on 50,000 rows. **SQL Server targets use multi-row statements**, a thousand rows each (the most one `VALUES` list may hold): about 6 times faster for inserts and 28 for upserts in testing. An upsert copies into a temporary table and merges it with one `INSERT ... ON CONFLICT`; since one statement can't update a row twice, rows repeating a key within a chunk are first reduced to the last of them, which is what applying them in turn would leave. A chunk holding a value `COPY` can't spell safely (an array, a JSON object, an interval) is sent row by row as before. SQL Server's `MERGE` has the same one-update-per-row rule, and gets the same reduction.
 
+Where the [native masker](masking.md#the-native-masker) is installed, the three stages overlap rather than taking turns: masking moves to a worker thread while the reader and writer keep the database connections, which they must — `mysqlclient` and PyMySQL forbid a connection being used by a thread other than its own, and SQLite enforces the same. Drivers release the GIL while they wait on a socket and the native masker releases it for a whole chunk, so the waiting and the masking genuinely overlap. A job then holds about three chunks rather than one. Pure-Python masking is slow enough to swamp any wait worth hiding, so it stays sequential; `UNDERSTUDY_PIPELINE` overrides either default.
+
+One chunk is still masked at a time, and chunks are written in the order they were read. A stage-less upsert writes straight into the live target, where one statement can't update the same row twice, so a key repeating across chunks has to arrive as it was read.
+
 **One consequence to know before sizing a job:** extract and load interleave, so a source that fails part-way leaves the rows it already yielded written.
 
 - **Invisible** for `swap`, and for `upsert` with a `targetTableStage` — both write to the stage table, and `targetTableFinal` is only touched in the last step.
@@ -186,7 +190,7 @@ The fields are the point. Completions, failures, skips and each cycle's summary 
 
 Masking is a stage of a data job, between transform and load, rather than a separate kind of job. That one decision does most of the work:
 
-- **Unmasked rows never reach the target**, not even its stage table. Masking happens in the ETL process's memory, one chunk at a time.
+- **Unmasked rows never reach the target**, not even its stage table. Masking happens in the ETL process's memory, a few chunks at a time.
 - **It streams.** Memory stays bounded by `chunkSize`, however large the table.
 - **It gets retries, watermarks, `--dry-run` and structured logs**, because data jobs already have them.
 - **Masking in place is a `swap`.** Rows load into a stage table, which is then swapped with the original, so a failed run leaves the original untouched.

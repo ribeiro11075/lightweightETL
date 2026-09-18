@@ -13,7 +13,7 @@ from understudy_data.configuration import Configuration, ConfigurationError, Dat
     InsertStrategy
 from understudy_data.dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 from understudy_data.memory import FileMemory, MemoryBackend
-from understudy_data.runner import RunResult, _initializeWorker, _jobProcess, _runCycle, _runDataJob, _terminationHandling, _executeDataJob, runDataJobs
+from understudy_data.runner import PIPELINE_DEPTH, RunResult, _initializeWorker, _jobProcess, _runCycle, _runDataJob, _terminationHandling, _executeDataJob, runDataJobs
 from understudy_data.transform import TransformError
 
 
@@ -388,9 +388,14 @@ def test_execute_data_job_streams_rather_than_materializing_the_whole_extract(mo
     """The property that actually matters, and the one a fetchall() regression
     would break: loads begin *before* the source is exhausted.
 
-    Asserting on peak memory would be flaky; asserting on strict alternation is
-    deterministic and says the same thing. A buffered extract would record all
-    four 'extract' events before the first 'load'.
+    Asserting on peak memory would be flaky. A buffered extract would record all
+    four 'extract' events before the first 'load', so this asserts that a load
+    happens while extracting is still going on, and that the reader never runs
+    further ahead than the pipeline's depth allows.
+
+    Not strict alternation: the reader, the masker and the writer overlap, so
+    the exact interleaving depends on thread scheduling. Strict alternation is
+    what UNDERSTUDY_PIPELINE=0 restores, which the next test checks.
     """
 
     timeline: List[Tuple[str, int]] = []
@@ -432,9 +437,77 @@ def test_execute_data_job_streams_rather_than_materializing_the_whole_extract(mo
         def alter(self, query: str) -> None:
             return None
 
+    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '1')
     monkeypatch.setattr('understudy_data.runner.Database', _StreamingFake)
 
     result = _executeDataJob('job1', _dataJobConfig(chunkSize=3), {'src': _dbConfig(), 'tgt': _dbConfig()})
+
+    assert [event for event, _ in timeline].count('extract') == 4
+    assert [size for event, size in timeline if event == 'load'] == [3, 3, 3, 1]
+    assert result.rowCount == 10
+
+    # A load before the last extract: the source was never drained first.
+    lastExtract = max(index for index, (event, _) in enumerate(timeline) if event == 'extract')
+    firstLoad = min(index for index, (event, _) in enumerate(timeline) if event == 'load')
+    assert firstLoad < lastExtract, 'loading only began once extracting had finished: {}'.format(timeline)
+
+    # And no more than a few chunks are ever in hand at once: the streamed
+    # extract's memory promise, which the pipeline widens but must not drop.
+    ahead = 0
+    for event, _ in timeline:
+        ahead += 1 if event == 'extract' else -1
+        assert ahead <= 2 * PIPELINE_DEPTH + 1, 'held {} chunks at once: {}'.format(ahead, timeline)
+
+
+def test_the_pipeline_can_be_turned_off(monkeypatch):
+    """UNDERSTUDY_PIPELINE=0 puts reading, masking and writing back in turn, for
+    diagnosing a problem without the worker thread in the picture. Then the
+    interleaving is strict, and deterministic to assert on.
+    """
+
+    timeline: List[Tuple[str, int]] = []
+    sourceRows = [(index, 'name{}'.format(index)) for index in range(10)]
+
+    class _StreamingFake:
+
+        def __init__(self, connectionSettings: DatabaseConnectionConfig) -> None:
+            self.connectionSettings = connectionSettings
+
+        def __enter__(self) -> '_StreamingFake':
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        def stream(self, query: str, chunkSize: int, parameters: Any = None) -> Tuple[List[str], Any]:
+
+            def chunks() -> Any:
+                for index in range(0, len(sourceRows), chunkSize):
+                    chunk = sourceRows[index:index + chunkSize]
+                    timeline.append(('extract', len(chunk)))
+                    yield chunk
+
+            return ['id', 'name'], chunks()
+
+        def getAllColumnNames(self, table: str) -> List[str]:
+            return ['id', 'name']
+
+        def upsert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100, columns: Any = None) -> None:
+            timeline.append(('load', len(data)))
+
+        def insert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100, columns: Any = None) -> None:
+            timeline.append(('load', len(data)))
+
+        def truncate(self, table: str) -> None:
+            return None
+
+        def alter(self, query: str) -> None:
+            return None
+
+    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '0')
+    monkeypatch.setattr('understudy_data.runner.Database', _StreamingFake)
+
+    _executeDataJob('job1', _dataJobConfig(chunkSize=3), {'src': _dbConfig(), 'tgt': _dbConfig()})
 
     assert timeline == [
         ('extract', 3), ('load', 3),
@@ -442,7 +515,6 @@ def test_execute_data_job_streams_rather_than_materializing_the_whole_extract(mo
         ('extract', 3), ('load', 3),
         ('extract', 1), ('load', 1),
         ]
-    assert result.rowCount == 10
 
 
 def test_execute_data_job_never_holds_more_than_one_chunk_of_rows(fakeDatabases, monkeypatch):
@@ -1210,3 +1282,156 @@ def test_a_noisy_job_does_not_starve_the_others(tmp_path, sqliteDatabase):
     quiet = next(outcome for outcome in result.outcomes if outcome.job == 'quiet')
     assert quiet.status == JobStatus.COMPLETED
     assert quiet.finishedAt - quiet.startedAt < 4
+
+
+# --- the chunk pipeline -------------------------------------------------------
+
+def _pipelineFake(rows, failReadAt=None, failWriteAt=None, written=None, reads=None):
+    """A Database whose reads or writes can be made to fail at a given chunk."""
+
+    state = {'read': 0, 'write': 0}
+
+    class _Fake:
+
+        def __init__(self, connectionSettings: Any = None) -> None:
+            return None
+
+        def __enter__(self) -> '_Fake':
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        def stream(self, query: str, chunkSize: int, parameters: Any = None) -> Tuple[List[str], Any]:
+
+            def chunks() -> Any:
+                for index in range(0, len(rows), chunkSize):
+                    state['read'] += 1
+                    if reads is not None:
+                        reads.append(state['read'])
+                    if failReadAt is not None and state['read'] == failReadAt:
+                        raise RuntimeError('the reader failed')
+                    yield rows[index:index + chunkSize]
+
+            return ['id', 'name'], chunks()
+
+        def getAllColumnNames(self, table: str) -> List[str]:
+            return ['id', 'name']
+
+        def upsert(self, table: str, data: List[Any], chunkSize: int = 100, columns: Any = None) -> None:
+            self.insert(table, data)
+
+        def insert(self, table: str, data: List[Any], chunkSize: int = 100, columns: Any = None) -> None:
+            state['write'] += 1
+            if failWriteAt is not None and state['write'] == failWriteAt:
+                raise RuntimeError('the writer failed')
+            if written is not None:
+                written.extend(data)
+
+        def truncate(self, table: str) -> None:
+            return None
+
+        def alter(self, query: str) -> None:
+            return None
+
+    return _Fake
+
+
+@pytest.mark.parametrize('chunkSize', [1, 3, 100, 997])
+def test_the_pipeline_writes_chunks_in_source_order(monkeypatch, chunkSize):
+    """Order is the pipeline's one hard requirement. A stage-less upsert writes
+    straight into the live target, and one statement can't update the same row
+    twice -- so a key that repeats across chunks has to arrive as it was read.
+    """
+
+    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '1')
+
+    rows = [(index % 17, 'name{}'.format(index)) for index in range(3000)]
+    written: List[Any] = []
+    monkeypatch.setattr('understudy_data.runner.Database', _pipelineFake(rows, written=written))
+
+    _executeDataJob('job1', _dataJobConfig(chunkSize=chunkSize), {'src': _dbConfig(), 'tgt': _dbConfig()})
+
+    assert written == rows
+
+
+def test_a_failure_on_any_side_of_the_pipeline_surfaces(monkeypatch):
+    """Whichever side fails, the job fails with that error rather than hanging.
+
+    The masking case is the one that bites: a worker that has raised consumes
+    nothing more, so a sender that blocks outright on a full queue waits for a
+    thread that will never take from it.
+    """
+
+    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '1')
+
+    rows = [(index, 'name{}'.format(index)) for index in range(3000)]
+
+    monkeypatch.setattr('understudy_data.runner.Database', _pipelineFake(rows, failReadAt=5))
+    with pytest.raises(RuntimeError, match='the reader failed'):
+        _executeDataJob('job1', _dataJobConfig(chunkSize=10), {'src': _dbConfig(), 'tgt': _dbConfig()})
+
+    monkeypatch.setattr('understudy_data.runner.Database', _pipelineFake(rows, failWriteAt=5))
+    with pytest.raises(RuntimeError, match='the writer failed'):
+        _executeDataJob('job1', _dataJobConfig(chunkSize=10), {'src': _dbConfig(), 'tgt': _dbConfig()})
+
+    monkeypatch.setattr('understudy_data.runner.Database', _pipelineFake(rows))
+    monkeypatch.setattr('understudy_data.transform.Transform.apply',
+                        lambda self, chunk: (_ for _ in ()).throw(RuntimeError('masking failed')))
+    with pytest.raises(RuntimeError, match='masking failed'):
+        _executeDataJob('job1', _dataJobConfig(chunkSize=10), {'src': _dbConfig(), 'tgt': _dbConfig()})
+
+
+def test_the_pipeline_leaves_no_threads_behind(monkeypatch):
+    """A worker per job would otherwise accumulate across a runForever cycle."""
+
+    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '1')
+
+    rows = [(index, 'name{}'.format(index)) for index in range(500)]
+    monkeypatch.setattr('understudy_data.runner.Database', _pipelineFake(rows))
+    before = threading.active_count()
+
+    for _ in range(5):
+        _executeDataJob('job1', _dataJobConfig(chunkSize=10), {'src': _dbConfig(), 'tgt': _dbConfig()})
+
+    for _ in range(5):
+        # A fresh fake each time: its chunk counter is per-instance, and a
+        # reused one would only fail on the first run.
+        monkeypatch.setattr('understudy_data.runner.Database', _pipelineFake(rows, failWriteAt=3))
+        with pytest.raises(RuntimeError):
+            _executeDataJob('job1', _dataJobConfig(chunkSize=10), {'src': _dbConfig(), 'tgt': _dbConfig()})
+
+    deadline = time.time() + 10
+    while threading.active_count() > before and time.time() < deadline:
+        time.sleep(0.1)
+
+    assert threading.active_count() == before, [t.name for t in threading.enumerate()]
+
+
+def test_the_pipeline_follows_the_native_masker_unless_told_otherwise(monkeypatch):
+    """Overlapping only pays where masking is fast enough for the database's
+    round trips to be the part worth hiding, which is where the extension is.
+
+    Measured on 200,000 rows over a 5 ms round trip: Python masking goes 11.57s
+    to 11.79s overlapped, and native masking 2.92s to 2.16s. So the default
+    follows the extension, and either setting overrides it.
+    """
+
+    import understudy_data.masking as masking
+    from understudy_data.runner import PIPELINE_DEPTH, _pipelineDepth
+
+    monkeypatch.delenv('UNDERSTUDY_PIPELINE', raising=False)
+
+    monkeypatch.setattr(masking, 'nativeVersion', lambda: '0.1.0')
+    assert _pipelineDepth() == PIPELINE_DEPTH
+
+    monkeypatch.setattr(masking, 'nativeVersion', lambda: None)
+    assert _pipelineDepth() == 0
+
+    # And the setting wins over the default, either way.
+    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '1')
+    assert _pipelineDepth() == PIPELINE_DEPTH
+
+    monkeypatch.setattr(masking, 'nativeVersion', lambda: '0.1.0')
+    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '0')
+    assert _pipelineDepth() == 0
