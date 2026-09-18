@@ -1,7 +1,6 @@
-# Every package the container image installs, pinned: the image is a
-# deployment, so it ships one tested set rather than whatever resolves on the
-# day it's built. CI's integration job runs against these. After changing a
-# version, regenerate the rest with:
+# Every package `understudy-data[all]` installs, pinned to one tested set.
+# CI's integration job runs against these. After changing a version,
+# regenerate the rest with:
 #
 #   uv pip compile pyproject.toml --extra all -c <this file's direct pins> \
 #       --python-version 3.14 --python-platform linux --no-header --no-annotate

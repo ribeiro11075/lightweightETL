@@ -33,8 +33,8 @@ classifiers = [
     "Typing :: Typed",
     ]
 # Ranges, not pins: this installs beside other tools (Airflow, Dagster, dbt)
-# that have their own. The lower bounds are tested in CI (constraints/lowest.txt),
-# and the container image pins everything (constraints/image.txt).
+# that have their own. CI tests the lower bounds (constraints/lowest.txt) and
+# one pinned set of newer versions (constraints/image.txt).
 dependencies = [
     "pyyaml>=6.0.1,<7",
     "pydantic>=2.6,<3",

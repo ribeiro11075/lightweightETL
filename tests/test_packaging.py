@@ -1,9 +1,9 @@
 """Keeps pyproject.toml's dependency ranges and the files that pin them in step.
 
 The package takes ranges, so it can install beside other tools. CI tests the
-bottom of each range with constraints/lowest.txt, and the container ships
-constraints/image.txt; either drifting from pyproject.toml would make that
-testing describe something nobody installs.
+bottom of each range with constraints/lowest.txt, and a pinned set near the
+top with constraints/image.txt; either drifting from pyproject.toml would make
+that testing describe something nobody installs.
 """
 import sys
 from pathlib import Path
@@ -69,5 +69,5 @@ def test_the_image_pins_everything_within_the_ranges():
     pins = _pins('image.txt')
 
     for name, requirement in REQUIREMENTS.items():
-        assert name in pins, '{} is not pinned for the image'.format(name)
+        assert name in pins, '{} is not pinned in image.txt'.format(name)
         assert requirement.specifier.contains(pins[name]), '{}=={} is outside {}'.format(name, pins[name], requirement)

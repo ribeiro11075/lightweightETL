@@ -79,8 +79,8 @@ jobs:
         run: python3 mask-rs/generate_vectors.py && git diff --exit-code mask-rs/vectors/
 
   # The unit job above takes the newest versions pyproject.toml allows. This
-  # runs against real databases with the versions the container image ships,
-  # and with the oldest ones pyproject.toml allows, on the oldest Python.
+  # runs against real databases with the pinned versions in image.txt, and
+  # with the oldest ones pyproject.toml allows, on the oldest Python.
   integration:
     name: Integration tests against real databases, ${{ matrix.versions }} versions
     runs-on: ubuntu-latest
@@ -88,7 +88,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - versions: image
+          - versions: pinned
             python: '3.14'
             constraints: constraints/image.txt
           - versions: lowest
