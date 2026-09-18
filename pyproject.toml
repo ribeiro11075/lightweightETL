@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "understudy-data"
+name = "bauta"
 version = "0.1.0"
 description = "Safe, realistic copies of production across databases: masking, subsets, synthetic data, and the ETL to move them"
 readme = "README.md"
@@ -41,12 +41,12 @@ dependencies = [
     ]
 
 [project.urls]
-Homepage = "https://github.com/ribeiro11075/understudy"
-Documentation = "https://github.com/ribeiro11075/understudy/tree/master/docs"
-Issues = "https://github.com/ribeiro11075/understudy/issues"
+Homepage = "https://github.com/ribeiro11075/bauta"
+Documentation = "https://github.com/ribeiro11075/bauta/tree/master/docs"
+Issues = "https://github.com/ribeiro11075/bauta/issues"
 
 [project.scripts]
-understudy = "understudy_data.cli:main"
+bauta = "bauta.cli:main"
 
 [project.optional-dependencies]
 mysql = ["mysql-connector-python>=8.4"]
@@ -57,18 +57,18 @@ mssql = ["pymssql>=2.3.5"]
 # connect() wholesale -- same driver package, no separate extra needed
 mariadb = ["mysql-connector-python>=8.4"]
 # sqlite3 is Python's standard library -- no extra to install at all, this exists
-# only so `understudy-data[all]` and the pattern below stay uniform
+# only so `bauta[all]` and the pattern below stay uniform
 sqlite = []
 # The fpe masking strategy's AES; oracledb already depends on it
 fpe = ["cryptography>=42"]
-all = ["understudy-data[mysql,postgresql,oracle,mssql,mariadb,sqlite,fpe]"]
+all = ["bauta[mysql,postgresql,oracle,mssql,mariadb,sqlite,fpe]"]
 dev = ["pytest==9.1.1", "mypy==2.3.1", "types-PyYAML==6.0.12.20260815", "build==1.6.1", "twine==7.0.0"]
 
 [tool.setuptools]
-packages = ["understudy_data"]
+packages = ["bauta"]
 
 [tool.setuptools.package-data]
-understudy_data = ["py.typed"]
+bauta = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -81,7 +81,7 @@ markers = [
 # The oldest Python the package supports (requires-python above), so mypy
 # flags anything newer
 python_version = "3.10"
-files = ["understudy_data"]
+files = ["bauta"]
 ignore_missing_imports = true
 warn_unused_ignores = true
 warn_redundant_casts = true

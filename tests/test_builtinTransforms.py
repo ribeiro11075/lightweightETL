@@ -7,8 +7,8 @@ import inspect
 
 import pytest
 
-from understudy_data import builtinTransforms
-from understudy_data.transform import TransformResolutionError, resolveTransformer
+from bauta import builtinTransforms
+from bauta.transform import TransformResolutionError, resolveTransformer
 
 PUBLIC = sorted(name for name, function in vars(builtinTransforms).items()
                 if inspect.isfunction(function) and function.__module__ == builtinTransforms.__name__ and not name.startswith('_'))
@@ -88,7 +88,7 @@ UTC = datetime.timezone.utc
     ('toJson', '{"already": "json"}', '{"already": "json"}'),
     ])
 def test_a_stock_transformer_produces_the_expected_value(reference, value, expected):
-    transformer = resolveTransformer('understudy_data.builtinTransforms:' + reference)
+    transformer = resolveTransformer('bauta.builtinTransforms:' + reference)
 
     assert transformer(value) == expected
     assert type(transformer(value)) is type(expected)
@@ -112,7 +112,7 @@ def test_a_stock_transformer_produces_the_expected_value(reference, value, expec
     ])
 def test_a_value_that_cannot_be_converted_raises_rather_than_being_guessed(reference, value):
     with pytest.raises((ValueError, TypeError)):
-        resolveTransformer('understudy_data.builtinTransforms:' + reference)(value)
+        resolveTransformer('bauta.builtinTransforms:' + reference)(value)
 
 
 @pytest.mark.parametrize('name', PUBLIC)
@@ -121,7 +121,7 @@ def test_every_stock_transformer_passes_null_through(name):
     may raise on it, and none may invent a value for it -- currency used to turn
     NULL into $0.00. defaultIfNull is the one whose job is to replace it.
     """
-    transformer = resolveTransformer('understudy_data.builtinTransforms:{}{}'.format(name, ARGUMENTS.get(name, '')))
+    transformer = resolveTransformer('bauta.builtinTransforms:{}{}'.format(name, ARGUMENTS.get(name, '')))
 
     assert transformer(None) == ('unknown' if name == 'defaultIfNull' else None)
 
@@ -130,7 +130,7 @@ def test_every_stock_transformer_passes_null_through(name):
 def test_a_transformer_that_needs_arguments_is_refused_without_them(name):
     """Caught when the configuration is validated, not on the first row."""
     with pytest.raises(TransformResolutionError, match='missing a required argument'):
-        resolveTransformer('understudy_data.builtinTransforms:' + name)
+        resolveTransformer('bauta.builtinTransforms:' + name)
 
 
 def test_the_documented_list_covers_every_stock_transformer():

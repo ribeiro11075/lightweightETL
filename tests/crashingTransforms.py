@@ -31,6 +31,6 @@ def logWithoutPause(value):
     catch it part-way through sending one.
     """
     import logging
-    log = logging.getLogger('understudy_data')
+    log = logging.getLogger('bauta')
     while True:
         log.warning('%s', 'x' * 2000)

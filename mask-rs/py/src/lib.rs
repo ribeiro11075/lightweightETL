@@ -1,6 +1,6 @@
 //! The PyO3 layer: conversions in, results out, and nothing else.
 //!
-//! Masking itself lives in `understudy-mask-core`, which has no Python
+//! Masking itself lives in `bauta-core`, which has no Python
 //! dependency. Keeping the boundary thin is what lets the constructions be
 //! tested without an interpreter.
 //!
@@ -22,8 +22,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PyString};
 
-use understudy_mask_core::cheap;
-use understudy_mask_core::{Charset, FpeStrategy, KeyStrategy, KeyedHash, MaskError};
+use bauta_core::cheap;
+use bauta_core::{Charset, FpeStrategy, KeyStrategy, KeyedHash, MaskError};
 
 /// Why a position came back unmasked. The Python layer turns REFUSED into
 /// MaskingError with the message alongside it, and FALLBACK into a call to its
@@ -260,7 +260,7 @@ impl Masker {
 }
 
 #[pymodule]
-fn understudy_mask(module: &Bound<'_, PyModule>) -> PyResult<()> {
+fn bauta_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add("FALLBACK", FALLBACK)?;
     module.add("REFUSED", REFUSED)?;

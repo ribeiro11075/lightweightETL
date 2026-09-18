@@ -3,7 +3,7 @@ import decimal
 
 import pytest
 
-from understudy_data.memory import FileMemory
+from bauta.memory import FileMemory
 
 
 def test_missing_memory_file_reads_as_empty(tmp_path):
@@ -176,7 +176,7 @@ def test_a_write_replaces_the_file_rather_than_rewriting_it_in_place(tmp_path, m
 
 
 def test_the_run_lock_is_exclusive_and_released_afterwards(tmp_path):
-    from understudy_data.memory import RunInProgressError, exclusiveRun
+    from bauta.memory import RunInProgressError, exclusiveRun
 
     lockFile = tmp_path / 'memory.yaml.run.lock'
 
@@ -191,7 +191,7 @@ def test_the_run_lock_is_exclusive_and_released_afterwards(tmp_path):
 
 def test_the_database_memory_schema_uses_a_portable_float_type():
     """DOUBLE alone is MySQL's spelling; PostgreSQL, Oracle and SQL Server reject it."""
-    from understudy_data.memory import DATABASE_MEMORY_SCHEMA
+    from bauta.memory import DATABASE_MEMORY_SCHEMA
 
     assert 'DOUBLE PRECISION' in DATABASE_MEMORY_SCHEMA
 
@@ -211,8 +211,8 @@ def test_file_memory_records_and_forgets_key_fingerprints(tmp_path):
 def test_database_memory_keeps_key_fingerprints_out_of_watermarks_and_runs(tmp_path):
     import sqlite3
 
-    from understudy_data.configuration import DatabaseConnectionConfig
-    from understudy_data.memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory
+    from bauta.configuration import DatabaseConnectionConfig
+    from bauta.memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory
 
     path = tmp_path / 'memory.db'
     connection = sqlite3.connect(path)
@@ -232,7 +232,7 @@ def test_database_memory_keeps_key_fingerprints_out_of_watermarks_and_runs(tmp_p
 
 
 def test_a_backend_without_fingerprint_support_reports_none():
-    from understudy_data.memory import MemoryBackend
+    from bauta.memory import MemoryBackend
 
     class _Minimal(MemoryBackend):
         def read(self):
@@ -255,8 +255,8 @@ def test_database_memory_gives_a_watermark_back_as_the_type_it_was(tmp_path, val
     """
     import sqlite3
 
-    from understudy_data.configuration import DatabaseConnectionConfig
-    from understudy_data.memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory
+    from bauta.configuration import DatabaseConnectionConfig
+    from bauta.memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory
 
     path = tmp_path / 'memory.db'
     connection = sqlite3.connect(path)

@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from .scrubbing import scrubText
 
-LOGGER_NAME = 'understudy_data'
+LOGGER_NAME = 'bauta'
 
 TEXT_FORMAT = '%(asctime)s.%(msecs)03d [%(levelname)s] :: %(message)s [%(filename)s:%(lineno)d]'
 DATE_FORMAT = '%Y-%m-%d %H:%M:%S'

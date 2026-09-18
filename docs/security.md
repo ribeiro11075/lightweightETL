@@ -1,6 +1,6 @@
 # Security model
 
-What Understudy protects, how, and what it does not. Written for the security or privacy reviewer deciding whether masked copies made with it are fit for a purpose. For how to configure masking, see [masking.md](masking.md).
+What Bauta protects, how, and what it does not. Written for the security or privacy reviewer deciding whether masked copies made with it are fit for a purpose. For how to configure masking, see [masking.md](masking.md).
 
 - [Summary](#summary)
 - [What is protected, and from whom](#what-is-protected-and-from-whom)
@@ -78,7 +78,7 @@ expand(m, n, p) = digest(m, p || "#" || counter), counter = 0, 1, ...   truncate
 ### Two implementations
 
 The same constructions exist twice: in Python, and in the optional
-`understudy-mask` extension, which computes them in Rust several times faster
+`bauta-rs` extension, which computes them in Rust several times faster
 (see [the native masker](masking.md#the-native-masker)). Which one ran is
 recorded in the manifest as `maskedBy`.
 
@@ -101,7 +101,7 @@ How that is held:
   strategy and option combination through both and compares masks, types and
   error messages.
 - **The whole suite, twice.** CI runs it with the extension and with
-  `UNDERSTUDY_NATIVE=0`.
+  `BAUTA_NATIVE=0`.
 - **A trace if they ever didn't.** Every masked job records the implementation
   beside its key fingerprint, and an upsert job run under a different one logs a
   warning naming both, rather than refusing. The fingerprint alone couldn't show
@@ -148,7 +148,7 @@ These follow from masking being deterministic and shape-preserving. They are why
 
 - **Contents.** What was masked, how, under which key fingerprint, from which jobs file (with its SHA-256), with which tool version, and which masking implementation produced it (`maskedBy`: `python`, or the extension and its version). Never a value, never a key.
 - **Integrity.** A SHA-256 digest of the manifest's content (canonical JSON) catches accidental changes. Anyone can recompute it, so it proves nothing about origin.
-- **Authenticity.** With `UNDERSTUDY_MANIFEST_KEY` set, the manifest is also signed with HMAC-SHA256, and `verify-manifest` requires a signature, so removing one doesn't make an edited manifest pass. This is symmetric: anyone who can verify a manifest can also create one. It shows a manifest came from a holder of the signing key, not which holder. Where that distinction matters, keep the signing key with the auditors' process, not with the team running the jobs.
+- **Authenticity.** With `BAUTA_MANIFEST_KEY` set, the manifest is also signed with HMAC-SHA256, and `verify-manifest` requires a signature, so removing one doesn't make an edited manifest pass. This is symmetric: anyone who can verify a manifest can also create one. It shows a manifest came from a holder of the signing key, not which holder. Where that distinction matters, keep the signing key with the auditors' process, not with the team running the jobs.
 
 
 ## Credentials and transport

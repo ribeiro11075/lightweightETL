@@ -102,7 +102,7 @@ class FileHistory(RunHistory):
         return list(reversed(matching))[:limit]
 
 
-DATABASE_HISTORY_SCHEMA = """CREATE TABLE understudy_history (
+DATABASE_HISTORY_SCHEMA = """CREATE TABLE bauta_history (
     run_id VARCHAR(36) NOT NULL,
     job VARCHAR(255) NOT NULL,
     status VARCHAR(16) NOT NULL,
@@ -123,7 +123,7 @@ class DatabaseHistory(RunHistory):
     stores alike.
     """
 
-    def __init__(self, connectionSettings: DatabaseConnectionConfig, table: str = 'understudy_history') -> None:
+    def __init__(self, connectionSettings: DatabaseConnectionConfig, table: str = 'bauta_history') -> None:
         self.connectionSettings = connectionSettings
         self.table = table
 
@@ -184,21 +184,21 @@ def newRunId() -> str:
 # Prometheus -----------------------------------------------------------------
 
 JOB_METRICS = (
-    ('understudy_job_last_run_success', 'Whether the job completed in its latest run (1), or failed or was skipped (0).'),
-    ('understudy_job_last_run_skipped', 'Whether the job was skipped in its latest run.'),
-    ('understudy_job_last_run_rows', 'Rows the job loaded in its latest run.'),
-    ('understudy_job_last_run_duration_seconds', 'How long the job took in its latest run.'),
-    ('understudy_job_last_run_timestamp_seconds', 'When the job last ran.'),
-    ('understudy_job_last_success_timestamp_seconds', 'When the job last completed; alert on this to catch stale data.'),
+    ('bauta_job_last_run_success', 'Whether the job completed in its latest run (1), or failed or was skipped (0).'),
+    ('bauta_job_last_run_skipped', 'Whether the job was skipped in its latest run.'),
+    ('bauta_job_last_run_rows', 'Rows the job loaded in its latest run.'),
+    ('bauta_job_last_run_duration_seconds', 'How long the job took in its latest run.'),
+    ('bauta_job_last_run_timestamp_seconds', 'When the job last ran.'),
+    ('bauta_job_last_success_timestamp_seconds', 'When the job last completed; alert on this to catch stale data.'),
     )
 
 CYCLE_METRICS = (
-    ('understudy_cycle_jobs', 'Jobs in the latest cycle, by status.'),
-    ('understudy_cycle_rows', 'Rows loaded in the latest cycle.'),
-    ('understudy_cycle_timestamp_seconds', 'When the latest cycle finished.'),
+    ('bauta_cycle_jobs', 'Jobs in the latest cycle, by status.'),
+    ('bauta_cycle_rows', 'Rows loaded in the latest cycle.'),
+    ('bauta_cycle_timestamp_seconds', 'When the latest cycle finished.'),
     )
 
-_SAMPLE = re.compile(r'^(understudy_job_\w+)\{job="((?:[^"\\]|\\.)*)"\} (\S+)$')
+_SAMPLE = re.compile(r'^(bauta_job_\w+)\{job="((?:[^"\\]|\\.)*)"\} (\S+)$')
 
 
 def _escapeLabel(value: str) -> str:
@@ -215,15 +215,15 @@ def _jobSamples(outcome: JobOutcome, now: float, previous: Mapping[str, float]) 
 
     completed = outcome.status == JobStatus.COMPLETED
     samples = {
-        'understudy_job_last_run_success': 1.0 if completed else 0.0,
-        'understudy_job_last_run_skipped': 1.0 if outcome.status == JobStatus.SKIPPED else 0.0,
-        'understudy_job_last_run_rows': float(outcome.rowCount),
-        'understudy_job_last_run_duration_seconds': round(outcome.durationSeconds, 3),
-        'understudy_job_last_run_timestamp_seconds': round(outcome.finishedAt or now, 3),
+        'bauta_job_last_run_success': 1.0 if completed else 0.0,
+        'bauta_job_last_run_skipped': 1.0 if outcome.status == JobStatus.SKIPPED else 0.0,
+        'bauta_job_last_run_rows': float(outcome.rowCount),
+        'bauta_job_last_run_duration_seconds': round(outcome.durationSeconds, 3),
+        'bauta_job_last_run_timestamp_seconds': round(outcome.finishedAt or now, 3),
         }
-    lastSuccess = round(outcome.finishedAt or now, 3) if completed else previous.get('understudy_job_last_success_timestamp_seconds')
+    lastSuccess = round(outcome.finishedAt or now, 3) if completed else previous.get('bauta_job_last_success_timestamp_seconds')
     if lastSuccess is not None:
-        samples['understudy_job_last_success_timestamp_seconds'] = lastSuccess
+        samples['bauta_job_last_success_timestamp_seconds'] = lastSuccess
 
     return samples
 
@@ -241,10 +241,10 @@ def _renderFamilies(families: Mapping[str, str], samples: Mapping[str, List[str]
 def _cycleText(result: RunResult, now: float) -> Dict[str, List[str]]:
 
     return {
-        'understudy_cycle_jobs': ['understudy_cycle_jobs{{status="{}"}} {}'.format(status, len(outcomes)) for status, outcomes in
+        'bauta_cycle_jobs': ['bauta_cycle_jobs{{status="{}"}} {}'.format(status, len(outcomes)) for status, outcomes in
                                        (('completed', result.completed), ('failed', result.failed), ('skipped', result.skipped))],
-        'understudy_cycle_rows': ['understudy_cycle_rows {}'.format(result.rowCount)],
-        'understudy_cycle_timestamp_seconds': ['understudy_cycle_timestamp_seconds {}'.format(round(now, 3))],
+        'bauta_cycle_rows': ['bauta_cycle_rows {}'.format(result.rowCount)],
+        'bauta_cycle_timestamp_seconds': ['bauta_cycle_timestamp_seconds {}'.format(round(now, 3))],
         }
 
 
@@ -301,11 +301,11 @@ def pushMetrics(gatewayUrl: str, result: RunResult, now: Optional[float] = None)
 
     Each job goes in a group of its own, replaced only when that job runs, so a
     job outside this cycle keeps its last values there too. The cycle's totals
-    go in the `understudy` group.
+    go in the `bauta` group.
     """
 
     now = datetime.datetime.now(datetime.timezone.utc).timestamp() if now is None else now
-    base = gatewayUrl.rstrip('/') + '/metrics/job/understudy'
+    base = gatewayUrl.rstrip('/') + '/metrics/job/bauta'
     families = dict(JOB_METRICS + CYCLE_METRICS)
     contentType = 'text/plain; version=0.0.4'
 
@@ -328,7 +328,7 @@ def notificationPayload(result: RunResult) -> Dict[str, Any]:
 
     host = socket.gethostname()
     status = 'interrupted' if result.interrupted else ('succeeded' if result.succeeded else 'failed')
-    headline = 'understudy on {}: {} -- {} completed, {} failed, {} skipped, {} row(s)'.format(
+    headline = 'bauta on {}: {} -- {} completed, {} failed, {} skipped, {} row(s)'.format(
         host, status, len(result.completed), len(result.failed), len(result.skipped), result.rowCount)
     problems = ['- {} {}: {}'.format(outcome.job, outcome.status.value, (outcome.error or '')[:300]) for outcome in result.failed + result.skipped]
 

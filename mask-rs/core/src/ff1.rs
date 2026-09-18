@@ -1,6 +1,6 @@
 //! FF1 format-preserving encryption, as specified in NIST SP 800-38G Rev. 1.
 //!
-//! A port of `understudy_data/fpe.py`, with its step numbers kept so the two
+//! A port of `bauta/fpe.py`, with its step numbers kept so the two
 //! can be read side by side. Only encryption is implemented: masking never
 //! needs to reverse a value, and not shipping the inverse keeps the key from
 //! becoming a way to unmask one.

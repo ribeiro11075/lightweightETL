@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from understudy_data.configuration import (
+from bauta.configuration import (
     Configuration,
     ConfigurationError,
     DatabaseConnectionConfig,
@@ -326,7 +326,7 @@ def test_a_password_command_that_names_no_program_is_rejected(command):
 
 
 def test_running_a_malformed_password_command_is_a_configuration_error():
-    from understudy_data.configuration import runPasswordCommand
+    from bauta.configuration import runPasswordCommand
 
     for command in ('  ', 'echo "x'):
         with pytest.raises(ConfigurationError, match='passwordCommand'):

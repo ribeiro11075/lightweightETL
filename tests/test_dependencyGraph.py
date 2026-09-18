@@ -3,8 +3,8 @@ from typing import List, Optional
 
 import pytest
 
-from understudy_data.configuration import BaseJobConfig, ConfigurationError
-from understudy_data.dependencyGraph import DependencyGraph, JobOutcome, JobStatus
+from bauta.configuration import BaseJobConfig, ConfigurationError
+from bauta.dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 
 
 def _job(active: bool = True, predecessors: Optional[list] = None, refresh: Optional[int] = None) -> BaseJobConfig:

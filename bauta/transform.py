@@ -76,7 +76,7 @@ def _withArguments(function: Transformer, reference: str, arguments: Tuple[Any, 
 def resolveTransformer(reference: str) -> Transformer:
     """Import a Transformer from a "module.path:function_name" reference.
     Arguments after the value go in parentheses, as literals:
-    "understudy_data.builtinTransforms:truncate(50)" calls truncate(value, 50).
+    "bauta.builtinTransforms:truncate(50)" calls truncate(value, 50).
     """
 
     modulePath, separator, call = reference.partition(':')

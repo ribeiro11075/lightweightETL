@@ -6,10 +6,10 @@ import sqlite3
 import pytest
 import yaml
 
-from understudy_data.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile, expandEnvironmentVariables
-from understudy_data.database import Database
-from understudy_data.databaseDialects import ColumnCategory, ForeignKey
-from understudy_data.discovery import JobDraft, keyReferences, proposeTable, renderJobs, suggestColumn
+from bauta.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile, expandEnvironmentVariables
+from bauta.database import Database
+from bauta.databaseDialects import ColumnCategory, ForeignKey
+from bauta.discovery import JobDraft, keyReferences, proposeTable, renderJobs, suggestColumn
 
 TEXT = ColumnCategory.TEXT
 NUMBER = ColumnCategory.NUMBER
@@ -176,6 +176,6 @@ def test_rendered_jobs_mask_in_place_through_a_swap(sampleDatabase, monkeypatch)
     ('status', None),
     ])
 def test_personal_data_hint_reads_the_name_alone(column, expected):
-    from understudy_data.discovery import personalDataHint
+    from bauta.discovery import personalDataHint
 
     assert personalDataHint(column) == expected

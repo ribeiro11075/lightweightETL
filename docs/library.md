@@ -1,6 +1,6 @@
 # Using it as a library
 
-Most deployments should use the `understudy` command. Embed the library when a load needs to be one step inside a larger Python program.
+Most deployments should use the `bauta` command. Embed the library when a load needs to be one step inside a larger Python program.
 
 You load configuration however you like and hand it over as plain data. Each driver is imported only when a connection of its type opens.
 
@@ -16,7 +16,7 @@ You load configuration however you like and hand it over as plain data. Each dri
 
 ```python
 import yaml
-from understudy_data import (Configuration, DataJobsFile, FileMemory,
+from bauta import (Configuration, DataJobsFile, FileMemory,
                              expandEnvironmentVariables, runDataJobs)
 
 def load(path):
@@ -123,8 +123,8 @@ What the CLI's `--history`, `--metrics` and `--notify-url` do, as functions to c
 
 ```python
 import os
-from understudy_data import FileHistory, notify, writeMetricsFile
-from understudy_data.reporting import newRunId
+from bauta import FileHistory, notify, writeMetricsFile
+from bauta.reporting import newRunId
 
 history = FileHistory('history.jsonl')
 
@@ -152,7 +152,7 @@ The pieces behind `masking:`, `discover` and `subset` are all importable, and no
 
 ```python
 import os
-from understudy_data import Database, MaskingPlan, planSubset, proposeTable
+from bauta import Database, MaskingPlan, planSubset, proposeTable
 
 plan = MaskingPlan(key=os.environ['MASKING_KEY'], columns={'id': 'keep', 'email': 'email'})
 masking = plan.bind(['id', 'email'])      # raises MaskingError for an uncovered column
@@ -181,14 +181,14 @@ with Database(connectionSettings=databases['prod']) as database:
 | `subset.relatedTables(foreignKeys, roots, followChildren=True)` | Every table a subset from `roots` would copy. |
 | `schema.readTable`, `schema.createStatements`, `schema.renderScript` | A table's shape, CREATE TABLE statements for a target dialect, and the script form. |
 | `schema.clearTables(database, tables)` | Empties tables children-first, in one transaction. |
-| `planSubset(foreignKeys, root, where, followChildren=True, ignore=(), materialize=False, quote=None)` | A `SubsetPlan`: tables in load order, a query for each, each table's parents, and the foreign keys ignored. Raises `SubsetError` on a cycle, or on a chain deeper than 16 tables. Pass `materialize=database.dialect.supportsMaterializedSelections()`, and `quote=lambda name: quoteIdentifier(database.type, name)` (from `understudy_data.databaseDialects`) so reserved-word columns work. |
+| `planSubset(foreignKeys, root, where, followChildren=True, ignore=(), materialize=False, quote=None)` | A `SubsetPlan`: tables in load order, a query for each, each table's parents, and the foreign keys ignored. Raises `SubsetError` on a cycle, or on a chain deeper than 16 tables. Pass `materialize=database.dialect.supportsMaterializedSelections()`, and `quote=lambda name: quoteIdentifier(database.type, name)` (from `bauta.databaseDialects`) so reserved-word columns work. |
 | `synthesizeTable(database, table, rows, seed=0)`, `planTable(...)` | Fill a table with generated rows, returning how many; or just describe how, with a row generator. Raise `SynthesisError`. |
 
 
 ## Streaming directly
 
 ```python
-from understudy_data import Database
+from bauta import Database
 
 with Database(connectionSettings=databases['app']) as database:
     columns, chunks = database.stream('select * from orders', chunkSize=5000)

@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from understudy_data.configuration import Configuration, ConfigurationError, DataJobsFile, expandEnvironmentVariables
-from understudy_data.transform import resolveTransformer
+from bauta.configuration import Configuration, ConfigurationError, DataJobsFile, expandEnvironmentVariables
+from bauta.transform import resolveTransformer
 
 EXAMPLE_DIRECTORY = Path(__file__).resolve().parents[1] / 'example'
 CONFIGURATION_DIRECTORY = EXAMPLE_DIRECTORY / 'starter' / 'configuration'
@@ -67,7 +67,7 @@ def test_the_sample_masked_jobs_share_a_domain_and_read_their_key_from_the_envir
 
 
 def test_every_transformer_the_sample_references_actually_resolves():
-    """The sample points at understudy_data.builtinTransforms now that those ship
+    """The sample points at bauta.builtinTransforms now that those ship
     with the package -- so a rename there breaks this rather than a user's config.
     """
     jobsFile = Configuration.validateJobConfiguration(_load('jobs.yaml'), DataJobsFile)

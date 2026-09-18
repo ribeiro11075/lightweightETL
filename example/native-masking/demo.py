@@ -7,15 +7,15 @@ Needs no server and no credentials. It builds a production SQLite database of
 `rows` customers (100,000 by default) in transaction/, then runs one masked job
 four times, each into a staging copy of its own:
 
-    Python, in turn       UNDERSTUDY_NATIVE=0  UNDERSTUDY_PIPELINE=0
-    Python, overlapped    UNDERSTUDY_NATIVE=0  UNDERSTUDY_PIPELINE=1
-    Rust, in turn                              UNDERSTUDY_PIPELINE=0
-    Rust, overlapped                           UNDERSTUDY_PIPELINE=1
+    Python, in turn       BAUTA_NATIVE=0  BAUTA_PIPELINE=0
+    Python, overlapped    BAUTA_NATIVE=0  BAUTA_PIPELINE=1
+    Rust, in turn                              BAUTA_PIPELINE=0
+    Rust, overlapped                           BAUTA_PIPELINE=1
 
-Rust is the optional understudy-mask extension. By default a job overlaps only
+Rust is the optional bauta-rs extension. By default a job overlaps only
 with Rust, where it pays; the variables force each combination. It prints how
 long each run took, and checks every copy is identical -- the extension's one
-promise besides speed. Each run prints the `understudy` command it is
+promise besides speed. Each run prints the `bauta` command it is
 equivalent to.
 
 Without the extension it runs the Python half, and says how to install it:
@@ -40,7 +40,7 @@ import yaml
 demoDirectory = Path(__file__).resolve().parent
 sys.path.append(str(demoDirectory.parents[1]))
 
-from understudy_data import Configuration, DataJobsFile, FileMemory, expandEnvironmentVariables, runDataJobs
+from bauta import Configuration, DataJobsFile, FileMemory, expandEnvironmentVariables, runDataJobs
 
 DEFAULT_WORKING_DIRECTORY = demoDirectory / 'transaction'
 
@@ -63,7 +63,7 @@ def loadConfiguration(name: str) -> Any:
 
 
 def showCommand(arguments: List[Any], environment: Optional[Dict[str, Any]] = None) -> None:
-    """Prints the `understudy` command that does what the next step does, with
+    """Prints the `bauta` command that does what the next step does, with
     paths relative to where this was run from, ready to paste into a shell.
     """
 
@@ -75,7 +75,7 @@ def showCommand(arguments: List[Any], environment: Optional[Dict[str, Any]] = No
 
     # A variable, the command, or an option with its value: kept whole on a line.
     pieces = ['{}={}'.format(name, shown(value)) for name, value in (environment or {}).items()]
-    pieces.append('understudy ' + shown(arguments[0]))
+    pieces.append('bauta ' + shown(arguments[0]))
     rest = [shown(argument) for argument in arguments[1:]]
     while rest:
         takesValue = len(rest) > 1 and not rest[1].startswith('--')
@@ -126,17 +126,17 @@ def maskWith(name: str, native: bool, overlapped: bool, workingDirectory: Path) 
     os.environ['NATIVE_DEMO_STAGING_PATH'] = str(staging)
     # Read by each job's process as it starts, so they apply to this run only.
     if native:
-        os.environ.pop('UNDERSTUDY_NATIVE', None)
+        os.environ.pop('BAUTA_NATIVE', None)
     else:
-        os.environ['UNDERSTUDY_NATIVE'] = '0'
-    os.environ['UNDERSTUDY_PIPELINE'] = '1' if overlapped else '0'
+        os.environ['BAUTA_NATIVE'] = '0'
+    os.environ['BAUTA_PIPELINE'] = '1' if overlapped else '0'
 
     databases = Configuration.validateDatabaseConfiguration(loadConfiguration('database.yaml'))
     jobsFile = Configuration.validateJobConfiguration(loadConfiguration('jobs.yaml'), DataJobsFile)
     memory = FileMemory(memoryFile=workingDirectory / 'memory-{}.yaml'.format(name))
 
-    environment: Dict[str, Any] = {} if native else {'UNDERSTUDY_NATIVE': '0'}
-    environment['UNDERSTUDY_PIPELINE'] = os.environ['UNDERSTUDY_PIPELINE']
+    environment: Dict[str, Any] = {} if native else {'BAUTA_NATIVE': '0'}
+    environment['BAUTA_PIPELINE'] = os.environ['BAUTA_PIPELINE']
     environment.update(NATIVE_DEMO_PRODUCTION_PATH=workingDirectory / 'production.db', NATIVE_DEMO_STAGING_PATH=staging)
     if os.environ['MASKING_KEY'] == DEMO_MASKING_KEY:
         environment['MASKING_KEY'] = DEMO_MASKING_KEY  # the throwaway one; a real key is never printed
@@ -168,13 +168,13 @@ def nativeVersion() -> Optional[str]:
     it into this process, whose own masking isn't what's being measured.
     """
 
-    if importlib.util.find_spec('understudy_mask') is None:
+    if importlib.util.find_spec('bauta_rs') is None:
         return None
 
     from importlib.metadata import PackageNotFoundError, version
 
     try:
-        return version('understudy-mask')
+        return version('bauta-rs')
     except PackageNotFoundError:
         return 'installed'
 
@@ -188,8 +188,8 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY, rows: int = DEFAULT
     production = workingDirectory / 'production.db'
     buildProduction(production, rows)
 
-    previous = {name: os.environ.get(name) for name in ('NATIVE_DEMO_PRODUCTION_PATH', 'NATIVE_DEMO_STAGING_PATH', 'UNDERSTUDY_NATIVE',
-                                                        'UNDERSTUDY_PIPELINE')}
+    previous = {name: os.environ.get(name) for name in ('NATIVE_DEMO_PRODUCTION_PATH', 'NATIVE_DEMO_STAGING_PATH', 'BAUTA_NATIVE',
+                                                        'BAUTA_PIPELINE')}
     os.environ['NATIVE_DEMO_PRODUCTION_PATH'] = str(production)
     os.environ.setdefault('MASKING_KEY', DEMO_MASKING_KEY)
     version = nativeVersion()
@@ -215,10 +215,10 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY, rows: int = DEFAULT
         print('\nThe {} staging copies are {}.'.format(len(copies), 'identical' if observed['identical'] else 'NOT identical -- please report this'))
 
         if version is None:
-            print('\nRust is the optional understudy-mask extension, which isn\'t installed. With Rust 1.83 or newer, install it from\n'
+            print('\nRust is the optional bauta-rs extension, which isn\'t installed. With Rust 1.83 or newer, install it from\n'
                   'the repository root, and run this again to compare all four:\n\n    pip install ./mask-rs/py')
         else:
-            print('Rust is the understudy-mask extension, version {}.'.format(version))
+            print('Rust is the bauta-rs extension, version {}.'.format(version))
     finally:
         for name, value in previous.items():
             if value is None:

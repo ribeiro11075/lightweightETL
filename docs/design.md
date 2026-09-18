@@ -34,7 +34,7 @@ Loads are written a chunk at a time too, each chunk in its own transaction. The 
 
 One statement can't update a row twice, so for both, rows repeating a key within a chunk are first reduced to the last of them — what applying them in turn would leave.
 
-Where the [native masker](masking.md#the-native-masker) is installed, the three stages overlap rather than taking turns: masking moves to a worker thread while the reader and writer keep the database connections, which they must — `mysqlclient` and PyMySQL forbid a connection being used by a thread other than its own, and SQLite enforces the same. Drivers release the GIL while they wait on a socket and the native masker releases it for a whole chunk, so the waiting and the masking genuinely overlap. A job then holds about three chunks rather than one. Pure-Python masking is slow enough to swamp any wait worth hiding, so it stays sequential; `UNDERSTUDY_PIPELINE` overrides either default.
+Where the [native masker](masking.md#the-native-masker) is installed, the three stages overlap rather than taking turns: masking moves to a worker thread while the reader and writer keep the database connections, which they must — `mysqlclient` and PyMySQL forbid a connection being used by a thread other than its own, and SQLite enforces the same. Drivers release the GIL while they wait on a socket and the native masker releases it for a whole chunk, so the waiting and the masking genuinely overlap. A job then holds about three chunks rather than one. Pure-Python masking is slow enough to swamp any wait worth hiding, so it stays sequential; `BAUTA_PIPELINE` overrides either default.
 
 One chunk is still masked at a time, and chunks are written in the order they were read. A stage-less upsert writes straight into the live target, where one statement can't update the same row twice, so a key repeating across chunks has to arrive as it was read.
 
@@ -132,17 +132,17 @@ A job with `refresh: 5` whose predecessor has `refresh: 60` runs alone for 11 cy
 
 The trade-off is freshness, not correctness: between windows the dependent reads output up to an hour old. That's fine for a durable table, and wrong if the predecessor produces something transient the dependent consumes. Give both the same `refresh` in that case.
 
-`understudy jobs` shows which jobs are due and which are throttled.
+`bauta jobs` shows which jobs are due and which are throttled.
 
 
 ## Single runs, not a daemon
 
-`understudy run` makes one pass and exits, because it should compose with whatever already schedules work — cron, a systemd timer, a Kubernetes CronJob, an Airflow task — rather than compete with it. Those give you alerting, backfill and calendar-aware schedules that `refresh` can't express; `refresh` is a throttle, not a schedule.
+`bauta run` makes one pass and exits, because it should compose with whatever already schedules work — cron, a systemd timer, a Kubernetes CronJob, an Airflow task — rather than compete with it. Those give you alerting, backfill and calendar-aware schedules that `refresh` can't express; `refresh` is a throttle, not a schedule.
 
 `refresh` still works across separate invocations, since it's checked against the durable memory backend. Running every 5 minutes with `refresh: 60` correctly skips 11 runs in 12:
 
 ```cron
-*/5 * * * *  cd /srv/etl && understudy run --memory ./memory.yaml
+*/5 * * * *  cd /srv/etl && bauta run --memory ./memory.yaml
 ```
 
 `--forever` keeps the process resident, for freshness below cron's one-minute floor or where there's no scheduler.
@@ -184,7 +184,7 @@ Masked data jobs retry like any other data job. The watermark is read again on e
 `--log-format json` writes one object per line, for a log collector (for history, metrics and alerts, see [operations.md](operations.md)):
 
 ```json
-{"timestamp": "2026-09-16 01:00:12.514", "level": "INFO", "logger": "understudy_data", "message": "Completed loadOrders (4200 row(s))",
+{"timestamp": "2026-09-16 01:00:12.514", "level": "INFO", "logger": "bauta", "message": "Completed loadOrders (4200 row(s))",
  "file": "runner.py", "line": 432, "job": "loadOrders", "status": "completed", "rowCount": 4200, "attempts": 1}
 ```
 

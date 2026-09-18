@@ -11,12 +11,12 @@ from typing import Any, Dict, Iterator, List, Tuple
 
 import pytest
 
-from understudy_data.configuration import Configuration, ConfigurationError, DatabaseConnectionConfig, DatabaseType, DataJobConfig, DataJobsFile, \
+from bauta.configuration import Configuration, ConfigurationError, DatabaseConnectionConfig, DatabaseType, DataJobConfig, DataJobsFile, \
     InsertStrategy
-from understudy_data.dependencyGraph import DependencyGraph, JobOutcome, JobStatus
-from understudy_data.memory import FileMemory, MemoryBackend
-from understudy_data.runner import PIPELINE_DEPTH, RunResult, _initializeWorker, _jobProcess, _runCycle, _runDataJob, _terminationHandling, _executeDataJob, runDataJobs
-from understudy_data.transform import TransformError
+from bauta.dependencyGraph import DependencyGraph, JobOutcome, JobStatus
+from bauta.memory import FileMemory, MemoryBackend
+from bauta.runner import PIPELINE_DEPTH, RunResult, _initializeWorker, _jobProcess, _runCycle, _runDataJob, _terminationHandling, _executeDataJob, runDataJobs
+from bauta.transform import TransformError
 
 
 def test_worker_functions_are_picklable():
@@ -106,7 +106,7 @@ def fakeDatabases(monkeypatch):
             super().__init__(connectionSettings)
             created.append(self)
 
-    monkeypatch.setattr('understudy_data.runner.Database', _TrackedFakeDatabase)
+    monkeypatch.setattr('bauta.runner.Database', _TrackedFakeDatabase)
 
     return created
 
@@ -350,7 +350,7 @@ def _runDataWorkerOnce(monkeypatch, succeeds: bool, memoryFails: bool = False) -
             raise RuntimeError('job blew up')
         return JobOutcome(job=job, status=JobStatus.COMPLETED, rowCount=1)
 
-    monkeypatch.setattr('understudy_data.runner._executeDataJob', fakeExecute)
+    monkeypatch.setattr('bauta.runner._executeDataJob', fakeExecute)
 
     return _runJobWithTimeline(_dataJobConfig(), _TimelineMemory([], failing=memoryFails))
 
@@ -397,7 +397,7 @@ def test_execute_data_job_streams_rather_than_materializing_the_whole_extract(mo
 
     Not strict alternation: the reader, the masker and the writer overlap, so
     the exact interleaving depends on thread scheduling. Strict alternation is
-    what UNDERSTUDY_PIPELINE=0 restores, which the next test checks.
+    what BAUTA_PIPELINE=0 restores, which the next test checks.
     """
 
     timeline: List[Tuple[str, int]] = []
@@ -439,8 +439,8 @@ def test_execute_data_job_streams_rather_than_materializing_the_whole_extract(mo
         def alter(self, query: str) -> None:
             return None
 
-    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '1')
-    monkeypatch.setattr('understudy_data.runner.Database', _StreamingFake)
+    monkeypatch.setenv('BAUTA_PIPELINE', '1')
+    monkeypatch.setattr('bauta.runner.Database', _StreamingFake)
 
     result = _executeDataJob('job1', _dataJobConfig(chunkSize=3), {'src': _dbConfig(), 'tgt': _dbConfig()})
 
@@ -462,7 +462,7 @@ def test_execute_data_job_streams_rather_than_materializing_the_whole_extract(mo
 
 
 def test_the_pipeline_can_be_turned_off(monkeypatch):
-    """UNDERSTUDY_PIPELINE=0 puts reading, masking and writing back in turn, for
+    """BAUTA_PIPELINE=0 puts reading, masking and writing back in turn, for
     diagnosing a problem without the worker thread in the picture. Then the
     interleaving is strict, and deterministic to assert on.
     """
@@ -506,8 +506,8 @@ def test_the_pipeline_can_be_turned_off(monkeypatch):
         def alter(self, query: str) -> None:
             return None
 
-    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '0')
-    monkeypatch.setattr('understudy_data.runner.Database', _StreamingFake)
+    monkeypatch.setenv('BAUTA_PIPELINE', '0')
+    monkeypatch.setattr('bauta.runner.Database', _StreamingFake)
 
     _executeDataJob('job1', _dataJobConfig(chunkSize=3), {'src': _dbConfig(), 'tgt': _dbConfig()})
 
@@ -683,7 +683,7 @@ def _runWatermarkWorkerOnce(monkeypatch, tmp_path, succeeds: bool, watermarks: D
             raise RuntimeError('job blew up')
         return JobOutcome(job=job, status=JobStatus.COMPLETED, rowCount=3, watermark='reached-{}'.format(watermark))
 
-    monkeypatch.setattr('understudy_data.runner._executeDataJob', fakeExecute)
+    monkeypatch.setattr('bauta.runner._executeDataJob', fakeExecute)
 
     return _runJobWithTimeline(_watermarkJobConfig(), _WatermarkTimelineMemory([], watermarks))
 
@@ -825,7 +825,7 @@ def test_the_data_worker_reports_row_count_and_error_on_its_outcome(monkeypatch,
     def fakeExecute(job: Any, jobConfig: Any, databaseConfiguration: Any, watermark: Any = None) -> JobOutcome:
         return JobOutcome(job=job, status=JobStatus.COMPLETED, rowCount=42)
 
-    monkeypatch.setattr('understudy_data.runner._executeDataJob', fakeExecute)
+    monkeypatch.setattr('bauta.runner._executeDataJob', fakeExecute)
 
     outcome = _runDataJob('job1', _dataJobConfig(), {}, _TimelineMemory([]))
 
@@ -841,7 +841,7 @@ def test_the_data_worker_records_the_failure_text_on_its_outcome(monkeypatch, tm
     def fakeExecute(job: Any, jobConfig: Any, databaseConfiguration: Any, watermark: Any = None) -> JobOutcome:
         raise RuntimeError('the source went away')
 
-    monkeypatch.setattr('understudy_data.runner._executeDataJob', fakeExecute)
+    monkeypatch.setattr('bauta.runner._executeDataJob', fakeExecute)
 
     outcome = _runDataJob('job1', _dataJobConfig(), {}, _TimelineMemory([]))
 
@@ -930,7 +930,7 @@ def _retryJobConfig(**overrides: Any) -> DataJobConfig:
 
 def _runRetryWorker(monkeypatch, tmp_path, attempt: Any, jobConfig: Any = None) -> List[Any]:
 
-    monkeypatch.setattr('understudy_data.runner._executeDataJob', lambda job, config, databases, watermark=None: attempt())
+    monkeypatch.setattr('bauta.runner._executeDataJob', lambda job, config, databases, watermark=None: attempt())
 
     return [_runDataJob('job1', jobConfig or _retryJobConfig(), {}, _TimelineMemory([]))]
 
@@ -1009,7 +1009,7 @@ def test_retry_backoff_grows_between_attempts(monkeypatch, tmp_path):
     interval while it tries to come back.
     """
     delays = []
-    monkeypatch.setattr('understudy_data.runner.time.sleep', lambda seconds: delays.append(seconds))
+    monkeypatch.setattr('bauta.runner.time.sleep', lambda seconds: delays.append(seconds))
 
     def alwaysFails():
         raise OSError('down')
@@ -1021,7 +1021,7 @@ def test_retry_backoff_grows_between_attempts(monkeypatch, tmp_path):
 
 def test_retry_backoff_stops_growing_at_five_minutes(monkeypatch, tmp_path):
     delays = []
-    monkeypatch.setattr('understudy_data.runner.time.sleep', lambda seconds: delays.append(seconds))
+    monkeypatch.setattr('bauta.runner.time.sleep', lambda seconds: delays.append(seconds))
 
     def alwaysFails():
         raise OSError('down')
@@ -1046,7 +1046,7 @@ def test_the_stored_watermark_is_read_again_on_each_attempt(monkeypatch):
                 raise OSError('memory database unavailable')
             return {'job1': 'stored'}
 
-    monkeypatch.setattr('understudy_data.runner._executeDataJob',
+    monkeypatch.setattr('bauta.runner._executeDataJob',
                         lambda job, config, databases, watermark=None: JobOutcome(job=job, status=JobStatus.COMPLETED, watermark=watermark))
     memory = _FlakyWatermarks([], {})
 
@@ -1192,7 +1192,7 @@ def _maskedSqliteJob(databases, key='an-original-masking-key', **overrides):
 
 
 def test_a_masked_job_records_the_key_it_completed_under(tmp_path, sqliteDatabase):
-    from understudy_data.masking import keyFingerprint, splitMaskingIdentity
+    from bauta.masking import keyFingerprint, splitMaskingIdentity
 
     _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
 
@@ -1212,7 +1212,7 @@ def test_a_changed_key_stops_an_upsert_job_before_anything_runs(tmp_path, sqlite
 
 
 def test_a_changed_key_is_accepted_when_acknowledged_and_then_recorded(tmp_path, sqliteDatabase):
-    from understudy_data.masking import keyFingerprint, splitMaskingIdentity
+    from bauta.masking import keyFingerprint, splitMaskingIdentity
 
     _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
     jobsFile = Configuration.validateJobConfiguration(
@@ -1240,7 +1240,7 @@ def _warningsFromThePackage() -> Iterator[List[str]]:
             messages.append(record.getMessage())
 
     handler = _Collect(level=logging.WARNING)
-    packageLogger = logging.getLogger('understudy_data')
+    packageLogger = logging.getLogger('bauta')
     packageLogger.addHandler(handler)
     try:
         yield messages
@@ -1253,7 +1253,7 @@ def test_a_masked_job_records_which_implementation_masked_it(tmp_path, sqliteDat
     two implementations ever disagreed, the fingerprint would not change, and
     nothing else would show it.
     """
-    from understudy_data.masking import maskingImplementation, splitMaskingIdentity
+    from bauta.masking import maskingImplementation, splitMaskingIdentity
 
     _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
 
@@ -1267,21 +1267,21 @@ def test_a_changed_implementation_is_noted_but_does_not_stop_an_upsert_job(tmp_p
     upsert job on that would be friction for no safety, so it warns instead --
     the warning being the only trace there would be if they ever disagreed.
     """
-    import understudy_data.masking as masking
+    import bauta.masking as masking
 
     monkeypatch.setattr(masking, 'maskingImplementation', lambda: 'python')
-    monkeypatch.setattr('understudy_data.runner.maskingImplementation', lambda: 'python')
+    monkeypatch.setattr('bauta.runner.maskingImplementation', lambda: 'python')
     _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
 
-    monkeypatch.setattr(masking, 'maskingImplementation', lambda: 'understudy-mask/9.9.9')
-    monkeypatch.setattr('understudy_data.runner.maskingImplementation', lambda: 'understudy-mask/9.9.9')
+    monkeypatch.setattr(masking, 'maskingImplementation', lambda: 'bauta-rs/9.9.9')
+    monkeypatch.setattr('bauta.runner.maskingImplementation', lambda: 'bauta-rs/9.9.9')
     with _warningsFromThePackage() as warnings:
         result = _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
 
     assert result.succeeded
     noted = [message for message in warnings if 'Masking implementation changed' in message]
     assert len(noted) == 1, warnings
-    assert 'now understudy-mask/9.9.9' in noted[0]
+    assert 'now bauta-rs/9.9.9' in noted[0]
 
 
 def test_state_recorded_before_the_implementation_was_still_reads(tmp_path, sqliteDatabase):
@@ -1290,7 +1290,7 @@ def test_state_recorded_before_the_implementation_was_still_reads(tmp_path, sqli
     implementation change -- which would warn on every job the first run after
     an upgrade.
     """
-    from understudy_data.masking import keyFingerprint
+    from bauta.masking import keyFingerprint
 
     FileMemory(tmp_path / 'memory.yaml').recordKeyFingerprint('masked', keyFingerprint('an-original-masking-key'))
 
@@ -1427,11 +1427,11 @@ def test_the_pipeline_writes_chunks_in_source_order(monkeypatch, chunkSize):
     twice -- so a key that repeats across chunks has to arrive as it was read.
     """
 
-    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '1')
+    monkeypatch.setenv('BAUTA_PIPELINE', '1')
 
     rows = [(index % 17, 'name{}'.format(index)) for index in range(3000)]
     written: List[Any] = []
-    monkeypatch.setattr('understudy_data.runner.Database', _pipelineFake(rows, written=written))
+    monkeypatch.setattr('bauta.runner.Database', _pipelineFake(rows, written=written))
 
     _executeDataJob('job1', _dataJobConfig(chunkSize=chunkSize), {'src': _dbConfig(), 'tgt': _dbConfig()})
 
@@ -1446,20 +1446,20 @@ def test_a_failure_on_any_side_of_the_pipeline_surfaces(monkeypatch):
     thread that will never take from it.
     """
 
-    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '1')
+    monkeypatch.setenv('BAUTA_PIPELINE', '1')
 
     rows = [(index, 'name{}'.format(index)) for index in range(3000)]
 
-    monkeypatch.setattr('understudy_data.runner.Database', _pipelineFake(rows, failReadAt=5))
+    monkeypatch.setattr('bauta.runner.Database', _pipelineFake(rows, failReadAt=5))
     with pytest.raises(RuntimeError, match='the reader failed'):
         _executeDataJob('job1', _dataJobConfig(chunkSize=10), {'src': _dbConfig(), 'tgt': _dbConfig()})
 
-    monkeypatch.setattr('understudy_data.runner.Database', _pipelineFake(rows, failWriteAt=5))
+    monkeypatch.setattr('bauta.runner.Database', _pipelineFake(rows, failWriteAt=5))
     with pytest.raises(RuntimeError, match='the writer failed'):
         _executeDataJob('job1', _dataJobConfig(chunkSize=10), {'src': _dbConfig(), 'tgt': _dbConfig()})
 
-    monkeypatch.setattr('understudy_data.runner.Database', _pipelineFake(rows))
-    monkeypatch.setattr('understudy_data.transform.Transform.apply',
+    monkeypatch.setattr('bauta.runner.Database', _pipelineFake(rows))
+    monkeypatch.setattr('bauta.transform.Transform.apply',
                         lambda self, chunk: (_ for _ in ()).throw(RuntimeError('masking failed')))
     with pytest.raises(RuntimeError, match='masking failed'):
         _executeDataJob('job1', _dataJobConfig(chunkSize=10), {'src': _dbConfig(), 'tgt': _dbConfig()})
@@ -1468,10 +1468,10 @@ def test_a_failure_on_any_side_of_the_pipeline_surfaces(monkeypatch):
 def test_the_pipeline_leaves_no_threads_behind(monkeypatch):
     """A worker per job would otherwise accumulate across a runForever cycle."""
 
-    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '1')
+    monkeypatch.setenv('BAUTA_PIPELINE', '1')
 
     rows = [(index, 'name{}'.format(index)) for index in range(500)]
-    monkeypatch.setattr('understudy_data.runner.Database', _pipelineFake(rows))
+    monkeypatch.setattr('bauta.runner.Database', _pipelineFake(rows))
     before = threading.active_count()
 
     for _ in range(5):
@@ -1480,7 +1480,7 @@ def test_the_pipeline_leaves_no_threads_behind(monkeypatch):
     for _ in range(5):
         # A fresh fake each time: its chunk counter is per-instance, and a
         # reused one would only fail on the first run.
-        monkeypatch.setattr('understudy_data.runner.Database', _pipelineFake(rows, failWriteAt=3))
+        monkeypatch.setattr('bauta.runner.Database', _pipelineFake(rows, failWriteAt=3))
         with pytest.raises(RuntimeError):
             _executeDataJob('job1', _dataJobConfig(chunkSize=10), {'src': _dbConfig(), 'tgt': _dbConfig()})
 
@@ -1500,10 +1500,10 @@ def test_the_pipeline_follows_the_native_masker_unless_told_otherwise(monkeypatc
     follows the extension, and either setting overrides it.
     """
 
-    import understudy_data.masking as masking
-    from understudy_data.runner import PIPELINE_DEPTH, _pipelineDepth
+    import bauta.masking as masking
+    from bauta.runner import PIPELINE_DEPTH, _pipelineDepth
 
-    monkeypatch.delenv('UNDERSTUDY_PIPELINE', raising=False)
+    monkeypatch.delenv('BAUTA_PIPELINE', raising=False)
 
     monkeypatch.setattr(masking, 'nativeVersion', lambda: '0.1.0')
     assert _pipelineDepth() == PIPELINE_DEPTH
@@ -1512,9 +1512,9 @@ def test_the_pipeline_follows_the_native_masker_unless_told_otherwise(monkeypatc
     assert _pipelineDepth() == 0
 
     # And the setting wins over the default, either way.
-    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '1')
+    monkeypatch.setenv('BAUTA_PIPELINE', '1')
     assert _pipelineDepth() == PIPELINE_DEPTH
 
     monkeypatch.setattr(masking, 'nativeVersion', lambda: '0.1.0')
-    monkeypatch.setenv('UNDERSTUDY_PIPELINE', '0')
+    monkeypatch.setenv('BAUTA_PIPELINE', '0')
     assert _pipelineDepth() == 0

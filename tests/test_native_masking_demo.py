@@ -12,7 +12,7 @@ import pytest
 
 DEMO_PATH = Path(__file__).resolve().parents[1] / 'example' / 'native-masking' / 'demo.py'
 PREVIOUS: dict = {}
-ENVIRONMENT = ('NATIVE_DEMO_PRODUCTION_PATH', 'NATIVE_DEMO_STAGING_PATH', 'UNDERSTUDY_NATIVE', 'UNDERSTUDY_PIPELINE', 'MASKING_KEY')
+ENVIRONMENT = ('NATIVE_DEMO_PRODUCTION_PATH', 'NATIVE_DEMO_STAGING_PATH', 'BAUTA_NATIVE', 'BAUTA_PIPELINE', 'MASKING_KEY')
 
 
 @pytest.fixture(scope='module')
@@ -61,5 +61,5 @@ def test_every_run_makes_the_same_copy(demoRun):
 
 
 def test_the_demo_restores_the_variables_it_sets(demoRun):
-    assert os.environ.get('UNDERSTUDY_PIPELINE') == PREVIOUS['UNDERSTUDY_PIPELINE']
-    assert os.environ.get('UNDERSTUDY_NATIVE') == PREVIOUS['UNDERSTUDY_NATIVE']
+    assert os.environ.get('BAUTA_PIPELINE') == PREVIOUS['BAUTA_PIPELINE']
+    assert os.environ.get('BAUTA_NATIVE') == PREVIOUS['BAUTA_NATIVE']

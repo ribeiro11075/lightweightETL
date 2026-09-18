@@ -13,12 +13,12 @@ import uuid
 
 import pytest
 
-from understudy_data.configuration import Configuration, DataJobsFile
-from understudy_data.database import Database
-from understudy_data.dependencyGraph import JobStatus
-from understudy_data.memory import FileMemory
-from understudy_data.runner import runDataJobs
-from understudy_data.scrubbing import describeError
+from bauta.configuration import Configuration, DataJobsFile
+from bauta.database import Database
+from bauta.dependencyGraph import JobStatus
+from bauta.memory import FileMemory
+from bauta.runner import runDataJobs
+from bauta.scrubbing import describeError
 from servers import SERVERS
 
 pytestmark = pytest.mark.integration

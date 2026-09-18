@@ -13,9 +13,9 @@ import uuid
 
 import pytest
 
-from understudy_data.configuration import Configuration, ConfigurationError, DataJobsFile
-from understudy_data.dependencyGraph import JobOutcome, JobStatus
-from understudy_data.masking import (FIRST_NAMES, LAST_NAMES, STRATEGIES, KeyedHash, MaskingError, MaskingPlan, buildMaskingManifest,
+from bauta.configuration import Configuration, ConfigurationError, DataJobsFile
+from bauta.dependencyGraph import JobOutcome, JobStatus
+from bauta.masking import (FIRST_NAMES, LAST_NAMES, STRATEGIES, KeyedHash, MaskingError, MaskingPlan, buildMaskingManifest,
                                      keyFingerprint, validateColumnPolicy)
 
 KEY = 'a-test-key-that-is-long-enough'
@@ -598,7 +598,7 @@ def _manifest():
 
 def test_a_sealed_manifest_verifies_until_it_is_changed():
     import json
-    from understudy_data.masking import sealManifest, verifyManifest
+    from bauta.masking import sealManifest, verifyManifest
 
     sealed = json.loads(json.dumps(sealManifest(_manifest()), indent=4))
 
@@ -609,7 +609,7 @@ def test_a_sealed_manifest_verifies_until_it_is_changed():
 
 
 def test_a_signed_manifest_verifies_only_with_its_key():
-    from understudy_data.masking import keyFingerprint, sealManifest, verifyManifest
+    from bauta.masking import keyFingerprint, sealManifest, verifyManifest
 
     key = 'a-manifest-signing-key'
     sealed = sealManifest(_manifest(), signingKey=key)
@@ -623,7 +623,7 @@ def test_a_signed_manifest_verifies_only_with_its_key():
 def test_a_forged_signature_does_not_verify():
     """Anyone can recompute a digest after editing; only the key can re-sign."""
     import hashlib
-    from understudy_data.masking import _canonicalManifest, sealManifest, verifyManifest
+    from bauta.masking import _canonicalManifest, sealManifest, verifyManifest
 
     key = 'a-manifest-signing-key'
     sealed = sealManifest(_manifest(), signingKey=key)
@@ -637,14 +637,14 @@ def test_a_forged_signature_does_not_verify():
 
 
 def test_a_manifest_without_an_integrity_section_cannot_be_verified():
-    from understudy_data.masking import verifyManifest
+    from bauta.masking import verifyManifest
 
     with pytest.raises(ValueError, match='no integrity section'):
         verifyManifest(_manifest())
 
 
 def test_a_signing_key_must_be_long_enough():
-    from understudy_data.masking import sealManifest
+    from bauta.masking import sealManifest
 
     with pytest.raises(ValueError, match='at least 16'):
         sealManifest(_manifest(), signingKey='short')
@@ -665,7 +665,7 @@ def test_fake_values_without_a_locale_are_unchanged_by_locale_support():
 
 @pytest.mark.parametrize('locale', ['de_DE', 'fr_FR', 'es_ES', 'pt_BR', 'it_IT', 'nl_NL', 'en_US', 'en_GB'])
 def test_a_locale_draws_from_its_own_lists(locale):
-    from understudy_data.masking import LOCALES
+    from bauta.masking import LOCALES
 
     policy = {name: {'strategy': name, 'locale': locale} for name in FAKE_STRATEGIES}
     bound = MaskingPlan(GOLDEN_KEY, policy).bind(FAKE_STRATEGIES)
@@ -887,7 +887,7 @@ def test_only_values_whose_equals_always_mask_alike_are_remembered():
 
 
 def test_the_cache_is_bounded(monkeypatch):
-    import understudy_data.masking as masking
+    import bauta.masking as masking
 
     monkeypatch.setattr(masking, 'MASK_CACHE_SIZE', 10)
     remembered = pythonStrategy('hash')
@@ -907,7 +907,7 @@ def test_a_value_that_fails_fails_every_time():
 
 
 def test_a_custom_strategy_is_not_assumed_to_be_cacheable():
-    from understudy_data.masking import resolveStrategy
+    from bauta.masking import resolveStrategy
 
     custom = resolveStrategy('customStrategies:Initials')
     instance = custom(KeyedHash(KEY, 'name'), {})
@@ -997,7 +997,7 @@ def test_redact_masks_identifiers_written_in_other_digits(text, kind):
 def test_key_and_fpe_refuse_values_longer_than_an_identifier(name):
     if name == 'fpe':
         pytest.importorskip('cryptography')
-    from understudy_data.masking import MAXIMUM_KEY_LENGTH
+    from bauta.masking import MAXIMUM_KEY_LENGTH
 
     assert len(maskOne(name, 'a1' * (MAXIMUM_KEY_LENGTH // 2))) == MAXIMUM_KEY_LENGTH
     assert maskOne(name, 10 ** (MAXIMUM_KEY_LENGTH - 1)) >= 10 ** (MAXIMUM_KEY_LENGTH - 1)

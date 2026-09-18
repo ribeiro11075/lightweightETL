@@ -1,4 +1,4 @@
-"""Synthetic rows, for tables that can't be copied at all -- `understudy synthesize`.
+"""Synthetic rows, for tables that can't be copied at all -- `bauta synthesize`.
 
 Fills existing tables from nothing but the target's catalog. Integer keys
 continue past the current maximum; foreign keys are drawn from parent rows,
@@ -70,7 +70,7 @@ class _Synthesizer:
     """Builds one table's column generators."""
 
     def __init__(self, table: str, seed: int, nullShare: float) -> None:
-        self.salt = 'understudy synthetic data|{}|{}'.format(seed, table.lower())
+        self.salt = 'bauta synthetic data|{}|{}'.format(seed, table.lower())
         self.keyedHash = KeyedHash(self.salt, table.lower())
         self.nullShare = nullShare
 

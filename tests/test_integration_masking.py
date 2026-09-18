@@ -17,13 +17,13 @@ import uuid
 
 import pytest
 
-from understudy_data.configuration import Configuration, DataJobsFile
-from understudy_data.database import Database
-from understudy_data.dependencyGraph import JobStatus
-from understudy_data.discovery import proposeTable
-from understudy_data.memory import FileMemory
-from understudy_data.runner import runDataJobs
-from understudy_data.subset import planSubset
+from bauta.configuration import Configuration, DataJobsFile
+from bauta.database import Database
+from bauta.dependencyGraph import JobStatus
+from bauta.discovery import proposeTable
+from bauta.memory import FileMemory
+from bauta.runner import runDataJobs
+from bauta.subset import planSubset
 from servers import SERVERS
 
 pytestmark = pytest.mark.integration
@@ -220,7 +220,7 @@ def test_checking_a_masked_query_leaves_the_connection_usable(schema):
     MariaDB connections refusing the close itself, so --dry-run and
     audit --connect called every such job uncheckable.
     """
-    from understudy_data.cli import _sourceQueryColumns
+    from bauta.cli import _sourceQueryColumns
 
     settings, database, names = schema
     jobsFile = _maskedJob(names['customers'], names['customers_copy'], {'id': 'keep'})

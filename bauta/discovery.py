@@ -1,4 +1,4 @@
-"""Proposes masking policies from a live schema, for `understudy discover`.
+"""Proposes masking policies from a live schema, for `bauta discover`.
 
 A proposal is for review: each suggestion carries its reason, rendered beside
 the column. Classification uses column names, then sampled values, which are
@@ -298,7 +298,7 @@ def proposeTable(database: Any, table: str, sampleSize: int = DEFAULT_SAMPLE_SIZ
                  primaryKeys: Optional[Mapping[str, Sequence[str]]] = None) -> TableProposal:
     """Samples `table` and suggests a policy for each of its columns.
 
-    `database` is a understudy_data Database. foreignKeys and primaryKeys can be
+    `database` is a bauta Database. foreignKeys and primaryKeys can be
     passed in when proposing several tables, so the schema is read once.
     """
 

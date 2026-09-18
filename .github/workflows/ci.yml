@@ -68,11 +68,11 @@ jobs:
         working-directory: mask-rs/py
         run: |
           maturin build --release --out ../target/wheels
-          python -m pip install ../target/wheels/understudy_mask-*.whl
+          python -m pip install ../target/wheels/bauta_rs-*.whl
       - name: Python suite, with the extension
         run: pytest -q
       - name: Python suite, without it
-        run: UNDERSTUDY_NATIVE=0 pytest -q
+        run: BAUTA_NATIVE=0 pytest -q
       # The vectors are generated from the Python implementation, so they only
       # mean anything if Python still produces them.
       - name: Vectors still describe the Python implementation

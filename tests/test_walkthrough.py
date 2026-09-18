@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 WALKTHROUGH_PATH = Path(__file__).resolve().parents[1] / 'example' / 'walkthrough' / 'demo.py'
-ENVIRONMENT = ('MASKING_KEY', 'UNDERSTUDY_MANIFEST_KEY')
+ENVIRONMENT = ('MASKING_KEY', 'BAUTA_MANIFEST_KEY')
 
 
 @pytest.fixture(scope='module')
@@ -77,7 +77,7 @@ def test_the_session_is_written_down_with_its_limitation(session):
     _, workingDirectory = session
     report = (workingDirectory / 'walkthrough.md').read_text()
 
-    assert '$ understudy subset --databases ' in report
+    assert '$ bauta subset --databases ' in report
     assert 'intact, and signed with key' in report
     assert 'the name is still there' in report
     assert str(workingDirectory) not in report.split('This session was written to')[0]

@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 use num_bigint::BigUint;
 use std::time::Instant;
-use understudy_mask_core::KeyedHash;
+use bauta_core::KeyedHash;
 
 fn main() {
     let hash = KeyedHash::new("a-test-key-that-is-long-enough", "bench");

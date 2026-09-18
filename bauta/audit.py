@@ -1,4 +1,4 @@
-"""What a set of jobs does with data, for a reviewer -- `understudy audit`.
+"""What a set of jobs does with data, for a reviewer -- `bauta audit`.
 
 Findings a valid policy can still deserve -- an `email` column kept as it is,
 a defaultStrategy of `keep` -- for a person, or with --strict a CI gate.

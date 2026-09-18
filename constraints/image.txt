@@ -1,4 +1,4 @@
-# Every package `understudy-data[all]` installs, pinned to one tested set.
+# Every package `bauta[all]` installs, pinned to one tested set.
 # CI's integration job runs against these. After changing a version,
 # regenerate the rest with:
 #

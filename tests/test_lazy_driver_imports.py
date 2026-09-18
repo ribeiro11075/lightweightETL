@@ -7,10 +7,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_library_is_importable_without_every_database_driver_installed():
     """Runs in a fresh interpreter, unaffected by whether this environment happens
-    to have psycopg2/oracledb installed, to prove `import understudy_data` doesn't require
+    to have psycopg2/oracledb installed, to prove `import bauta` doesn't require
     every driver up front regardless.
     """
-    result = subprocess.run([sys.executable, '-c', 'import understudy_data'], cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=30)
+    result = subprocess.run([sys.executable, '-c', 'import bauta'], cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=30)
 
     assert result.returncode == 0, result.stderr
 
@@ -25,11 +25,11 @@ def test_connecting_with_a_missing_driver_fails_at_connect_not_at_import():
     script = (
         'import sys\n'
         'sys.modules["psycopg2"] = None\n'
-        'import understudy_data\n'
-        'from understudy_data.configuration import DatabaseConnectionConfig, DatabaseType\n'
+        'import bauta\n'
+        'from bauta.configuration import DatabaseConnectionConfig, DatabaseType\n'
         'settings = DatabaseConnectionConfig(type=DatabaseType.POSTGRESQL, user="u", password="p", database="d", host="h")\n'
         'try:\n'
-        '    understudy_data.Database(connectionSettings=settings)\n'
+        '    bauta.Database(connectionSettings=settings)\n'
         'except ModuleNotFoundError:\n'
         '    print("OK")\n'
         )

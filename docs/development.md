@@ -25,13 +25,13 @@ mypy
 
 ## The native masker
 
-`mask-rs/` holds `understudy-mask`, the optional Rust extension: a separate distribution, so this package installs anywhere without a Rust toolchain. See [its README](../mask-rs/README.md) for the layout. Rust 1.83 or newer:
+`mask-rs/` holds `bauta-rs`, the optional Rust extension: a separate distribution, so this package installs anywhere without a Rust toolchain. See [its README](../mask-rs/README.md) for the layout. Rust 1.83 or newer:
 
 ```
 cd mask-rs
 cargo test --release              # 918 recorded vectors, NIST FF1, RFC 4231
 cd py && maturin build --release
-pip install ../target/wheels/understudy_mask-*.whl
+pip install ../target/wheels/bauta_rs-*.whl
 ```
 
 `--release` matters: two tests measure SHA-256 and AES throughput to catch a backend that fell back to software, which a debug build is indistinguishable from.
@@ -40,7 +40,7 @@ pip install ../target/wheels/understudy_mask-*.whl
 
 ```
 pytest                              # with the extension, if installed
-UNDERSTUDY_NATIVE=0 pytest          # without
+BAUTA_NATIVE=0 pytest               # without
 ```
 
 
@@ -86,7 +86,7 @@ mypy targets Python 3.10, the oldest version the package supports.
 `pyproject.toml` gives ranges, not pins, so the package installs beside other tools that have their own. Two files in `constraints/` pin them:
 
 - **`lowest.txt`** is the bottom of every range. CI installs it on Python 3.10 and runs everything, the integration suite included, so a lower bound that stops working fails there first.
-- **`image.txt`** pins every package `understudy-data[all]` installs, to one tested set of newer versions. CI's other integration run installs it.
+- **`image.txt`** pins every package `bauta[all]` installs, to one tested set of newer versions. CI's other integration run installs it.
 
 `tests/test_packaging.py` checks that `lowest.txt` matches the lower bounds and that `image.txt` is within the ranges. To raise a lower bound, change both `pyproject.toml` and `lowest.txt`. To move the pinned set to newer versions, edit the direct pins in `image.txt` and regenerate the rest with the command at its top.
 
@@ -103,7 +103,7 @@ git tag v0.1.0 && git push origin v0.1.0
 
 It builds and checks the sdist and wheel, and publishes them to PyPI. PyPI publishing uses trusted publishing, so there is no token to store. Set it up once, before the first tag:
 
-1. On PyPI, add a pending trusted publisher for the project `understudy-data`: this repository, workflow `release.yml`, environment `pypi`.
+1. On PyPI, add a pending trusted publisher for the project `bauta`: this repository, workflow `release.yml`, environment `pypi`.
 2. In the repository's settings, create an environment named `pypi`. Requiring a reviewer there makes each release wait for approval.
 
 To check the distributions locally:

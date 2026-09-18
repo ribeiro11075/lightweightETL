@@ -21,8 +21,8 @@ import uuid
 
 import pytest
 
-from understudy_data.configuration import ConfigurationError
-from understudy_data.database import Database
+from bauta.configuration import ConfigurationError
+from bauta.database import Database
 from servers import SERVERS
 
 pytestmark = pytest.mark.integration
@@ -174,14 +174,14 @@ def test_database_history_and_key_fingerprints_work_on_every_server(server):
     """The history table's types, and fingerprint rows in the memory table,
     have to be accepted -- and read back -- by every dialect.
     """
-    from understudy_data.dependencyGraph import JobOutcome, JobStatus
-    from understudy_data.memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory
-    from understudy_data.reporting import DATABASE_HISTORY_SCHEMA, DatabaseHistory
-    from understudy_data.runner import RunResult
+    from bauta.dependencyGraph import JobOutcome, JobStatus
+    from bauta.memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory
+    from bauta.reporting import DATABASE_HISTORY_SCHEMA, DatabaseHistory
+    from bauta.runner import RunResult
 
     serverName, database, table = server
-    historyTable = table(DATABASE_HISTORY_SCHEMA.split('understudy_history', 1)[1])
-    memoryTable = table(DATABASE_MEMORY_SCHEMA.split('understudy_memory', 1)[1])
+    historyTable = table(DATABASE_HISTORY_SCHEMA.split('bauta_history', 1)[1])
+    memoryTable = table(DATABASE_MEMORY_SCHEMA.split('bauta_memory', 1)[1])
     settings = database.connectionSettings
 
     history = DatabaseHistory(settings, table=historyTable)
@@ -213,9 +213,9 @@ def test_database_history_and_key_fingerprints_work_on_every_server(server):
 
 def test_a_reserved_word_column_loads_and_upserts(server):
     """`rank` and `order` are reserved on at least one server each; the column
-    is created as `understudy schema` would, and loaded through both paths.
+    is created as `bauta schema` would, and loaded through both paths.
     """
-    from understudy_data.databaseDialects import quoteFolded
+    from bauta.databaseDialects import quoteFolded
 
     name, database, table = server
     quoted = {column: quoteFolded(database.type, column) for column in ('id', 'rank', 'order')}
@@ -232,7 +232,7 @@ def test_a_mixed_case_column_created_quoted_loads(server):
     """On Oracle and PostgreSQL, a column created as "CustomerId" only answers
     to that exact spelling; an unquoted load used to miss it.
     """
-    from understudy_data.databaseDialects import quoteIdentifier
+    from bauta.databaseDialects import quoteIdentifier
 
     name, database, table = server
     column = quoteIdentifier(database.type, 'CustomerId')

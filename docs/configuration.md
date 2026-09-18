@@ -15,7 +15,7 @@ The field reference. For *why* things behave as they do, see [design.md](design.
 The CLI looks for a directory holding `database.yaml` and `jobs.yaml`, in this order. `discover`, `subset`, `schema` and `synthesize` read only `database.yaml`.
 
 1. `--config DIR`
-2. `$UNDERSTUDY_CONFIG`
+2. `$BAUTA_CONFIG`
 3. `./configuration`
 
 `--jobs FILE` and `--databases FILE` override either file individually.
@@ -129,10 +129,10 @@ warehouse:
   options:
     sslmode: verify-full
     sslrootcert: /etc/ssl/warehouse-ca.pem
-    application_name: understudy
+    application_name: bauta
 ```
 
-Settings describe what was asked for; the server decides what happened. `understudy run --dry-run` and `understudy audit --connect` report whether each connection is actually encrypted, as the server sees it.
+Settings describe what was asked for; the server decides what happened. `bauta run --dry-run` and `bauta audit --connect` report whether each connection is actually encrypted, as the server sees it.
 
 
 ## `jobs.yaml` — data jobs
@@ -193,17 +193,17 @@ A reference is `module.path:function_name` — any importable function taking th
 ```yaml
 sourceQueryColumnTransforms:
   amount:
-  - understudy_data.builtinTransforms:currency
+  - bauta.builtinTransforms:currency
   name:
-  - understudy_data.builtinTransforms:collapseWhitespace
-  - understudy_data.builtinTransforms:truncate(50)
+  - bauta.builtinTransforms:collapseWhitespace
+  - bauta.builtinTransforms:truncate(50)
   signup_date:
-  - "understudy_data.builtinTransforms:parseDate('%d/%m/%Y')"
+  - "bauta.builtinTransforms:parseDate('%d/%m/%Y')"
 ```
 
 Quote a reference whose arguments contain `: `, `#` or a leading quote, as YAML would otherwise read them. `validate` checks that each reference imports and that its arguments fit the function, so a missing or misspelled argument fails there rather than on the first row. Only literals are accepted, so a reference can't run code.
 
-These ship with the package, in `understudy_data.builtinTransforms`. Every one passes NULL through unchanged, except `defaultIfNull`, and raises on a value it can't convert rather than guessing.
+These ship with the package, in `bauta.builtinTransforms`. Every one passes NULL through unchanged, except `defaultIfNull`, and raises on a value it can't convert rather than guessing.
 
 | Transform | Result |
 | --- | --- |
@@ -248,7 +248,7 @@ Transforms apply to **`sourceQuery`'s own result columns**, not the target's. Na
 | `postTargetAdhocQueries` | optional | SQL run on the target after the load. |
 
 - **`swap`** loads `targetTableStage`, then swaps it with `targetTableFinal` by renaming the two. The target is replaced wholesale. See [how the swap works](design.md#how-a-swap-works) for what renaming means for views and on Oracle.
-- **`upsert`** inserts or updates by the target's declared primary key — from `targetTableStage` if set, otherwise straight from the extract. UNIQUE constraints aren't part of the match. A target without a primary key fails the job before anything is written; `understudy run --dry-run` checks for one too.
+- **`upsert`** inserts or updates by the target's declared primary key — from `targetTableStage` if set, otherwise straight from the extract. UNIQUE constraints aren't part of the match. A target without a primary key fails the job before anything is written; `bauta run --dry-run` checks for one too.
 
 ### Mask
 
@@ -276,6 +276,6 @@ Masking runs after transforms, on `sourceQuery`'s result columns. **Every column
 
 ## Validation
 
-`understudy validate` checks everything above without connecting to anything: every field, every alias, every predecessor and that they form no cycle, every transformer reference, and every masking strategy, option and key length. Problems are reported all at once, as `ConfigurationError`, rather than one per run.
+`bauta validate` checks everything above without connecting to anything: every field, every alias, every predecessor and that they form no cycle, every transformer reference, and every masking strategy, option and key length. Problems are reported all at once, as `ConfigurationError`, rather than one per run.
 
-`understudy run --dry-run` adds the checks that need a connection: that each database is reachable, that target tables exist, that upsert targets have a primary key, and that each masking policy covers every column its query returns.
+`bauta run --dry-run` adds the checks that need a connection: that each database is reachable, that target tables exist, that upsert targets have a primary key, and that each masking policy covers every column its query returns.

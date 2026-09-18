@@ -281,7 +281,7 @@ class BaseJobConfig(BaseModel):
 
 class MaskingConfig(BaseModel):
     """A job's masking policy, normalized here so a bad strategy or option
-    fails `understudy validate` rather than a run.
+    fails `bauta validate` rather than a run.
     """
 
     key: SecretStr

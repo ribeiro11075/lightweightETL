@@ -3,7 +3,7 @@
 //! Every variant carries the message Python raises for the same value, word for
 //! word, because `tests/test_masking.py` asserts on those messages and a job
 //! that fails today must fail identically here. The PyO3 layer turns these into
-//! `understudy_data.masking.MaskingError`.
+//! `bauta.masking.MaskingError`.
 //!
 //! `Unsupported` is the exception: it means "this value is one Rust does not
 //! handle", not "this value cannot be masked". The Python layer masks those

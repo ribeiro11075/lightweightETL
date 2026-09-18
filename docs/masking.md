@@ -59,7 +59,7 @@ Masking applies to `sourceQuery`'s result columns, after `sourceQueryColumnTrans
 
 `'null'` needs its quotes, because a bare `null` in YAML means "no value".
 
-`understudy validate` checks the key length, every strategy name and every option, without connecting to anything.
+`bauta validate` checks the key length, every strategy name and every option, without connecting to anything.
 
 
 ## Strategies
@@ -104,7 +104,7 @@ The output has the same shape as the input:
 
 ### `fpe`
 
-`fpe` is `key`'s alternative for when a security review asks for a published algorithm: FF1 from NIST SP 800-38G Rev. 1, with AES-256. It is checked against NIST's sample vectors, and needs the `cryptography` package (`pip install "understudy-data[fpe]"`; the `oracle` extra already brings it).
+`fpe` is `key`'s alternative for when a security review asks for a published algorithm: FF1 from NIST SP 800-38G Rev. 1, with AES-256. It is checked against NIST's sample vectors, and needs the `cryptography` package (`pip install "bauta[fpe]"`; the `oracle` extra already brings it).
 
 - It keeps shapes the way `key` does: integers keep sign and digit count, text keeps its length and every character outside `charset`. With `alphanumeric`, letters and digits share one alphabet, so a letter may become a digit; `key` keeps each character's class.
 - The masking key is turned into an AES key per domain, and the domain goes into FF1's tweak.
@@ -148,7 +148,7 @@ A policy can name a class of your own as `module.path:ClassName`:
 
 ```python
 # acme/masks.py
-from understudy_data.masking import Strategy
+from bauta.masking import Strategy
 
 class Initials(Strategy):
     OPTIONS = {'separator': str}                   # option name -> check that returns the value
@@ -185,7 +185,7 @@ If `mask()` depends on nothing but the value, set `CACHEABLE = True` on the clas
 
 ### The native masker
 
-`understudy-mask` is an optional extension that masks in Rust. It changes no result, and everything works without it. It isn't published yet, so install it from a clone, which needs Rust 1.83 or newer; pip compiles it:
+`bauta-rs` is an optional extension that masks in Rust. It changes no result, and everything works without it. It isn't published yet, so install it from a clone, which needs Rust 1.83 or newer; pip compiles it:
 
 ```
 pip install ./mask-rs/py
@@ -200,10 +200,10 @@ One million rows of six masked columns, SQLite to SQLite:
 | | Rows a second |
 | --- | --- |
 | Python | 21,000 |
-| Rust (`understudy-mask`) | 93,000 |
+| Rust (`bauta-rs`) | 93,000 |
 | Rust, overlapped with the database | 112,000 |
 
-**The two implementations compute identical masks**, a release requirement: a difference would silently break joins between old and new copies. See [two implementations](security.md#two-implementations). `UNDERSTUDY_NATIVE=0` masks in Python even with the extension installed, and the manifest records which one ran as `maskedBy`.
+**The two implementations compute identical masks**, a release requirement: a difference would silently break joins between old and new copies. See [two implementations](security.md#two-implementations). `BAUTA_NATIVE=0` masks in Python even with the extension installed, and the manifest records which one ran as `maskedBy`.
 
 
 ## Domains: keeping joins intact
@@ -243,7 +243,7 @@ This guards against the most common masking failure: someone adds a column to pr
 
 A column named in the policy that the query doesn't return is also an error, since it's almost always a typo that leaves the real column uncovered.
 
-These errors are never retried. `understudy run --dry-run` finds them without loading anything. It runs each masked job's query, reads one row and discards it unexamined.
+These errors are never retried. `bauta run --dry-run` finds them without loading anything. It runs each masked job's query, reads one row and discards it unexamined.
 
 `defaultStrategy` turns the check off for unlisted columns. Only `'null'` or `constant` keep the safety property, since they discard whatever a new column holds.
 
@@ -254,7 +254,7 @@ The key is what stops someone who knows this scheme from hashing likely values, 
 
 - **Read it from the environment**: `key: ${MASKING_KEY}`. Never give it a `${NAME:-default}`, and never commit it.
 - It must be at least 16 characters. Use a random one: `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
-- **Rotating it changes every mask.** A copy masked under the old key won't join to one masked under the new key. So each masked job's key fingerprint is recorded when it completes, and an **upsert** job whose key has changed since stops the run: its target still holds rows masked under the old key. Empty those targets with `understudy clear`, which also forgets the recorded fingerprints, or pass `--accept-key-change` (`acceptKeyChange=True` from Python) if you mean it. A `swap` job replaces its whole target, so it just carries on.
+- **Rotating it changes every mask.** A copy masked under the old key won't join to one masked under the new key. So each masked job's key fingerprint is recorded when it completes, and an **upsert** job whose key has changed since stops the run: its target still holds rows masked under the old key. Empty those targets with `bauta clear`, which also forgets the recorded fingerprints, or pass `--accept-key-change` (`acceptKeyChange=True` from Python) if you mean it. A `swap` job replaces its whole target, so it just carries on.
 - The key never appears in logs, errors or the manifest, and pydantic hides it from the configuration's repr. Runs log a **fingerprint** instead: a short, non-reversible identifier. Two runs with the same fingerprint used the same key.
 
 Whoever holds the key can confirm a guess (for example "is this row Alice?") by masking the guess and comparing, so give it the same care as production credentials. [security.md](security.md) sets out what masking does and doesn't protect, for a security review.
@@ -286,7 +286,7 @@ Use `swap` rather than `upsert` for this if any key column is masked. An upsert 
 ## The manifest
 
 ```
-understudy run --manifest audit/manifest.json
+bauta run --manifest audit/manifest.json
 ```
 
 This writes a record of what was masked, how, and under which key fingerprint. It's the artifact an auditor asks for:
@@ -309,8 +309,8 @@ This writes a record of what was masked, how, and under which key fingerprint. I
       ]
     }
   ],
-  "maskedBy": "understudy-mask/0.1.0",
-  "tool": {"name": "understudy-data", "version": "0.1.0"},
+  "maskedBy": "bauta-rs/0.1.0",
+  "tool": {"name": "bauta", "version": "0.1.0"},
   "configuration": {"jobsFile": "configuration/jobs.yaml", "sha256": "9f2c…"},
   "integrity": {
     "algorithm": "sha256",
@@ -335,20 +335,20 @@ From Python, `RunResult.maskingManifest(jobsFile.jobs)` returns the manifest bef
 Every manifest carries a SHA-256 digest of its own content, which shows it hasn't been edited since it was written. Anyone can recompute a digest, though, so it doesn't show who wrote it. For that, set a signing key and the manifest is also signed with HMAC-SHA256:
 
 ```
-export UNDERSTUDY_MANIFEST_KEY=...      # at least 16 characters; not the masking key
-understudy run --manifest audit/manifest.json
+export BAUTA_MANIFEST_KEY=...      # at least 16 characters; not the masking key
+bauta run --manifest audit/manifest.json
 
-understudy verify-manifest audit/manifest.json
+bauta verify-manifest audit/manifest.json
 ```
 
-`verify-manifest` exits 0 for an intact manifest (saying whether it was signed), and 1 if it was altered or its signature doesn't match. With `UNDERSTUDY_MANIFEST_KEY` set, an unsigned manifest exits 1 too: otherwise an edited manifest could pass by dropping its signature and recomputing its digest. A signed manifest records its key's fingerprint; verifying it without that key exits 2 rather than half-answering. `--manifest-key-variable` reads the key from another variable, on both commands.
+`verify-manifest` exits 0 for an intact manifest (saying whether it was signed), and 1 if it was altered or its signature doesn't match. With `BAUTA_MANIFEST_KEY` set, an unsigned manifest exits 1 too: otherwise an edited manifest could pass by dropping its signature and recomputing its digest. A signed manifest records its key's fingerprint; verifying it without that key exits 2 rather than half-answering. `--manifest-key-variable` reads the key from another variable, on both commands.
 
 
 ## Reviewing policies: `audit`
 
 ```
-understudy audit                      # offline, from the configuration alone
-understudy audit --connect --strict   # also asks the databases; fails on warnings
+bauta audit                      # offline, from the configuration alone
+bauta audit --connect --strict   # also asks the databases; fails on warnings
 ```
 
 `audit` lists every job, whether it masks, and what each masked column gets. It then reports what a reviewer should question — things validation allows, because they can be right:
@@ -376,7 +376,7 @@ The foreign-key check reads the foreign keys of each target database and of the 
 ## Proposing a policy: `discover`
 
 ```
-understudy discover --database prod --table customers --table orders --target staging --output proposal.yaml
+bauta discover --database prod --table customers --table orders --target staging --output proposal.yaml
 ```
 
 For each table, `discover` reads the schema and samples rows (`--sample`, default 1000), then writes a `jobs.yaml` with a proposed policy for every column. Each proposal carries a comment saying what it was based on:
@@ -404,7 +404,7 @@ Treat the result as a starting point for review. It isn't a finished policy.
 ## Copying a subset: `subset`
 
 ```
-understudy subset --database prod --target staging \
+bauta subset --database prod --target staging \
     --root customers --where "created_at >= '2026-01-01'" --mask --output subset/jobs.yaml
 ```
 
@@ -429,7 +429,7 @@ The target's tables must already exist. `subset` generates jobs; it doesn't crea
 ### `schema`: creating the target's tables
 
 ```
-understudy schema --database prod --target staging --table customers --related --apply
+bauta schema --database prod --target staging --table customers --related --apply
 ```
 
 `schema` reads the source's tables and creates matching tables in the target, **in the target's own dialect**: an Oracle `NUMBER(12,2)` becomes `NUMERIC(12,2)` on PostgreSQL, and `NVARCHAR(MAX)` on SQL Server becomes `CLOB` on Oracle.
@@ -459,9 +459,9 @@ Every combination of the six databases is tested: tables are created on the targ
 A subset's jobs upsert, so rows from an earlier subset stay unless the copy is emptied first:
 
 ```
-understudy clear --config subset --dry-run     # which tables, in what order
-understudy clear --config subset --yes
-understudy run --config subset --force
+bauta clear --config subset --dry-run     # which tables, in what order
+bauta clear --config subset --yes
+bauta run --config subset --force
 ```
 
 - **What it empties:** `clear` deletes every row from each active job's `targetTableFinal`, child tables before their parents, so the target's foreign keys don't block it. `--job` narrows it to particular jobs.
@@ -479,8 +479,8 @@ Between `clear` and the end of the run, the copy is empty or partly loaded. For 
 Some tables can't be copied at all, even masked, and a new system may have no production data yet. `synthesize` fills existing tables with generated rows, using nothing but the target's own catalog:
 
 ```
-understudy synthesize --database staging --table customers:1000 --table orders:5000 --dry-run
-understudy synthesize --database staging --table customers:1000 --table orders:5000 --yes
+bauta synthesize --database staging --table customers:1000 --table orders:5000 --dry-run
+bauta synthesize --database staging --table customers:1000 --table orders:5000 --yes
 ```
 
 ```
@@ -517,7 +517,7 @@ customers: 1000 row(s)
 
 ## Migrating from `scramble.yaml`
 
-`understudy scramble` and `scramble.yaml` have been **removed**. A scramble job held the whole table in memory, truncated it and reinserted the rows. It had none of the properties above: masks weren't consistent across tables or runs, and a failure could leave the table empty.
+`bauta scramble` and `scramble.yaml` have been **removed**. A scramble job held the whole table in memory, truncated it and reinserted the rows. It had none of the properties above: masks weren't consistent across tables or runs, and a failure could leave the table empty.
 
 To migrate, turn each scramble job into an in-place data job ([masking in place](#masking-in-place)) with `sourceQuery: select * from <table>`, and translate its fields:
 
@@ -534,4 +534,4 @@ To migrate, turn each scramble job into an in-place data job ([masking in place]
 | a column mentioned nowhere (shuffled) | must now be listed. Nothing is shuffled by default. |
 | `pre/postTargetAdhocQueries` | unchanged: data jobs have the same fields |
 
-`understudy discover --database <alias> --table <table>` writes that in-place job for you, with a proposed policy.
+`bauta discover --database <alias> --table <table>` writes that in-place job for you, with a proposed policy.

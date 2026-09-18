@@ -1,12 +1,12 @@
 # Test databases for the integration suite: `docker compose up -d`, then `pytest -m integration`.
-name: understudy-data
+name: bauta
 
 services:
   mysql:
     image: mysql:8.4
     environment:
       MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: understudy_test
+      MYSQL_DATABASE: bauta_test
     ports:
       - "3307:3306"
     healthcheck:
@@ -20,7 +20,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: understudy_test
+      POSTGRES_DB: bauta_test
     ports:
       - "5433:5432"
     healthcheck:
@@ -33,7 +33,7 @@ services:
     image: gvenzl/oracle-free:23-slim-faststart
     environment:
       ORACLE_PASSWORD: oracle
-      ORACLE_DATABASE: understudy_test
+      ORACLE_DATABASE: bauta_test
     ports:
       - "1522:1521"
     healthcheck:
@@ -46,7 +46,7 @@ services:
     image: mariadb:11
     environment:
       MARIADB_ROOT_PASSWORD: root
-      MARIADB_DATABASE: understudy_test
+      MARIADB_DATABASE: bauta_test
     ports:
       - "3308:3306"
     healthcheck:

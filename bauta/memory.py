@@ -232,7 +232,7 @@ class FileMemory(MemoryBackend):
         self._write('maskingKeys', job, fingerprint)
 
 
-DATABASE_MEMORY_SCHEMA = """CREATE TABLE understudy_memory (
+DATABASE_MEMORY_SCHEMA = """CREATE TABLE bauta_memory (
     job VARCHAR(255) PRIMARY KEY,
     last_run DOUBLE PRECISION,
     watermark_value VARCHAR(255),
@@ -256,7 +256,7 @@ class DatabaseMemory(MemoryBackend):
     back as the type the source compares against.
     """
 
-    def __init__(self, connectionSettings: DatabaseConnectionConfig, table: str = 'understudy_memory') -> None:
+    def __init__(self, connectionSettings: DatabaseConnectionConfig, table: str = 'bauta_memory') -> None:
         self.connectionSettings = connectionSettings
         self.table = table
 

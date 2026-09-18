@@ -10,10 +10,10 @@ jobs from configuration/ beside this script the way the CLI does, and then:
    because both key columns share a domain.
 2. Adds a column to production that the policy doesn't cover, and runs again.
    The job fails before writing anything: new columns never leak by default.
-3. Proposes a policy for the changed table, as `understudy discover` does.
-4. Plans a referentially complete subset, as `understudy subset` does.
+3. Proposes a policy for the changed table, as `bauta discover` does.
+4. Plans a referentially complete subset, as `bauta subset` does.
 
-Each step prints the `understudy` command it is equivalent to.
+Each step prints the `bauta` command it is equivalent to.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ import yaml
 demoDirectory = Path(__file__).resolve().parent
 sys.path.append(str(demoDirectory.parents[1]))
 
-from understudy_data import (Configuration, Database, DataJobsFile, FileMemory, expandEnvironmentVariables, planSubset, proposeTable,
+from bauta import (Configuration, Database, DataJobsFile, FileMemory, expandEnvironmentVariables, planSubset, proposeTable,
                              runDataJobs)
 
 DEFAULT_WORKING_DIRECTORY = demoDirectory / 'transaction'
@@ -66,7 +66,7 @@ def loadConfiguration(name: str) -> Any:
 
 
 def showCommand(arguments: List[Any], environment: Optional[Dict[str, Any]] = None) -> None:
-    """Prints the `understudy` command that does what the next step does, with
+    """Prints the `bauta` command that does what the next step does, with
     paths relative to where this was run from, ready to paste into a shell.
     """
 
@@ -78,7 +78,7 @@ def showCommand(arguments: List[Any], environment: Optional[Dict[str, Any]] = No
 
     # A variable, the command, or an option with its value: kept whole on a line.
     pieces = ['{}={}'.format(name, shown(value)) for name, value in (environment or {}).items()]
-    pieces.append('understudy ' + shown(arguments[0]))
+    pieces.append('bauta ' + shown(arguments[0]))
     rest = [shown(argument) for argument in arguments[1:]]
     while rest:
         takesValue = len(rest) > 1 and not rest[1].startswith('--')

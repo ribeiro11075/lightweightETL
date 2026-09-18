@@ -30,7 +30,7 @@ def _requirements():
     requirements = {}
     for text in texts:
         requirement = Requirement(text)
-        if requirement.name != 'understudy-data':
+        if requirement.name != 'bauta':
             requirements[requirement.name] = requirement
     return requirements
 

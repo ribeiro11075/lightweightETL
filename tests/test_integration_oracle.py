@@ -4,7 +4,7 @@ See test_integration_mysql.py for the rationale. This is the dialect that was,
 until now, only ever verified as generated SQL text against a mocked cursor --
 cx_Oracle wouldn't even compile in earlier attempts at this. Switching to
 oracledb's default "thin" mode (pure Python, no Oracle Client install, see
-understudy_data/databaseDialects.py) finally made a real connection possible, including
+bauta/databaseDialects.py) finally made a real connection possible, including
 proving the MERGE-based upsert/upsertFromStage and the three-statement swap
 (Oracle's cursor.execute() only runs one statement at a time) actually work.
 
@@ -25,17 +25,17 @@ import pytest
 
 pytest.importorskip('oracledb', reason='oracledb is not installed (pip install -e ".[oracle]")')
 
-from understudy_data.memory import DatabaseMemory
-from understudy_data.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from understudy_data.database import Database
-from understudy_data.memory import FileMemory
-from understudy_data.runner import runDataJobs
+from bauta.memory import DatabaseMemory
+from bauta.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from bauta.database import Database
+from bauta.memory import FileMemory
+from bauta.runner import runDataJobs
 
 pytestmark = pytest.mark.integration
 
 CONNECTION_SETTINGS = DatabaseConnectionConfig(
-    type=DatabaseType.ORACLE, user='system', password='oracle', database='understudy_test',
-    host='127.0.0.1', port=1522, serviceName='understudy_test',
+    type=DatabaseType.ORACLE, user='system', password='oracle', database='bauta_test',
+    host='127.0.0.1', port=1522, serviceName='bauta_test',
     )
 
 

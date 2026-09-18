@@ -1,5 +1,5 @@
 """A masking strategy defined outside the package, as a policy can name one."""
-from understudy_data.masking import Strategy
+from bauta.masking import Strategy
 
 
 class Initials(Strategy):

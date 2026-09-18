@@ -6,8 +6,8 @@ import uuid
 
 import pytest
 
-from understudy_data.database import Database
-from understudy_data.synthesize import synthesizeTable
+from bauta.database import Database
+from bauta.synthesize import synthesizeTable
 from servers import SERVERS
 
 pytestmark = pytest.mark.integration

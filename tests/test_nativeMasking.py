@@ -16,9 +16,9 @@ import uuid
 
 import pytest
 
-from understudy_data.masking import STRATEGIES, KeyedHash, MaskingError, nativeVersion
+from bauta.masking import STRATEGIES, KeyedHash, MaskingError, nativeVersion
 
-native = pytest.mark.skipif(nativeVersion() is None, reason='the understudy_mask extension is not installed')
+native = pytest.mark.skipif(nativeVersion() is None, reason='the bauta_rs extension is not installed')
 
 KEY = 'a-test-key-that-is-long-enough'
 ALPHANUMERIC = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
@@ -118,9 +118,9 @@ def test_a_whole_column_agrees_with_one_value_at_a_time(name, options):
 
 @native
 def test_the_extension_can_be_turned_off(monkeypatch):
-    import understudy_data.masking as masking
+    import bauta.masking as masking
 
-    monkeypatch.setenv('UNDERSTUDY_NATIVE', '0')
+    monkeypatch.setenv('BAUTA_NATIVE', '0')
     masking._nativeModule.cache_clear()
 
     try:

@@ -1,8 +1,8 @@
 """The audit report: what it shows for each job, and what it flags."""
 from typing import Any
 
-from understudy_data.audit import auditJobs, renderAudit
-from understudy_data.configuration import DataJobConfig
+from bauta.audit import auditJobs, renderAudit
+from bauta.configuration import DataJobConfig
 
 KEY = 'an-audit-test-masking-key'
 
@@ -179,7 +179,7 @@ def test_default_domains_are_compared_too():
 
 
 def _foreignKey():
-    from understudy_data.databaseDialects import ForeignKey
+    from bauta.databaseDialects import ForeignKey
 
     return ForeignKey('orders', ('customer_id',), 'customers', ('id',), 'fk_orders_customers')
 

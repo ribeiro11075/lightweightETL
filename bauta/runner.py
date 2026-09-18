@@ -294,10 +294,10 @@ def _pipelineDepth() -> int:
         native masking, in turn       2.92s     3.96x
         native masking, overlapped    2.16s     5.35x
 
-    UNDERSTUDY_PIPELINE=1 or =0 overrides the default.
+    BAUTA_PIPELINE=1 or =0 overrides the default.
     """
 
-    setting = os.environ.get('UNDERSTUDY_PIPELINE')
+    setting = os.environ.get('BAUTA_PIPELINE')
 
     if setting is not None:
         return PIPELINE_DEPTH if setting == '1' else 0
@@ -339,7 +339,7 @@ def _streamChunks(chunks: Iterable[List[Tuple[Any, ...]]], prepare: Callable[[in
 
     pending: Deque[Tuple['Future[List[Any]]', Any]] = collections.deque()
 
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix='understudy-mask') as executor:
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix='bauta-rs') as executor:
         try:
             for chunkIndex, chunk in enumerate(chunks):
                 pending.append((executor.submit(prepare, chunkIndex, chunk), _highestWatermark(chunk, watermarkIndex)))
@@ -536,7 +536,7 @@ def _requireUnchangedMaskingKeys(jobsFile: DataJobsFile, memory: MemoryBackend, 
 
     raise ConfigurationError(
         'the masking key changed since the last run of upsert job(s) {}. Their targets still hold rows masked under the old key, '
-        'which would no longer match rows masked under the new one. Empty those targets first (understudy clear, which also '
+        'which would no longer match rows masked under the new one. Empty those targets first (bauta clear, which also '
         'forgets the old key), or acknowledge the change with --accept-key-change'.format(', '.join(changed)))
 
 
@@ -558,7 +558,7 @@ class _JobProcess:
 
         self._connection, sendingEnd = PROCESS_CONTEXT.Pipe(duplex=False)
         self.process = PROCESS_CONTEXT.Process(
-            target=_jobProcess, name='understudy {}'.format(job), daemon=True,
+            target=_jobProcess, name='bauta {}'.format(job), daemon=True,
             args=(sendingEnd, logLevel, job, jobConfig, databaseConfiguration, memory))
         self.process.start()
         sendingEnd.close()

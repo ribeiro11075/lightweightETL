@@ -1,7 +1,7 @@
 """Puts the repo root on sys.path, and stubs oracledb/psycopg2 in sys.modules
 so any test that does exercise a dialect's connect() doesn't need those native
 client libraries installed (the package itself only imports them lazily, inside
-connect(), so this isn't required just to import understudy_data -- see
+connect(), so this isn't required just to import bauta -- see
 test_lazy_driver_imports.py).
 
 Only stubs a module that's genuinely not installed (checked via find_spec,

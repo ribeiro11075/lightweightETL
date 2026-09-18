@@ -5,9 +5,9 @@ transformer is -- by import path -- so nothing here is privileged:
 
     sourceQueryColumnTransforms:
       amount:
-      - understudy_data.builtinTransforms:currency
+      - bauta.builtinTransforms:currency
       name:
-      - understudy_data.builtinTransforms:truncate(50)
+      - bauta.builtinTransforms:truncate(50)
 
 Nothing here is privileged: your own module is referenced the same way.
 

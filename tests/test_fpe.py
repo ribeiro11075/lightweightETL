@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip('cryptography')
 
-from understudy_data.fpe import FF1, minimumLength
+from bauta.fpe import FF1, minimumLength
 
 KEY_128 = bytes.fromhex('2B7E151628AED2A6ABF7158809CF4F3C')
 KEY_192 = bytes.fromhex('2B7E151628AED2A6ABF7158809CF4F3CEF4359D8D580AA4F')

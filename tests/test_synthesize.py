@@ -8,9 +8,9 @@ import sqlite3
 
 import pytest
 
-from understudy_data.configuration import DatabaseConnectionConfig
-from understudy_data.database import Database
-from understudy_data.synthesize import SynthesisError, planTable, synthesizeTable
+from bauta.configuration import DatabaseConnectionConfig
+from bauta.database import Database
+from bauta.synthesize import SynthesisError, planTable, synthesizeTable
 
 SCHEMA = '''
 CREATE TABLE customers (id INTEGER PRIMARY KEY, email VARCHAR(40) NOT NULL, first_name VARCHAR(8), phone VARCHAR(20),
@@ -128,7 +128,7 @@ def test_the_plan_says_what_each_column_gets(database):
 
 def test_fixed_width_text_keys_stay_distinct_across_runs(database):
     """Padding after the number made row 0, 9 and 99 all S1000."""
-    from understudy_data.synthesize import _textKeys
+    from bauta.synthesize import _textKeys
 
     keys = _textKeys(0, 5, fixed=True)
     assert [keys(row) for row in (0, 9, 99, 999)] == ['S0001', 'S0010', 'S0100', 'S1000']

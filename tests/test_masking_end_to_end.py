@@ -6,11 +6,11 @@ network databases in test_integration_masking.py.
 """
 import pytest
 
-from understudy_data.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from understudy_data.database import Database
-from understudy_data.dependencyGraph import JobStatus
-from understudy_data.memory import FileMemory
-from understudy_data.runner import runDataJobs
+from bauta.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from bauta.database import Database
+from bauta.dependencyGraph import JobStatus
+from bauta.memory import FileMemory
+from bauta.runner import runDataJobs
 
 KEY = 'an-end-to-end-masking-key'
 

@@ -1,4 +1,4 @@
-# The extension ships as its own distribution, so `understudy-data` keeps its
+# The extension ships as its own distribution, so `bauta` keeps its
 # setuptools build and installs anywhere without Rust. From a clone,
 # `pip install ./mask-rs/py` builds and installs this.
 [build-system]
@@ -6,8 +6,8 @@ requires = ["maturin>=1.5,<2"]
 build-backend = "maturin"
 
 [project]
-name = "understudy-mask"
-description = "The native masking core for Understudy. Optional: understudy-data works without it."
+name = "bauta-rs"
+description = "The native masking core for Bauta. Optional: bauta works without it."
 requires-python = ">=3.10"
 license = { text = "MIT" }
 classifiers = [
@@ -19,4 +19,4 @@ dynamic = ["version"]
 [tool.maturin]
 # abi3 so one wheel per platform covers every supported Python.
 features = ["pyo3/extension-module"]
-module-name = "understudy_mask"
+module-name = "bauta_rs"

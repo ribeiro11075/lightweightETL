@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from understudy_data.dependencyGraph import JobStatus
+from bauta.dependencyGraph import JobStatus
 
 DEMO_PATH = Path(__file__).resolve().parents[1] / 'example' / 'masking' / 'demo.py'
 ENVIRONMENT = ('MASKING_DEMO_PROD_PATH', 'MASKING_DEMO_STAGING_PATH', 'MASKING_KEY')

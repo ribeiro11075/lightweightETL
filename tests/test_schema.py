@@ -5,12 +5,12 @@ import sqlite3
 
 import pytest
 
-from understudy_data.configuration import DatabaseConnectionConfig, DatabaseType
-from understudy_data.database import Database
-from understudy_data.databaseDialects import ColumnDefinition, ForeignKey
-from understudy_data.schema import (PortableType, SchemaError, TableDefinition, clearOrder, clearTables, createStatements, orderParentsFirst,
+from bauta.configuration import DatabaseConnectionConfig, DatabaseType
+from bauta.database import Database
+from bauta.databaseDialects import ColumnDefinition, ForeignKey
+from bauta.schema import (PortableType, SchemaError, TableDefinition, clearOrder, clearTables, createStatements, orderParentsFirst,
                                     portableType, readTable, renderScript, renderType)
-from understudy_data.subset import relatedTables
+from bauta.subset import relatedTables
 
 ORACLE = DatabaseType.ORACLE
 POSTGRESQL = DatabaseType.POSTGRESQL

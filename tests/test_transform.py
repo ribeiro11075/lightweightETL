@@ -1,6 +1,6 @@
 import pytest
 
-from understudy_data.transform import Transform, TransformError, TransformResolutionError, resolveTransformer
+from bauta.transform import Transform, TransformError, TransformResolutionError, resolveTransformer
 
 
 def test_transform_applies_an_arbitrary_callable():
@@ -86,7 +86,7 @@ def test_a_failing_transformer_never_reveals_the_value():
 
 
 def test_resolve_transformer_finds_a_real_function():
-    """understudy_data itself ships no transforms module (that lives in example/, since
+    """bauta itself ships no transforms module (that lives in example/, since
     it's reference content, not library code) -- resolve a stdlib function instead
     to test the resolution mechanics without depending on example/'s existence.
     """
@@ -123,7 +123,7 @@ def test_a_reference_can_carry_literal_arguments():
 
 
 def test_arguments_may_be_keywords_and_collections():
-    transformer = resolveTransformer("understudy_data.builtinTransforms:regexReplace(pattern='[aeiou]', replacement='')")
+    transformer = resolveTransformer("bauta.builtinTransforms:regexReplace(pattern='[aeiou]', replacement='')")
 
     assert transformer('banana') == 'bnn'
 
@@ -144,14 +144,14 @@ def test_arguments_that_are_not_plain_literals_are_refused(reference):
 
 def test_arguments_that_do_not_fit_the_function_are_refused_up_front():
     with pytest.raises(TransformResolutionError, match='too many positional arguments'):
-        resolveTransformer('understudy_data.builtinTransforms:upper(1)')
+        resolveTransformer('bauta.builtinTransforms:upper(1)')
 
     with pytest.raises(TransformResolutionError, match="unexpected keyword argument 'width'"):
-        resolveTransformer('understudy_data.builtinTransforms:truncate(width=3)')
+        resolveTransformer('bauta.builtinTransforms:truncate(width=3)')
 
 
 def test_a_failing_transformer_with_arguments_is_named_with_them():
-    transformer = resolveTransformer('understudy_data.builtinTransforms:truncate(-1)')
+    transformer = resolveTransformer('bauta.builtinTransforms:truncate(-1)')
     transform = Transform(data=[('abc',)], columns=['name'], columnTransforms={'name': [transformer]})
 
     with pytest.raises(TransformError, match=r'transformer "truncate\(-1\)" failed on column "name"'):

@@ -559,7 +559,7 @@ class PostgreSQLDialect(_OnConflictDialect):
         side never commits.
         """
 
-        cursor = connection.cursor(name='understudy_{}'.format(uuid.uuid4().hex))
+        cursor = connection.cursor(name='bauta_{}'.format(uuid.uuid4().hex))
         cursor.itersize = chunkSize
 
         return cursor
@@ -611,7 +611,7 @@ class PostgreSQLDialect(_OnConflictDialect):
             return False
 
         columns = ', '.join(allColumns)
-        staging = 'understudy_upsert_{}'.format(hashlib.sha1('{}|{}'.format(table, columns).encode('utf-8')).hexdigest()[:12])
+        staging = 'bauta_upsert_{}'.format(hashlib.sha1('{}|{}'.format(table, columns).encode('utf-8')).hexdigest()[:12])
 
         cursor.execute('CREATE TEMPORARY TABLE IF NOT EXISTS {} ON COMMIT DELETE ROWS AS SELECT {} FROM {} WITH NO DATA'.format(staging, columns, table))
         cursor.copy_expert('COPY {} ({}) FROM STDIN'.format(staging, columns), stream)

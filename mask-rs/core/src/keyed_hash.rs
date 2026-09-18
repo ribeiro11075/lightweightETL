@@ -1,4 +1,4 @@
-//! HMAC-SHA256 under a per-domain subkey, as `understudy_data.masking.KeyedHash`
+//! HMAC-SHA256 under a per-domain subkey, as `bauta.masking.KeyedHash`
 //! computes it.
 //!
 //! Every function here has a Python counterpart whose output it must match byte

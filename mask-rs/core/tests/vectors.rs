@@ -10,7 +10,7 @@
 use num_bigint::BigUint;
 use serde_json::Value;
 use std::str::FromStr;
-use understudy_mask_core::KeyedHash;
+use bauta_core::KeyedHash;
 
 fn vectors() -> Value {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../vectors/reference.json");
@@ -126,7 +126,7 @@ fn permute_is_a_bijection_on_small_domains() {
 /// count is asserted so that "unsupported" can never quietly swallow the suite.
 #[test]
 fn key_strategy_matches_python() {
-    use understudy_mask_core::{Charset, KeyStrategy, MaskError};
+    use bauta_core::{Charset, KeyStrategy, MaskError};
 
     let vectors = vectors();
     let hash = keyedHash(&vectors);
@@ -188,7 +188,7 @@ fn key_strategy_matches_python() {
 /// refusals `strict` produces.
 #[test]
 fn fpe_strategy_matches_python() {
-    use understudy_mask_core::{Charset, FpeStrategy, MaskError};
+    use bauta_core::{Charset, FpeStrategy, MaskError};
 
     let vectors = vectors();
     let hash = keyedHash(&vectors);
@@ -246,8 +246,8 @@ fn fpe_strategy_matches_python() {
 /// `hash`, `email` and `digits` -- Phase D's strategies.
 #[test]
 fn cheap_strategies_match_python() {
-    use understudy_mask_core::cheap;
-    use understudy_mask_core::MaskError;
+    use bauta_core::cheap;
+    use bauta_core::MaskError;
 
     let vectors = vectors();
     let hash = keyedHash(&vectors);

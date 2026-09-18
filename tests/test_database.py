@@ -2,8 +2,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from understudy_data.configuration import DatabaseConnectionConfig, DatabaseType
-from understudy_data.database import Database
+from bauta.configuration import DatabaseConnectionConfig, DatabaseType
+from bauta.database import Database
 
 
 def _mockedDatabase(dbType: DatabaseType) -> Database:
@@ -16,7 +16,7 @@ def _mockedDatabase(dbType: DatabaseType) -> Database:
     database = Database.__new__(Database)
     database.connectionSettings = settings
     database.type = dbType
-    from understudy_data.database import DIALECTS
+    from bauta.database import DIALECTS
     database.dialect = DIALECTS[dbType]
     database.cursor = MagicMock()
     database.connection = MagicMock()
@@ -125,7 +125,7 @@ def test_an_upsert_into_a_table_without_a_primary_key_fails_rather_than_guessing
     """With no key there's nothing to match rows on. MySQL used to insert a
     duplicate of every row on every run; the others generated invalid SQL.
     """
-    from understudy_data.configuration import ConfigurationError
+    from bauta.configuration import ConfigurationError
 
     database = _mockedDatabase(dbType)
     database.getPrimaryColumnNames = MagicMock(return_value=[])
@@ -172,9 +172,9 @@ def test_a_copied_upsert_sends_only_the_last_row_of_each_key():
     (copy,) = database.cursor.copy_expert.call_args_list
     assert copy.args[1].getvalue() == '1\tc\n2\tb\n'
     statements = [call.args[0] for call in database.cursor.execute.call_args_list]
-    assert statements[0].startswith('CREATE TEMPORARY TABLE IF NOT EXISTS understudy_upsert_')
+    assert statements[0].startswith('CREATE TEMPORARY TABLE IF NOT EXISTS bauta_upsert_')
     assert 'ON COMMIT DELETE ROWS AS SELECT "id", "name" FROM people WITH NO DATA' in statements[0]
-    assert statements[1].startswith('INSERT INTO people ("id", "name") SELECT "id", "name" FROM understudy_upsert_')
+    assert statements[1].startswith('INSERT INTO people ("id", "name") SELECT "id", "name" FROM bauta_upsert_')
     assert statements[1].endswith('ON CONFLICT("id") DO UPDATE SET "name"=excluded."name"')
 
 
@@ -194,7 +194,7 @@ def test_loads_quote_column_names_as_the_catalog_spells_them(dbType, quoted):
 
 
 def test_a_configured_column_the_table_lacks_is_a_configuration_error():
-    from understudy_data.configuration import ConfigurationError
+    from bauta.configuration import ConfigurationError
 
     database = _mockedDatabase(DatabaseType.MYSQL)
 
@@ -203,7 +203,7 @@ def test_a_configured_column_the_table_lacks_is_a_configuration_error():
 
 
 def test_columns_differing_only_in_case_must_be_named_exactly():
-    from understudy_data.configuration import ConfigurationError
+    from bauta.configuration import ConfigurationError
 
     database = _mockedDatabase(DatabaseType.POSTGRESQL)
     database.getAllColumnNames = MagicMock(return_value=['id', 'Name', 'NAME'])

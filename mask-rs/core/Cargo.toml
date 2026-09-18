@@ -1,6 +1,6 @@
 [package]
-name = "understudy-mask-core"
-description = "Understudy's masking constructions, byte-for-byte as the Python implementation computes them"
+name = "bauta-core"
+description = "Bauta's masking constructions, byte-for-byte as the Python implementation computes them"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

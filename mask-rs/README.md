@@ -1,13 +1,13 @@
-# understudy-mask
+# bauta-rs
 
-The optional native masker for [Understudy](https://github.com/ribeiro11075/Understudy).
+The optional native masker for [Bauta](https://github.com/ribeiro11075/bauta).
 
-Understudy masks data on its way from production to a copy. Masking `key` and
+Bauta masks data on its way from production to a copy. Masking `key` and
 `fpe` columns costs tens of microseconds a value in Python, most of it spent in
 the interpreter rather than in cryptography. This computes the same masks in
 Rust, four to five times faster on a whole job.
 
-It is optional. Understudy works without it, and produces identical output
+It is optional. Bauta works without it, and produces identical output
 either way.
 
 ## Layout
@@ -26,7 +26,7 @@ Needs Rust 1.83 or newer.
 ```
 cargo test --release
 cd py && maturin build --release
-pip install ../target/wheels/understudy_mask-*.whl
+pip install ../target/wheels/bauta_rs-*.whl
 ```
 
 `--release` matters for the tests: two of them measure SHA-256 and AES
@@ -38,7 +38,7 @@ debug build is indistinguishable from one.
 **Python is the reference.** This crate exists to be faster, not to be
 different. Where the two disagree, Python is right.
 
-That is not a style preference. Understudy's masks are deterministic and keyed,
+That is not a style preference. Bauta's masks are deterministic and keyed,
 so a difference between the two implementations would not surface as a wrong
 answer — it would surface as a changed key, months later, as joins between an
 old copy and a new one quietly stopping matching. The key fingerprint would not

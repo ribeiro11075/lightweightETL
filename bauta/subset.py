@@ -1,4 +1,4 @@
-"""Plans referentially complete subsets, for `understudy subset`.
+"""Plans referentially complete subsets, for `bauta subset`.
 
 From a root table and a filter, one source query per table, so every foreign
 key in the copied rows points at a copied row. Followed up always (what the

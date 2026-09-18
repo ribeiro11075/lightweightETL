@@ -17,16 +17,16 @@ import pytest
 
 pytest.importorskip('mysql.connector', reason='mysql-connector-python is not installed (pip install -e ".[mariadb]")')
 
-from understudy_data.memory import DatabaseMemory
-from understudy_data.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from understudy_data.database import Database
-from understudy_data.memory import FileMemory
-from understudy_data.runner import runDataJobs
+from bauta.memory import DatabaseMemory
+from bauta.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from bauta.database import Database
+from bauta.memory import FileMemory
+from bauta.runner import runDataJobs
 
 pytestmark = pytest.mark.integration
 
 CONNECTION_SETTINGS = DatabaseConnectionConfig(
-    type=DatabaseType.MARIADB, user='root', password='root', database='understudy_test', host='127.0.0.1', port=3308,
+    type=DatabaseType.MARIADB, user='root', password='root', database='bauta_test', host='127.0.0.1', port=3308,
     )
 
 

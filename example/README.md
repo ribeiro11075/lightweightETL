@@ -10,7 +10,7 @@ Each demo has the same shape:
 | `configuration/` | what it reads: `database.yaml`, and `jobs.yaml` where the demo doesn't generate its own |
 | `transaction/` | what it writes: databases, run state, logs, manifests. Emptied at the start of each run, and ignored by git |
 
-The walkthrough runs the `understudy` command itself. The other demos call the Python API, and before each step print the `understudy` command that does the same, with the environment variables its `configuration/` reads — paste it into a shell from the repository root to run that step yourself.
+The walkthrough runs the `bauta` command itself. The other demos call the Python API, and before each step print the `bauta` command that does the same, with the environment variables its `configuration/` reads — paste it into a shell from the repository root to run that step yourself.
 
 | Demo | Shows |
 | --- | --- |
@@ -66,8 +66,8 @@ Builds a "production" and a "staging" SQLite database, then:
 
 1. **Masks** customers and orders into staging. The two tables still join, because `customers.id` and `orders.customer_id` share the `customer` domain.
 2. **Adds an `ssn` column** to production, which the policy doesn't cover. The next run fails before writing anything, and staging is left as it was. New columns never leak by default.
-3. **Proposes a policy** for the changed table, as `understudy discover` does.
-4. **Plans a subset** of European customers and their orders, as `understudy subset` does.
+3. **Proposes a policy** for the changed table, as `bauta discover` does.
+4. **Plans a subset** of European customers and their orders, as `bauta subset` does.
 
 It uses a throwaway key unless `MASKING_KEY` is already set.
 
@@ -81,7 +81,7 @@ python example/native-masking/demo.py            # 100,000 customers
 python example/native-masking/demo.py 1000000    # or as many as you like
 ```
 
-Runs one masked job four times, each into a staging copy of its own: masked in Python or in Rust (the [native masker](../docs/masking.md#the-native-masker), `understudy-mask`), with reading, masking and writing either taking turns or overlapped. `UNDERSTUDY_NATIVE` and `UNDERSTUDY_PIPELINE` set each combination; by default a job overlaps only with Rust. It prints a table of the four, and checks every copy is identical:
+Runs one masked job four times, each into a staging copy of its own: masked in Python or in Rust (the [native masker](../docs/masking.md#the-native-masker), `bauta-rs`), with reading, masking and writing either taking turns or overlapped. `BAUTA_NATIVE` and `BAUTA_PIPELINE` set each combination; by default a job overlaps only with Rust. It prints a table of the four, and checks every copy is identical:
 
 ```
                         seconds   rows a second  vs Python in turn

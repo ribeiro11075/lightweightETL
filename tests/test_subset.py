@@ -7,8 +7,8 @@ import sqlite3
 
 import pytest
 
-from understudy_data.databaseDialects import ForeignKey
-from understudy_data.subset import SubsetError, parseIgnore, planSubset
+from bauta.databaseDialects import ForeignKey
+from bauta.subset import SubsetError, parseIgnore, planSubset
 
 SCHEMA = '''
 CREATE TABLE regions (id INT PRIMARY KEY, name TEXT);
@@ -23,7 +23,7 @@ CREATE TABLE unrelated (id INT PRIMARY KEY);
 
 
 def foreignKeysOf(connection):
-    from understudy_data.databaseDialects import SQLiteDialect
+    from bauta.databaseDialects import SQLiteDialect
 
     return SQLiteDialect().foreignKeys(connection.cursor())
 

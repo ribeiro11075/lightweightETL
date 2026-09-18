@@ -16,7 +16,7 @@ jobs:
     targetColumns:
     sourceQueryColumnTransforms:
       amount:
-      - understudy_data.builtinTransforms:currency
+      - bauta.builtinTransforms:currency
     targetDatabase: targetDb
     targetTableStage:
     targetTableFinal: table1
@@ -117,8 +117,8 @@ jobs:
     sourceQuery: select id, email, fullName, birthDate from customers
     sourceQueryColumnTransforms:
       email:
-      - understudy_data.builtinTransforms:strip
-      - understudy_data.builtinTransforms:lower
+      - bauta.builtinTransforms:strip
+      - bauta.builtinTransforms:lower
     targetDatabase: targetDb
     targetTableFinal: customersMasked
     insertStrategy: upsert

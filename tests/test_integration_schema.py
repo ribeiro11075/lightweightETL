@@ -18,10 +18,10 @@ import uuid
 
 import pytest
 
-from understudy_data.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from understudy_data.database import Database
-from understudy_data.runner import _executeDataJob
-from understudy_data.schema import clearTables, createStatements, readTable
+from bauta.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from bauta.database import Database
+from bauta.runner import _executeDataJob
+from bauta.schema import clearTables, createStatements, readTable
 from servers import SERVERS
 
 pytestmark = pytest.mark.integration

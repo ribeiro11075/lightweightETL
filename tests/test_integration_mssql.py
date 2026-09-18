@@ -23,11 +23,11 @@ import pytest
 
 pytest.importorskip('pymssql', reason='pymssql is not installed (pip install -e ".[mssql]")')
 
-from understudy_data.memory import DatabaseMemory
-from understudy_data.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
-from understudy_data.database import Database
-from understudy_data.memory import FileMemory
-from understudy_data.runner import runDataJobs
+from bauta.memory import DatabaseMemory
+from bauta.configuration import Configuration, DatabaseConnectionConfig, DatabaseType, DataJobsFile
+from bauta.database import Database
+from bauta.memory import FileMemory
+from bauta.runner import runDataJobs
 
 pytestmark = pytest.mark.integration
 

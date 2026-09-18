@@ -6,7 +6,7 @@
 # worth tracking; passwords are not.
 #
 #     export SOURCE_DB_PASSWORD='...'
-#     understudy run
+#     bauta run
 #
 # An unset variable with no default stops the run before anything connects,
 # rather than expanding to an empty string. ${NAME:-default} supplies a

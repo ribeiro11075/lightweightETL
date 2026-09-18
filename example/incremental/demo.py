@@ -5,7 +5,7 @@
 Needs no server and no credentials. It loads its job from configuration/ beside
 this script, the way the CLI does -- YAML, then ${NAME} expansion, then
 validation -- builds a throwaway SQLite database in transaction/, and runs the
-job three times so you can watch the watermark move. It prints the `understudy`
+job three times so you can watch the watermark move. It prints the `bauta`
 command each run is equivalent to.
 
 The interesting moment is the second run. Between runs one already-loaded
@@ -29,7 +29,7 @@ import yaml
 demoDirectory = Path(__file__).resolve().parent
 sys.path.append(str(demoDirectory.parents[1]))
 
-from understudy_data import Configuration, Database, DataJobsFile, FileMemory, expandEnvironmentVariables, runDataJobs
+from bauta import Configuration, Database, DataJobsFile, FileMemory, expandEnvironmentVariables, runDataJobs
 
 DEFAULT_WORKING_DIRECTORY = demoDirectory / 'transaction'
 
@@ -44,7 +44,7 @@ def loadConfiguration(name: str) -> Any:
 
 
 def showCommand(arguments: List[Any], environment: Optional[Dict[str, Any]] = None) -> None:
-    """Prints the `understudy` command that does what the next step does, with
+    """Prints the `bauta` command that does what the next step does, with
     paths relative to where this was run from, ready to paste into a shell.
     """
 
@@ -56,7 +56,7 @@ def showCommand(arguments: List[Any], environment: Optional[Dict[str, Any]] = No
 
     # A variable, the command, or an option with its value: kept whole on a line.
     pieces = ['{}={}'.format(name, shown(value)) for name, value in (environment or {}).items()]
-    pieces.append('understudy ' + shown(arguments[0]))
+    pieces.append('bauta ' + shown(arguments[0]))
     rest = [shown(argument) for argument in arguments[1:]]
     while rest:
         takesValue = len(rest) > 1 and not rest[1].startswith('--')

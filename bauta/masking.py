@@ -53,19 +53,19 @@ HMAC_BLOCK_SIZE = 64
 
 @functools.cache
 def _nativeModule() -> Any:
-    """The optional `understudy_mask` extension, or None if it isn't installed
-    or UNDERSTUDY_NATIVE=0 turns it off.
+    """The optional `bauta_rs` extension, or None if it isn't installed
+    or BAUTA_NATIVE=0 turns it off.
     """
 
-    if os.environ.get('UNDERSTUDY_NATIVE') == '0':
+    if os.environ.get('BAUTA_NATIVE') == '0':
         return None
 
     try:
-        import understudy_mask
+        import bauta_rs
     except ImportError:
         return None
 
-    return understudy_mask
+    return bauta_rs
 
 
 def nativeVersion() -> Optional[str]:
@@ -83,7 +83,7 @@ def maskingImplementation() -> str:
 
     native = nativeVersion()
 
-    return 'understudy-mask/{}'.format(native) if native else 'python'
+    return 'bauta-rs/{}'.format(native) if native else 'python'
 
 
 class MaskingError(Exception):
@@ -147,7 +147,7 @@ def keyFingerprint(key: str) -> str:
     in a manifest.
     """
 
-    return hmac.digest(key.encode('utf-8'), b'understudy key fingerprint', 'sha256')[:6].hex()
+    return hmac.digest(key.encode('utf-8'), b'bauta key fingerprint', 'sha256')[:6].hex()
 
 
 class KeyedHash:
@@ -1460,7 +1460,7 @@ def resolveStrategy(name: Any) -> Type[Strategy]:
         raise ValueError('strategy {!r} could not be imported: {}'.format(name, error)) from None
 
     if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
-        raise ValueError('strategy {!r} is not a subclass of understudy_data.masking.Strategy'.format(name))
+        raise ValueError('strategy {!r} is not a subclass of bauta.masking.Strategy'.format(name))
 
     return strategy
 

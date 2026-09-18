@@ -1,6 +1,6 @@
-# Understudy
+# Bauta
 
-**Give production an understudy:** a safe, realistic stand-in for your production data, in whichever database you need it. Understudy masks what it copies, copies only the slice you need with every relationship intact, generates what may not be copied at all, and moves data between databases on a schedule you already run, with nothing to host.
+**Put a mask on production:** a safe, realistic stand-in for your production data, in whichever database you need it. Bauta masks what it copies, copies only the slice you need with every relationship intact, generates what may not be copied at all, and moves data between databases on a schedule you already run, with nothing to host.
 
 - **Masking:** consistent across tables and runs, one-to-one for keys (NIST FF1 where policy requires it), applied before anything reaches the target, and every column must be covered.
 - **Discovery, subsets and synthetic data:** propose a masking policy from a live schema, copy a referentially complete slice of production, create the copy's tables in whichever database it goes to, and fill tables that can't be copied with generated rows.
@@ -19,14 +19,14 @@
 Python 3.10 or newer. Choose the drivers you need as extras; each is loaded only when a connection uses it.
 
 ```
-pip install "understudy-data[postgresql,oracle]"
+pip install "bauta[postgresql,oracle]"
 ```
 
 It isn't on PyPI yet. Until the first release, install from a clone:
 
 ```
-git clone https://github.com/ribeiro11075/understudy.git
-cd understudy
+git clone https://github.com/ribeiro11075/bauta.git
+cd bauta
 pip install -e ".[postgresql,oracle]"
 ```
 
@@ -45,9 +45,9 @@ pip install -e ".[postgresql,oracle]"
 - macOS: `xcode-select --install`, then `brew install libpq` and `export PATH="$(brew --prefix libpq)/bin:$PATH"` (Homebrew doesn't put libpq on the path by itself).
 - Debian or Ubuntu: `apt install build-essential libpq-dev`.
 
-To skip the build, leave `postgresql` (and `all`) out and install the prebuilt driver beside the other extras: `pip install "understudy-data[mysql,oracle,mssql]" psycopg2-binary`. psycopg2's maintainers recommend the source build for production.
+To skip the build, leave `postgresql` (and `all`) out and install the prebuilt driver beside the other extras: `pip install "bauta[mysql,oracle,mssql]" psycopg2-binary`. psycopg2's maintainers recommend the source build for production.
 
-**The native masker (optional).** `understudy-mask`, in `mask-rs/`, masks in Rust: four to five times the throughput, identical masks, nothing to configure. With [Rust](https://rustup.rs) 1.83 or newer, pip builds it in the same command as the rest:
+**The native masker (optional).** `bauta-rs`, in `mask-rs/`, masks in Rust: four to five times the throughput, identical masks, nothing to configure. With [Rust](https://rustup.rs) 1.83 or newer, pip builds it in the same command as the rest:
 
 ```
 pip install -e ".[all]" ./mask-rs/py
@@ -68,9 +68,9 @@ Edit `configuration/database.yaml` and `configuration/jobs.yaml` for your databa
 ```
 export SOURCE_DB_PASSWORD=...  TARGET_DB_PASSWORD=...  MASKING_KEY=...
 
-understudy validate          # check the configuration, offline
-understudy run --dry-run     # check connections and tables, moving nothing
-understudy run               # run every job once
+bauta validate          # check the configuration, offline
+bauta run --dry-run     # check connections and tables, moving nothing
+bauta run               # run every job once
 ```
 
 To see it work without any of that, using throwaway SQLite databases:
@@ -86,19 +86,19 @@ python example/native-masking/demo.py    # the same job masked in Python and in 
 ## The command
 
 ```
-understudy run              run data jobs once, masking any with a `masking` section
-understudy validate         check configuration without connecting
-understudy jobs             show the job graph and what's due
-understudy history          show recent job outcomes recorded with --history
+bauta run              run data jobs once, masking any with a `masking` section
+bauta validate         check configuration without connecting
+bauta jobs             show the job graph and what's due
+bauta history          show recent job outcomes recorded with --history
 
-understudy discover         propose a masking policy for tables
-understudy subset           generate jobs that copy a referentially complete subset
-understudy schema           create target tables from source ones, in the target's dialect
-understudy synthesize       fill tables with generated rows, for data that can't be copied
-understudy clear            empty the target tables of jobs, children first
+bauta discover         propose a masking policy for tables
+bauta subset           generate jobs that copy a referentially complete subset
+bauta schema           create target tables from source ones, in the target's dialect
+bauta synthesize       fill tables with generated rows, for data that can't be copied
+bauta clear            empty the target tables of jobs, children first
 
-understudy audit            report what each job does with data, and what to question
-understudy verify-manifest  check a manifest is unaltered, and who signed it
+bauta audit            report what each job does with data, and what to question
+bauta verify-manifest  check a manifest is unaltered, and who signed it
 ```
 
 | Exit code | Meaning |
@@ -122,9 +122,9 @@ understudy verify-manifest  check a manifest is unaltered, and who signed it
 | `--memory-database ALIAS` | keep run state in a database table instead |
 | `--history FILE` | append each job's outcome to a JSON-lines history |
 | `--metrics FILE` | write Prometheus metrics for the textfile collector (`--metrics-push URL` for a Pushgateway) |
-| `--notify-url URL` | post to a webhook when a run doesn't succeed; default `$UNDERSTUDY_NOTIFY_URL` |
+| `--notify-url URL` | post to a webhook when a run doesn't succeed; default `$BAUTA_NOTIFY_URL` |
 | `--accept-key-change` | run upsert jobs whose masking key changed since their last run |
-| `--manifest FILE` | write a sealed JSON record of what was masked, and how; signed if `$UNDERSTUDY_MANIFEST_KEY` is set |
+| `--manifest FILE` | write a sealed JSON record of what was masked, and how; signed if `$BAUTA_MANIFEST_KEY` is set |
 
 
 ## Documentation
@@ -144,7 +144,7 @@ understudy verify-manifest  check a manifest is unaltered, and who signed it
 
 | | |
 | --- | --- |
-| `understudy_data/` | the package; `runner.py` runs jobs, `masking.py` masks, `databaseDialects.py` holds per-database SQL |
+| `bauta/` | the package; `runner.py` runs jobs, `masking.py` masks, `databaseDialects.py` holds per-database SQL |
 | `mask-rs/` | the optional native masker, in Rust — see [its README](mask-rs/README.md) |
 | `example/` | runnable demos, each with its `configuration/`, and a starter configuration — see [its README](example/README.md) |
 | `docs/` | the documentation above |

@@ -1,7 +1,7 @@
 """Generates the vectors the Rust port is checked against.
 
 The Python implementation is the reference: every vector here is what
-understudy_data.masking produces today, and a Rust build that disagrees with
+bauta.masking produces today, and a Rust build that disagrees with
 any of them is a silent key change for anyone who has already masked data.
 
 Run from the repository root:  python3 mask-rs/generate_vectors.py
@@ -15,7 +15,7 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from understudy_data.masking import STRATEGIES, KeyedHash
+from bauta.masking import STRATEGIES, KeyedHash
 
 KEY = 'a-test-key-that-is-long-enough'
 DOMAIN = 'vectors'

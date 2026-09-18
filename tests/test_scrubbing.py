@@ -8,10 +8,10 @@ import logging
 
 import pytest
 
-from understudy_data.dependencyGraph import JobStatus
-from understudy_data.log import LOGGER_NAME, JsonFormatter, ScrubbingFilter, portableRecord
-from understudy_data.runner import _executeWithRetries
-from understudy_data.scrubbing import describeError, scrubText
+from bauta.dependencyGraph import JobStatus
+from bauta.log import LOGGER_NAME, JsonFormatter, ScrubbingFilter, portableRecord
+from bauta.runner import _executeWithRetries
+from bauta.scrubbing import describeError, scrubText
 
 SECRET = 'SeCrEt7'
 
@@ -28,8 +28,8 @@ KNOWN_MESSAGES = [
      'CONTEXT:  COPY sc, line 1: <redacted>\n'),
     ('value too long for type character varying(40)\nCONTEXT:  COPY sc, line 1, column email: "SeCrEt7SeCrEt7SeCrEt7"\n',
      'value too long for type character varying(40)\nCONTEXT:  COPY sc, line 1, column email: <redacted>\n'),
-    ('invalid input syntax for type integer: "SeCrEt7"\nCONTEXT:  COPY understudy_upsert_c50af8cb5441, line 1, column n: "SeCrEt7"\n',
-     'invalid input syntax for type integer: "<redacted>"\nCONTEXT:  COPY understudy_upsert_c50af8cb5441, line 1, column n: <redacted>\n'),
+    ('invalid input syntax for type integer: "SeCrEt7"\nCONTEXT:  COPY bauta_upsert_c50af8cb5441, line 1, column n: "SeCrEt7"\n',
+     'invalid input syntax for type integer: "<redacted>"\nCONTEXT:  COPY bauta_upsert_c50af8cb5441, line 1, column n: <redacted>\n'),
     ('value "SeCrEt7" is out of range for type integer', 'value "<redacted>" is out of range for type integer'),
     ('invalid byte sequence for encoding "UTF8": 0xe9 0x20', 'invalid byte sequence for encoding "UTF8": <redacted>'),
     ('conflicting key value violates exclusion constraint "lk_name_excl"\nDETAIL:  Key (name)=(SeCrEt7) conflicts with existing key (name)=(SeCrEt7).\n',
@@ -54,8 +54,8 @@ KNOWN_MESSAGES = [
     ("1062 (23000): Duplicate entry 'SeCrEt7@x.com' for key 'sc.email'", "1062 (23000): Duplicate entry '<redacted>' for key 'sc.email'"),
     ("1366 (HY000): Incorrect integer value: 'SeCrEt7' for column 'n' at row 1",
      "1366 (HY000): Incorrect integer value: '<redacted>' for column 'n' at row 1"),
-    ("1292 (22007): Incorrect date value: 'SeCrEt7' for column `understudy_test`.`sc`.`d` at row 1",
-     "1292 (22007): Incorrect date value: '<redacted>' for column `understudy_test`.`sc`.`d` at row 1"),
+    ("1292 (22007): Incorrect date value: 'SeCrEt7' for column `bauta_test`.`sc`.`d` at row 1",
+     "1292 (22007): Incorrect date value: '<redacted>' for column `bauta_test`.`sc`.`d` at row 1"),
     ("1292 (22007): Truncated incorrect DOUBLE value: 'SeCrEt7'", "1292 (22007): Truncated incorrect DOUBLE value: '<redacted>'"),
     # Oracle 23ai
     ("ORA-00001: unique constraint (SYSTEM.SYS_C009324) violated on table SYSTEM.SC columns (EMAIL)\n"

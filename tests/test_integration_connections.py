@@ -17,7 +17,7 @@ import uuid
 
 import pytest
 
-from understudy_data.database import Database
+from bauta.database import Database
 from servers import SERVERS
 
 pytestmark = pytest.mark.integration
@@ -53,8 +53,8 @@ def test_mysql_tls_is_on_by_default_and_options_can_turn_it_off(name):
 def test_postgresql_options_reach_libpq():
     _requireServer('postgresql')
 
-    with _connect('postgresql', options={'application_name': 'understudy-test', 'sslmode': 'disable'}) as database:
-        assert database.query("SELECT current_setting('application_name')") == [('understudy-test',)]
+    with _connect('postgresql', options={'application_name': 'bauta-test', 'sslmode': 'disable'}) as database:
+        assert database.query("SELECT current_setting('application_name')") == [('bauta-test',)]
         assert database.isEncrypted() is False
 
     # The compose server has no certificate, so requiring TLS must fail
@@ -66,8 +66,8 @@ def test_postgresql_options_reach_libpq():
 def test_oracle_options_reach_the_driver():
     _requireServer('oracle')
 
-    with _connect('oracle', options={'program': 'understudy-test'}) as database:
-        assert database.query("SELECT program FROM v$session WHERE sid = SYS_CONTEXT('USERENV', 'SID')") == [('understudy-test',)]
+    with _connect('oracle', options={'program': 'bauta-test'}) as database:
+        assert database.query("SELECT program FROM v$session WHERE sid = SYS_CONTEXT('USERENV', 'SID')") == [('bauta-test',)]
         assert database.isEncrypted() is False
 
 
@@ -81,7 +81,7 @@ def test_mssql_encrypts_when_freetds_is_configured_to(tmp_path):
     (tmp_path / 'freetds.conf').write_text('[global]\n\tencryption = require\n')
     script = textwrap.dedent('''
         from servers import SERVERS
-        from understudy_data.database import Database
+        from bauta.database import Database
         with Database(SERVERS['mssql'][1]) as database:
             print(database.isEncrypted())
         ''')
