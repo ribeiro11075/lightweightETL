@@ -5,7 +5,7 @@ import re
 import shlex
 import subprocess
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Mapping, Optional, Sequence, Set, Type, TypeVar, Union
+from typing import Annotated, Any, Dict, List, Literal, Mapping, Optional, Sequence, Set, Type, TypeVar, Union
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, SecretStr, ValidationError, field_validator, model_validator
 
@@ -528,6 +528,11 @@ class DataJobsFile(BaseModel):
     memory: Optional[StorageLocation] = None
     history: Optional[StorageLocation] = None
     manifest: Optional[StorageLocation] = None
+    # Threads the native masker spreads each job's chunks over: one by default,
+    # a number up to the cores available, or `auto`, which shares the cores as
+    # each job starts with the jobs running alongside it. See
+    # masking.maskingThreadsFor and runner._runCycle.
+    maskingThreads: Union[Literal['auto'], Annotated[int, Field(ge=1)]] = 1
     jobs: Dict[str, DataJobConfig]
 
     def tableLocations(self) -> Dict[str, TableLocation]:

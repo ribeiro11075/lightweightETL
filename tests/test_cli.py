@@ -1019,3 +1019,33 @@ def test_validate_checks_and_summarises_the_rules(workspace, capsys, caplog):
     (workspace / 'configuration' / 'discovery.yaml').write_text("values:\n- pattern: '[0-9'\n  policy: hash\n")
     assert main(['validate']) == EXIT_BAD_CONFIGURATION
     assert 'not a valid regular expression' in caplog.text
+
+
+def test_validate_says_how_many_threads_masking_would_use(maskedWorkspace, capsys, monkeypatch, caplog):
+    import bauta.masking as masking
+    from bauta.masking import nativeVersion
+
+    monkeypatch.delenv('BAUTA_MASKING_THREADS', raising=False)
+    monkeypatch.setattr(masking, 'availableCores', lambda: 4)
+    (maskedWorkspace / 'configuration' / 'jobs.yaml').write_text('maskingThreads: 3\n' + MASKED_JOBS_YAML)
+    assert main(['validate', '--quiet']) == EXIT_SUCCESS
+    output = capsys.readouterr().out
+
+    if nativeVersion() is None:
+        assert 'masking: in Python, one thread per job' in output
+    else:
+        assert 'masking: bauta-rs {}, 3 thread(s) per job (maskingThreads: 3;'.format(nativeVersion()) in output
+        monkeypatch.setenv('BAUTA_MASKING_THREADS', '2')
+        assert main(['validate', '--quiet']) == EXIT_SUCCESS
+        assert '2 thread(s) per job ($BAUTA_MASKING_THREADS=2;' in capsys.readouterr().out
+
+
+def test_validate_refuses_more_masking_threads_than_cores(maskedWorkspace, monkeypatch, caplog):
+    import bauta.masking as masking
+
+    monkeypatch.delenv('BAUTA_MASKING_THREADS', raising=False)
+    monkeypatch.setattr(masking, 'availableCores', lambda: 4)
+    (maskedWorkspace / 'configuration' / 'jobs.yaml').write_text('maskingThreads: 16\n' + MASKED_JOBS_YAML)
+
+    assert main(['validate']) == EXIT_BAD_CONFIGURATION
+    assert 'maskingThreads is 16, but this machine has 4 core(s) available to it: set at most 4, or auto' in caplog.text

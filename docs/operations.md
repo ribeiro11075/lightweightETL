@@ -106,7 +106,7 @@ Three things decide how fast a job moves rows, in this order.
 
 **The masking policy**, by about sevenfold. `key` is expensive because it must be a permutation; `hash` hides as much for a thirtieth of the work wherever a column needn't stay one-to-one. See [speed](masking.md#speed).
 
-**The [native masker](masking.md#the-native-masker)**, four to five times faster on the same policy, with identical results. Ten million rows of six masked columns take 99 seconds with it and about eight minutes without.
+**The [native masker](masking.md#the-native-masker)**, four to five times faster on the same policy, with identical results. Ten million rows of six masked columns take 99 seconds with it and about eight minutes without. On a wide table, where masking rather than the database sets the pace, it also spreads each chunk over several cores (`maskingThreads`): 25 masked columns went from 25,000 rows a second on one core to 73,000 on ten.
 
 **`chunkSize` — for latency, not throughput.** On a local database, chunks from 500 rows to 200,000 finish the same job in 8.6 to 9.2 seconds. What a chunk costs is a round trip: against a database 25 ms away, a million rows take 123 seconds at `chunkSize: 500` and 8.8 at `10000`. Latency stops mattering once a chunk's masking outlasts its round trips:
 
@@ -126,6 +126,7 @@ If a job is still slow, look at the database: the target's indexes and constrain
 | `BAUTA_CONFIG` | where to look for configuration |
 | `BAUTA_NOTIFY_URL` | webhook for failed cycles |
 | `BAUTA_MANIFEST_KEY` | signs and verifies masking manifests |
+| `BAUTA_MASKING_THREADS` | a number, or `auto`: overrides `jobs.yaml`'s [`maskingThreads`](configuration.md#file-level) |
 | `BAUTA_NATIVE=0` | mask in Python even where the extension is installed |
 | `BAUTA_PIPELINE=0` / `=1` | force reading, masking and writing to take turns, or to overlap |
 

@@ -40,6 +40,16 @@ cd py && maturin build --release
 pip install ../target/wheels/bauta_rs-*.whl
 ```
 
+## Threads, and remembering masks
+
+A chunk's distinct values are masked across a thread pool, whose size the
+Python layer sets per process (`setThreads`) from `maskingThreads`; each mask
+depends on its value alone, so the count changes no result.
+`availableCores()` reads a container's CPU quota, which Python's
+`os.cpu_count()` doesn't. `key` and `fpe` also remember masks across chunks.
+The extension allocates through mimalloc: the system allocators serialise
+masking's many small allocations across threads.
+
 `--release` matters for the tests: two of them measure SHA-256 and AES
 throughput to catch a backend that has silently fallen back to software, and a
 debug build is indistinguishable from one.
@@ -71,8 +81,9 @@ So:
 
 ## What it covers
 
-`key`, `fpe`, `hash`, `email`, `digits`. Everything else stays in Python:
-`redact` needs lookbehind that Rust's regex engine doesn't offer, `shuffle`,
-`dateShift`, `number`, `keep`, `null` and `constant` are already cheap, the
-`fake*` strategies would need a second copy of the name lists, and custom
-strategies are Python by definition.
+`key`, `fpe`, `hash`, `email`, `digits`, and the `fake*` strategies, which
+pick from the lists Python passes in when a masker is built -- so the lists
+are defined once, in Python, and the vectors record them. Everything else
+stays in Python: `redact` needs lookbehind that Rust's regex engine doesn't
+offer, `shuffle`, `dateShift`, `number`, `keep`, `null` and `constant` are
+already cheap, and custom strategies are Python by definition.

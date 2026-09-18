@@ -28,7 +28,7 @@ import random
 import re
 import unicodedata
 import uuid
-from typing import Any, Callable, ClassVar, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Type
+from typing import Any, Callable, ClassVar, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Type, Union
 
 from .log import LOGGER_NAME
 
@@ -95,6 +95,76 @@ def nativeVersion() -> Optional[str]:
     module = _nativeModule()
 
     return getattr(module, '__version__', None) if module is not None else None
+
+
+MASKING_THREADS_VARIABLE = 'BAUTA_MASKING_THREADS'
+
+
+def availableCores() -> int:
+    """The cores this process may use. The native masker reads a container's
+    CPU quota, which os.cpu_count() doesn't: in a pod limited to two CPUs on a
+    64-core host, it says 2.
+    """
+
+    module = _nativeModule()
+    if module is not None:
+        return int(module.availableCores())
+
+    return os.cpu_count() or 1
+
+
+def effectiveMaskingThreads(setting: Union[str, int]) -> Union[str, int]:
+    """The setting in force -- BAUTA_MASKING_THREADS over jobs.yaml's -- checked:
+    `auto`, or a number from 1 to the cores available. Raises ValueError.
+    """
+
+    override = os.environ.get(MASKING_THREADS_VARIABLE)
+    source = 'maskingThreads'
+    if override:
+        source = MASKING_THREADS_VARIABLE
+        if override == 'auto':
+            setting = override
+        else:
+            try:
+                setting = int(override)
+            except ValueError:
+                raise ValueError('{} must be a number or auto, got {!r}'.format(MASKING_THREADS_VARIABLE, override)) from None
+
+    if setting == 'auto':
+        return setting
+
+    cores = availableCores()
+    if not isinstance(setting, int) or setting < 1:
+        raise ValueError('{} must be at least 1, or auto; got {!r}'.format(source, setting))
+    if setting > cores:
+        raise ValueError('{} is {}, but this machine has {} core(s) available to it: set at most {}, or auto'.format(
+            source, setting, cores, cores))
+
+    return setting
+
+
+def maskingThreadsFor(setting: Union[str, int], concurrentJobs: int) -> int:
+    """How many threads a job masks with: a number as it is, or for `auto` the
+    cores shared out between `concurrentJobs` -- a starting job and the ones
+    running alongside it. BAUTA_MASKING_THREADS overrides the setting, which is
+    checked by effectiveMaskingThreads.
+    """
+
+    setting = effectiveMaskingThreads(setting)
+    if setting == 'auto':
+        return max(1, availableCores() // max(1, concurrentJobs))
+
+    return int(setting)
+
+
+def setMaskingThreads(threads: int) -> None:
+    """How many threads the native masker spreads a chunk over in this process.
+    Results are identical for any count; pure-Python masking is always one.
+    """
+
+    module = _nativeModule()
+    if module is not None:
+        module.setThreads(threads)
 
 
 def maskingImplementation() -> str:
@@ -364,9 +434,15 @@ class Strategy:
             return None
 
         try:
-            return module.Masker(self.keyedHash.subkey, self.NATIVE, self.options)
+            return module.Masker(self.keyedHash.subkey, self.NATIVE, self._nativeOptions())
         except (ValueError, TypeError):
             return None
+
+
+    def _nativeOptions(self) -> Dict[str, Any]:
+        """What the native masker is built from: the options, for most."""
+
+        return self.options
 
 
     @classmethod
@@ -986,6 +1062,18 @@ class _FakeStrategy(Strategy):
 
         return LOCALES[self.options['locale']] if 'locale' in self.options else DEFAULT_LOCALE
 
+
+    def _nativeOptions(self) -> Dict[str, Any]:
+        """The lists themselves, so they are defined once, here: the native
+        masker picks from what it's handed.
+        """
+
+        locale = self.locale
+
+        return {'maxLength': self.options.get('maxLength'), 'firstNames': list(locale.firstNames), 'lastNames': list(locale.lastNames),
+                'cities': list(locale.cities), 'streets': list(locale.streets), 'streetKinds': list(locale.streetKinds),
+                'address': locale.address, 'companySuffixes': list(locale.companySuffixes), 'companyWords': list(COMPANY_WORDS)}
+
     def _pick(self, choices: Sequence[str], message: bytes, purpose: bytes) -> str:
 
         return choices[self.keyedHash.below(message, len(choices), purpose)]
@@ -1007,6 +1095,7 @@ class _FakeStrategy(Strategy):
 class FakeFirstNameStrategy(_FakeStrategy):
 
     NAME = 'fakeFirstName'
+    NATIVE = 'fakeFirstName'
 
     def generate(self, message: bytes) -> str:
 
@@ -1016,6 +1105,7 @@ class FakeFirstNameStrategy(_FakeStrategy):
 class FakeLastNameStrategy(_FakeStrategy):
 
     NAME = 'fakeLastName'
+    NATIVE = 'fakeLastName'
 
     def generate(self, message: bytes) -> str:
 
@@ -1025,6 +1115,7 @@ class FakeLastNameStrategy(_FakeStrategy):
 class FakeNameStrategy(_FakeStrategy):
 
     NAME = 'fakeName'
+    NATIVE = 'fakeName'
 
     def generate(self, message: bytes) -> str:
 
@@ -1034,6 +1125,7 @@ class FakeNameStrategy(_FakeStrategy):
 class FakeCityStrategy(_FakeStrategy):
 
     NAME = 'fakeCity'
+    NATIVE = 'fakeCity'
 
     def generate(self, message: bytes) -> str:
 
@@ -1043,6 +1135,7 @@ class FakeCityStrategy(_FakeStrategy):
 class FakeCompanyStrategy(_FakeStrategy):
 
     NAME = 'fakeCompany'
+    NATIVE = 'fakeCompany'
 
     def generate(self, message: bytes) -> str:
 
@@ -1052,6 +1145,7 @@ class FakeCompanyStrategy(_FakeStrategy):
 class FakeStreetAddressStrategy(_FakeStrategy):
 
     NAME = 'fakeStreetAddress'
+    NATIVE = 'fakeStreetAddress'
 
     def generate(self, message: bytes) -> str:
 

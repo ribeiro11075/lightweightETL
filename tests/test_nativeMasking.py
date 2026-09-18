@@ -68,7 +68,8 @@ COMBINATIONS = [
     ('email', {'mailDomain': 'masked.invalid'}),
     ('digits', {}), ('digits', {'keepLeading': 2}), ('digits', {'keepTrailing': 4}),
     ('digits', {'keepLeading': 1, 'keepTrailing': 1}),
-    ]
+    ] + [(name, options) for name in ('fakeFirstName', 'fakeLastName', 'fakeName', 'fakeCity', 'fakeCompany', 'fakeStreetAddress')
+         for options in ({}, {'maxLength': 3}, {'locale': 'de_DE'}, {'locale': 'pt_BR'})]
 
 
 def outcome(built, values):
@@ -198,3 +199,120 @@ def test_the_masking_key_never_reaches_the_extension():
 
     assert KEY.encode() not in keyedHash.subkey
     assert KEY not in repr(built._native)
+
+
+# Threads and the cross-chunk cache ---------------------------------------------
+
+def _wideColumn(built):
+    """Well past the size a call is split across threads at, with every value
+    of the corpus the strategy masks -- the ones Python finishes included --
+    and repeats both within and across chunks. Refusals are left to their own
+    test: one would fail its whole chunk, and hide the masks beside it.
+    """
+    random.seed(20260918)
+    distinct = ['C{:07d}'.format(number) for number in range(3000)] + list(range(10 ** 9, 10 ** 9 + 1500))
+    maskable = [value for value in VALUES if outcome(built, [value])[0][0] == 'ok']
+    column = [random.choice(distinct) for _ in range(6000)] + maskable * 3
+    random.shuffle(column)
+
+    return [value for value in column if outcome(built, [value])[0][0] == 'ok']
+
+
+@pytest.fixture
+def maskingThreads():
+    """Sets the extension's threads, and puts them back to one after."""
+    import bauta_rs
+
+    yield bauta_rs.setThreads
+    bauta_rs.setThreads(1)
+
+
+@native
+@pytest.mark.parametrize('name,options', [('key', {}), ('fpe', {}), ('hash', {}), ('digits', {'keepTrailing': 2}), ('email', {}),
+                                          ('fakeName', {'locale': 'es_ES'}), ('fakeStreetAddress', {})],
+                         ids=lambda item: str(item))
+def test_threads_and_the_cache_change_no_answer(name, options, maskingThreads):
+    """Every mask depends on its value alone, so masking a column on eight
+    threads, chunk after chunk with the cache warm, must give exactly what one
+    thread and pure Python give -- errors included, in the same place.
+    """
+    validated = STRATEGIES[name].validateOptions(options)
+    column = _wideColumn(STRATEGIES[name](KeyedHash(KEY, 'threads'), validated))
+    chunks = [column[start:start + 2000] for start in range(0, len(column), 2000)]
+
+    def maskAll(threads, native=True):
+        maskingThreads(threads)
+        built = STRATEGIES[name](KeyedHash(KEY, 'threads'), validated)
+        if not native:
+            built._native = None
+        return [_chunkOutcome(built, chunk, index) for index, chunk in enumerate(chunks)]
+
+    oneThread = maskAll(1)
+
+    assert all(result == 'ok' for result, _ in oneThread)
+    # Enough distinct values in each call that it's split across the threads.
+    assert min(len({repr(value) for value in chunk}) for chunk in chunks) > 256
+    assert maskAll(8) == oneThread
+    assert maskAll(8) == maskAll(1, native=False)
+
+
+def _chunkOutcome(built, chunk, index):
+    """A chunk's masks, or the first error it raised."""
+    try:
+        return ('ok', built.maskColumn(chunk, index))
+    except MaskingError as error:
+        return ('error', str(error))
+
+
+@native
+def test_a_refusal_is_not_remembered(maskingThreads):
+    """Only answers are cached, so a value refused in one chunk is refused
+    again in the next rather than answered from the cache.
+    """
+    maskingThreads(8)
+    built = STRATEGIES['key'](KeyedHash(KEY, 'refusals'), STRATEGIES['key'].validateOptions({}))
+
+    for index in range(2):
+        with pytest.raises(MaskingError):
+            built.maskColumn(['fine'] * 300 + [True], index)
+
+
+@native
+def test_the_cache_is_bounded_and_keeps_answering_past_its_bound(maskingThreads):
+    maskingThreads(4)
+    built = STRATEGIES['key'](KeyedHash(KEY, 'bounded'), STRATEGIES['key'].validateOptions({}))
+    values = ['V{:06d}'.format(number) for number in range(70_000)]
+
+    first = built.maskColumn(values, 0)
+
+    assert built.maskColumn(values[::-1], 1) == first[::-1]
+    assert len(set(first)) == len(values)
+
+
+def test_auto_shares_the_cores_between_the_jobs_that_run_at_once(monkeypatch):
+    import bauta.masking as masking
+
+    monkeypatch.delenv(masking.MASKING_THREADS_VARIABLE, raising=False)
+    monkeypatch.setattr(masking, 'availableCores', lambda: 8)
+
+    assert masking.maskingThreadsFor('auto', 1) == 8
+    assert masking.maskingThreadsFor('auto', 3) == 2
+    assert masking.maskingThreadsFor('auto', 16) == 1
+    assert masking.maskingThreadsFor(3, 4) == 3
+
+    monkeypatch.setenv(masking.MASKING_THREADS_VARIABLE, '5')
+    assert masking.maskingThreadsFor('auto', 1) == 5
+    monkeypatch.setenv(masking.MASKING_THREADS_VARIABLE, 'auto')
+    assert masking.maskingThreadsFor(2, 2) == 4
+
+
+@pytest.mark.parametrize('setting,valid', [('auto', True), (1, True), (12, True), (0, False), (-1, False), ('many', False)])
+def test_masking_threads_is_auto_or_at_least_one(setting, valid):
+    from bauta.configuration import Configuration, ConfigurationError, DataJobsFile
+
+    raw = {'workers': 1, 'maskingThreads': setting, 'jobs': {}}
+    if valid:
+        assert Configuration.validateJobConfiguration(raw, DataJobsFile).maskingThreads == setting
+    else:
+        with pytest.raises(ConfigurationError, match='maskingThreads'):
+            Configuration.validateJobConfiguration(raw, DataJobsFile)

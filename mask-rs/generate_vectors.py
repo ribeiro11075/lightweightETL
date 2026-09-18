@@ -15,7 +15,7 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from bauta.masking import STRATEGIES, KeyedHash
+from bauta.masking import COMPANY_WORDS, DEFAULT_LOCALE, LOCALES, STRATEGIES, KeyedHash
 
 KEY = 'a-test-key-that-is-long-enough'
 DOMAIN = 'vectors'
@@ -79,6 +79,23 @@ def hashVectors() -> dict:
         }
 
 
+FAKE_STRATEGIES = ['fakeFirstName', 'fakeLastName', 'fakeName', 'fakeCity', 'fakeCompany', 'fakeStreetAddress']
+
+
+def fakeLists() -> dict:
+    """The lists the fake* strategies pick from, per locale -- the default ones
+    under "default". The Rust tests build their maskers from these, as the
+    extension builds them from what Python hands it, so there is one copy.
+    """
+
+    def lists(locale) -> dict:
+        return {'firstNames': list(locale.firstNames), 'lastNames': list(locale.lastNames), 'cities': list(locale.cities),
+                'streets': list(locale.streets), 'streetKinds': list(locale.streetKinds), 'address': locale.address,
+                'companySuffixes': list(locale.companySuffixes), 'companyWords': list(COMPANY_WORDS)}
+
+    return {'default': lists(DEFAULT_LOCALE), **{name: lists(locale) for name, locale in sorted(LOCALES.items())}}
+
+
 def strategyVectors() -> dict:
     """Every strategy the port will cover, over the boundary corpus.
 
@@ -91,8 +108,8 @@ def strategyVectors() -> dict:
         ('fpe', {}), ('fpe', {'charset': 'hex'}), ('fpe', {'charset': 'digits'}), ('fpe', {'strict': True}),
         ('hash', {}), ('hash', {'length': 20, 'prefix': 'c_'}),
         ('email', {}), ('email', {'keepDomain': True}),
-        ('digits', {}), ('fakeName', {}), ('fakeFirstName', {}), ('fakeCity', {}),
-        ]
+        ('digits', {}),
+        ] + [(name, options) for name in FAKE_STRATEGIES for options in [{}, {'maxLength': 4}] + [{'locale': locale} for locale in sorted(LOCALES)]]
 
     values = TEXTS + INTEGERS + [uuid.UUID('00000000-0000-4000-a000-000000000000'), None, True]
     out = {}
@@ -125,6 +142,7 @@ def main() -> None:
         'domain': DOMAIN,
         'keyedHash': hashVectors(),
         'strategies': strategyVectors(),
+        'fakeLists': fakeLists(),
         }
 
     path = os.path.join(here, 'vectors', 'reference.json')

@@ -181,7 +181,7 @@ If `mask()` depends on nothing but the value, set `CACHEABLE = True` on the clas
 
 `key` costs the most because it has to be a *permutation*: a Feistel network per value, about thirty times the work of `hash`'s one digest. Where nothing joins on a column, `hash` hides as much far more cheaply.
 
-`key`, `fpe`, `hash`, `email`, `digits` and the `fake*` strategies remember up to 16,384 masked values per column (text up to 256 characters, integers and UUIDs), so foreign keys and low-cardinality columns mask many times faster. The native masker deduplicates within each chunk instead. For how `chunkSize` and latency interact, see [throughput](operations.md#throughput).
+`key`, `fpe`, `hash`, `email`, `digits` and the `fake*` strategies remember up to 16,384 masked values per column (text up to 256 characters, integers and UUIDs), so foreign keys and low-cardinality columns mask many times faster. The native masker masks each distinct value in a chunk once, and for `key`, `fpe` and the `fake*` strategies remembers up to 65,536 values per column across chunks (text up to 64 bytes, and integers). For how `chunkSize` and latency interact, see [throughput](operations.md#throughput).
 
 ### The native masker
 
@@ -197,7 +197,7 @@ Wheels are published for Linux (x86-64 and ARM, glibc 2.17 or newer) and macOS (
 
 From a clone, `pip install ./mask-rs/py` builds the extension at the checkout's version.
 
-It covers `key`, `fpe`, `hash`, `email` and `digits`, which is where the time goes. Everything else stays in Python, and so do values it doesn't handle (`Decimal`, `UUID`, dates, non-ASCII text), so a value Python would refuse still refuses with the same message.
+It covers `key`, `fpe`, `hash`, `email`, `digits` and the `fake*` strategies, which is where the time goes; the `fake*` ones pick from the lists Python hands it, so there is one copy of those. Everything else stays in Python: the strategies that are already cheap, `redact`, and [custom strategies](#your-own-strategies), which are Python by definition and mask on one thread whatever `maskingThreads` says. So do values the extension doesn't handle (`Decimal`, `UUID`, dates, and non-ASCII text for the strategies that read characters), so a value Python would refuse still refuses with the same message.
 
 One million rows of six masked columns, SQLite to SQLite:
 
@@ -206,6 +206,17 @@ One million rows of six masked columns, SQLite to SQLite:
 | Python | 21,000 |
 | Rust (`bauta-rs`) | 93,000 |
 | Rust, overlapped with the database | 112,000 |
+
+**It spreads each chunk over several cores.** Every mask depends on its value alone, so a chunk's distinct values are masked across threads with the same result as one. `jobs.yaml`'s [`maskingThreads`](configuration.md#file-level) sets how many. One by default, so nothing takes more of the machine than it's told to. A number sets it for every job, up to the cores available; more is refused. `auto` shares the cores as each job starts, with the jobs running alongside it: one job gets them all, eight at once on eight cores get one each, and the last job of a run, once the others have finished, gets them all again. A running job keeps its share. In a container, the cores are its CPU limit, not the host's. `BAUTA_MASKING_THREADS` overrides the setting, and `validate` prints what a run would use. Lower it where the database shares the machine, since every core masking takes is one the database doesn't get. Pure-Python masking always uses one.
+
+Threads help where masking, not the database, is what a job waits for: wide tables with many masked columns. A million rows of 25 masked columns, SQLite to SQLite on ten cores, from [the native-masking demo](../example/README.md#native-masking):
+
+| | Rows a second |
+| --- | --- |
+| Rust, one core, overlapped | 25,000 |
+| Rust, all cores, overlapped | 73,000 |
+
+A narrow table gains little: the six-column job above spends its time writing, not masking. So do columns in the strategies the extension doesn't cover, such as custom ones, which Python masks one thread at a time.
 
 **The two implementations compute identical masks**, a release requirement: a difference would silently break joins between old and new copies. See [two implementations](security.md#two-implementations). `BAUTA_NATIVE=0` masks in Python even with the extension installed, and the manifest records which one ran as `maskedBy`.
 

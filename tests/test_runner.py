@@ -1518,3 +1518,107 @@ def test_the_pipeline_follows_the_native_masker_unless_told_otherwise(monkeypatc
     monkeypatch.setattr(masking, 'nativeVersion', lambda: '0.1.0')
     monkeypatch.setenv('BAUTA_PIPELINE', '0')
     assert _pipelineDepth() == 0
+
+
+@pytest.mark.skipif(__import__('bauta.masking', fromlist=['nativeVersion']).nativeVersion() is None, reason='needs the native masker')
+def test_masking_threads_reach_each_job_and_change_no_row(tmp_path, monkeypatch):
+    """Set in the parent, applied in each job's own process -- and a job masked
+    on four threads writes exactly what one thread writes.
+    """
+    import bauta.masking as masking
+
+    monkeypatch.delenv('BAUTA_MASKING_THREADS', raising=False)
+    # Four whatever the machine, which may have fewer: the count is checked, not the machine.
+    monkeypatch.setattr(masking, 'availableCores', lambda: 8)
+    path = tmp_path / 'wide.db'
+    connection = sqlite3.connect(path)
+    connection.execute('PRAGMA journal_mode=WAL')
+    connection.execute('create table source (id integer primary key, name text)')
+    connection.executemany('insert into source values (?, ?)', [(index, 'name{}'.format(index % 700)) for index in range(3000)])
+    connection.execute('create table one (id integer primary key, name text)')
+    connection.execute('create table four (id integer primary key, name text)')
+    connection.commit()
+    connection.close()
+    databases = {'lite': DatabaseConnectionConfig(type=DatabaseType.SQLITE, database=str(path))}
+
+    rows = {}
+    for table, threads in (('one', 1), ('four', 4)):
+        jobsFile = Configuration.validateJobConfiguration({'workers': 1, 'maskingThreads': threads, 'jobs': {
+            table: _sqliteJob(databases, targetTableFinal=table, chunkSize=1000,
+                              masking={'key': 'a-threads-masking-key', 'columns': {'id': 'key', 'name': 'key'}})}}, DataJobsFile)
+        with _warningsFromThePackage() as _, _infoFromThePackage() as messages:
+            assert runDataJobs(jobsFile=jobsFile, databaseConfiguration=databases, memory=FileMemory(tmp_path / (table + '.yaml'))).succeeded
+        assert '{}: masking with {} thread(s) (1 job(s) running'.format(table, threads) in ' '.join(messages)
+        connection = sqlite3.connect(path)
+        rows[table] = connection.execute('select id, name from {} order by id'.format(table)).fetchall()
+        connection.close()
+
+    assert len(rows['one']) == 3000 and rows['four'] == rows['one']
+
+
+@contextlib.contextmanager
+def _infoFromThePackage() -> Iterator[List[str]]:
+
+    messages: List[str] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            messages.append(record.getMessage())
+
+    handler = _Collect(level=logging.INFO)
+    packageLogger = logging.getLogger('bauta')
+    packageLogger.addHandler(handler)
+    try:
+        yield messages
+    finally:
+        packageLogger.removeHandler(handler)
+
+
+@pytest.mark.skipif(__import__('bauta.masking', fromlist=['nativeVersion']).nativeVersion() is None, reason='needs the native masker')
+def test_each_job_shares_the_cores_with_the_jobs_running_alongside_it(tmp_path, sqliteDatabase, monkeypatch):
+    """Decided as each job starts, not once a cycle: two jobs side by side take
+    half the cores each, and the one after them, running alone, takes them all.
+    """
+    import bauta.masking as masking
+    import bauta.runner as runner
+
+    monkeypatch.setenv('BAUTA_MASKING_THREADS', 'auto')
+    monkeypatch.setattr(masking, 'availableCores', lambda: 8)
+    monkeypatch.setattr(runner, 'availableCores', lambda: 8)
+
+    path = sqliteDatabase['lite'].database
+    connection = sqlite3.connect(path)
+    for table in ('first', 'second', 'after'):
+        connection.execute('create table {} (id integer primary key, name text)'.format(table))
+    connection.commit()
+    connection.close()
+
+    jobs = {'first': _maskedSqliteJob(sqliteDatabase, targetTableFinal='first'),
+            'second': _maskedSqliteJob(sqliteDatabase, targetTableFinal='second'),
+            'after': _maskedSqliteJob(sqliteDatabase, targetTableFinal='after', predecessors=['first', 'second'])}
+
+    with _infoFromThePackage() as messages:
+        assert _runJobs(jobs, sqliteDatabase, tmp_path, workers=2).succeeded
+
+    started = {message.split(':')[0]: message for message in messages if ': masking with ' in message}
+    assert 'masking with 4 thread(s) (2 job(s) running' in started['first']
+    assert 'masking with 4 thread(s) (2 job(s) running' in started['second']
+    assert 'masking with 8 thread(s) (1 job(s) running' in started['after']
+
+
+def test_masking_threads_default_to_one_and_refuse_more_than_the_cores(tmp_path, sqliteDatabase, monkeypatch):
+    import bauta.masking as masking
+
+    monkeypatch.delenv('BAUTA_MASKING_THREADS', raising=False)
+    monkeypatch.setattr(masking, 'availableCores', lambda: 4)
+
+    assert Configuration.validateJobConfiguration({'workers': 1, 'jobs': {}}, DataJobsFile).maskingThreads == 1
+
+    tooMany = Configuration.validateJobConfiguration({'workers': 1, 'maskingThreads': 5, 'jobs': {'masked': _maskedSqliteJob(sqliteDatabase)}},
+                                                     DataJobsFile)
+    with pytest.raises(ConfigurationError, match='maskingThreads is 5, but this machine has 4 core'):
+        runDataJobs(jobsFile=tooMany, databaseConfiguration=sqliteDatabase, memory=FileMemory(tmp_path / 'memory.yaml'))
+
+    monkeypatch.setenv('BAUTA_MASKING_THREADS', 'lots')
+    with pytest.raises(ConfigurationError, match='BAUTA_MASKING_THREADS must be a number or auto'):
+        runDataJobs(jobsFile=tooMany, databaseConfiguration=sqliteDatabase, memory=FileMemory(tmp_path / 'memory.yaml'))

@@ -10,15 +10,15 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from multiprocessing.connection import wait as waitForAny
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, Iterable, Iterator, List, Mapping, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, Callable, Deque, Dict, Iterable, Iterator, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
 
 from .configuration import ConfigurationError, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, InsertStrategy
 from .database import Database
 from .dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 from .log import LOGGER_NAME, ConnectionForwarder, Log, forwardToConnection, handleForwardedRecord
 from . import masking as maskingModule
-from .masking import (BoundMasking, MaskingError, MaskingPlan, buildMaskingManifest, keyFingerprint, maskingIdentity,
-                      maskingImplementation, splitMaskingIdentity)
+from .masking import (BoundMasking, MaskingError, MaskingPlan, availableCores, buildMaskingManifest, keyFingerprint, maskingIdentity,
+                      maskingImplementation, maskingThreadsFor, setMaskingThreads, splitMaskingIdentity)
 from .memory import MemoryBackend
 from .scrubbing import describeError
 from .transform import TransformError, Transformer, TransformResolutionError, resolveTransformer, Transform
@@ -484,12 +484,13 @@ def _requireWatermarkCapableMemory(jobsFile: DataJobsFile, memory: MemoryBackend
 
 
 def _jobProcess(connection: Any, logLevel: int, job: str, jobConfig: DataJobConfig,
-                databaseConfiguration: Dict[str, DatabaseConnectionConfig], memory: MemoryBackend) -> None:
+                databaseConfiguration: Dict[str, DatabaseConnectionConfig], memory: MemoryBackend, maskingThreads: int = 1) -> None:
     """The whole life of one job's process: run the job, and send its log
     records and then its outcome back on `connection`, which it alone writes to.
     """
 
     forwarder = _initializeWorker(connection, logLevel)
+    setMaskingThreads(maskingThreads)
     forwarder.send('outcome', _runDataJob(job, jobConfig, databaseConfiguration, memory))
     connection.close()
 
@@ -549,7 +550,7 @@ class _JobProcess:
     """
 
     def __init__(self, job: str, jobConfig: DataJobConfig, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
-                 memory: MemoryBackend, logLevel: int) -> None:
+                 memory: MemoryBackend, logLevel: int, maskingThreads: int = 1) -> None:
         self.job = job
         self.startedAt = time.time()
         self.deadline = self.startedAt + jobConfig.timeoutSeconds if jobConfig.timeoutSeconds else None
@@ -559,7 +560,7 @@ class _JobProcess:
         self._connection, sendingEnd = PROCESS_CONTEXT.Pipe(duplex=False)
         self.process = PROCESS_CONTEXT.Process(
             target=_jobProcess, name='bauta {}'.format(job), daemon=True,
-            args=(sendingEnd, logLevel, job, jobConfig, databaseConfiguration, memory))
+            args=(sendingEnd, logLevel, job, jobConfig, databaseConfiguration, memory, maskingThreads))
         self.process.start()
         sendingEnd.close()
 
@@ -669,12 +670,18 @@ class _JobProcess:
 
 
 def _runCycle(dependencyGraph: DependencyGraph, workers: int, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
-              memory: MemoryBackend, termination: Dict[str, bool], logLevel: int) -> None:
+              memory: MemoryBackend, termination: Dict[str, bool], logLevel: int, maskingThreads: Union[str, int] = 1) -> None:
     """Runs one cycle's jobs to completion, each as soon as its predecessors
     finish and one of the `workers` slots is free.
+
+    `maskingThreads` is shared out as each job starts, between it and the jobs
+    that will run alongside it: those already running and those starting with
+    it. So the last job of a cycle, running alone, gets every core. A running
+    job keeps its share; cores freed after it started go to the next to start.
     """
 
     running: List[_JobProcess] = []
+    native = maskingModule.nativeVersion() is not None
 
     try:
         while not dependencyGraph.finished:
@@ -682,8 +689,15 @@ def _runCycle(dependencyGraph: DependencyGraph, workers: int, databaseConfigurat
             if termination['terminating']:
                 dependencyGraph.skipNotStarted('the run was stopped by a signal before this job started')
             else:
-                for job in dependencyGraph.takeReady(limit=workers - len(running)):
-                    running.append(_JobProcess(job, dependencyGraph.activeJobs[job], databaseConfiguration, memory, logLevel))  # type: ignore[arg-type]
+                starting = dependencyGraph.takeReady(limit=workers - len(running))
+                alongside = len(running) + len(starting)
+                for job in starting:
+                    jobConfig = dependencyGraph.activeJobs[job]
+                    threads = maskingThreadsFor(maskingThreads, alongside)
+                    if native and getattr(jobConfig, 'masking', None) is not None:
+                        logger.info('{}: masking with {} thread(s) ({} job(s) running, {} core(s))'.format(job, threads, alongside, availableCores()),
+                                    extra={'job': job})
+                    running.append(_JobProcess(job, jobConfig, databaseConfiguration, memory, logLevel, threads))  # type: ignore[arg-type]
 
             if not running:
                 # Nothing running and nothing startable means every job is
@@ -733,6 +747,10 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
 
     if jobsFile.workers < 1:
         raise ConfigurationError('workers must be at least 1, got {}'.format(jobsFile.workers))
+    try:
+        maskingModule.effectiveMaskingThreads(jobsFile.maskingThreads)
+    except ValueError as error:
+        raise ConfigurationError(str(error)) from None
 
     Log(logFile=logFile, level=logLevel, logFormat=logFormat)
     logger.info('Starting data job runner with {} worker(s)'.format(jobsFile.workers))
@@ -743,7 +761,7 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
             dependencyGraph = DependencyGraph(jobs=jobsFile.jobs, memory=memory.read())
             logger.info('Starting cycle with {} active job(s)'.format(len(dependencyGraph.activeJobs)))
 
-            _runCycle(dependencyGraph, jobsFile.workers, databaseConfiguration, memory, termination, logLevel)
+            _runCycle(dependencyGraph, jobsFile.workers, databaseConfiguration, memory, termination, logLevel, jobsFile.maskingThreads)
             _logCycleSummary(dependencyGraph)
 
             if onCycle is not None:

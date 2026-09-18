@@ -1,0 +1,48 @@
+# The wide job demo.py runs: 25 masked columns, where masking rather than the
+# database sets the pace -- the case several cores are for. Four groups of the
+# same mix (two references kept one-to-one with key, an email, two tokens
+# hashed, a phone number), and one more reference.
+workers: 1
+jobs:
+  maskAccounts:
+    active: true
+    sourceDatabase: production
+    sourceQuery: >-
+      select id, customer_ref_1, account_ref_1, email_1, api_token_1, session_secret_1, phone_1,
+      customer_ref_2, account_ref_2, email_2, api_token_2, session_secret_2, phone_2, customer_ref_3,
+      account_ref_3, email_3, api_token_3, session_secret_3, phone_3, customer_ref_4, account_ref_4,
+      email_4, api_token_4, session_secret_4, phone_4, order_ref
+      from accounts
+    targetDatabase: staging
+    targetTableFinal: accounts
+    insertStrategy: upsert
+    chunkSize: 5000
+    masking:
+      key: ${MASKING_KEY}
+      columns:
+        id:               keep
+        customer_ref_1:   key
+        account_ref_1:    key
+        email_1:          email
+        api_token_1:      hash
+        session_secret_1: hash
+        phone_1:          digits
+        customer_ref_2:   key
+        account_ref_2:    key
+        email_2:          email
+        api_token_2:      hash
+        session_secret_2: hash
+        phone_2:          digits
+        customer_ref_3:   key
+        account_ref_3:    key
+        email_3:          email
+        api_token_3:      hash
+        session_secret_3: hash
+        phone_3:          digits
+        customer_ref_4:   key
+        account_ref_4:    key
+        email_4:          email
+        api_token_4:      hash
+        session_secret_4: hash
+        phone_4:          digits
+        order_ref:        key

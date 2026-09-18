@@ -1,6 +1,7 @@
 """Keeps example/native-masking/demo.py from rotting: it runs the comparison on a
-small table, and checks every run produced the same copy -- all four where the
-Rust extension is installed, the two Python ones where it isn't.
+small table, and checks every run produced the same copy of its table -- all
+eight runs where the Rust extension is installed, the two Python ones where it
+isn't.
 """
 import importlib.util
 import os
@@ -12,7 +13,7 @@ import pytest
 
 DEMO_PATH = Path(__file__).resolve().parents[1] / 'example' / 'native-masking' / 'demo.py'
 PREVIOUS: dict = {}
-ENVIRONMENT = ('NATIVE_DEMO_PRODUCTION_PATH', 'NATIVE_DEMO_STAGING_PATH', 'BAUTA_NATIVE', 'BAUTA_PIPELINE', 'MASKING_KEY')
+ENVIRONMENT = ('NATIVE_DEMO_PRODUCTION_PATH', 'NATIVE_DEMO_STAGING_PATH', 'BAUTA_NATIVE', 'BAUTA_PIPELINE', 'BAUTA_MASKING_THREADS', 'MASKING_KEY')
 
 
 @pytest.fixture(scope='module')
@@ -28,7 +29,7 @@ def demoRun(tmp_path_factory):
     try:
         specification.loader.exec_module(module)
         os.environ.pop('MASKING_KEY', None)
-        yield module.main(workingDirectory=workingDirectory, rows=2000), workingDirectory
+        yield module.main(workingDirectory=workingDirectory, rows=2000, wideRows=3000), workingDirectory
     finally:
         del sys.modules['native_masking_demo']
         for name, value in previous.items():
@@ -57,9 +58,11 @@ def test_every_run_makes_the_same_copy(demoRun):
     if observed['nativeVersion'] is None:
         assert set(observed['seconds']) == python
     else:
-        assert set(observed['seconds']) == python | {'rust-in-turn', 'rust-overlapped'}
+        assert set(observed['seconds']) == python | {'rust-in-turn', 'rust-overlapped', 'wide-rust-in-turn', 'wide-rust-overlapped',
+                                                     'wide-rust-in-turn-cores', 'wide-rust-overlapped-cores'}
 
 
 def test_the_demo_restores_the_variables_it_sets(demoRun):
     assert os.environ.get('BAUTA_PIPELINE') == PREVIOUS['BAUTA_PIPELINE']
     assert os.environ.get('BAUTA_NATIVE') == PREVIOUS['BAUTA_NATIVE']
+    assert os.environ.get('BAUTA_MASKING_THREADS') == PREVIOUS['BAUTA_MASKING_THREADS']

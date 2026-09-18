@@ -26,6 +26,7 @@ env/
 
 # what each example writes when it runs: databases, run state, logs
 example/*/transaction/
+example/*/transaction.lock
 
 # Rust build artifacts for the optional native masker
 mask-rs/target/

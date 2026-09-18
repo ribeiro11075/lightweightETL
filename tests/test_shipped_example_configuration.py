@@ -122,11 +122,13 @@ def test_each_demo_configuration_validates(demoDirectory):
         assert not (demoDirectory / 'jobs.yaml').exists()
         return
 
-    with open(demoDirectory / 'jobs.yaml') as file:
-        jobsFile = Configuration.validateJobConfiguration(expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader)), DataJobsFile)
+    # jobs.yaml, and any other jobs file a demo runs alongside it
+    for jobsPath in sorted(demoDirectory.glob('jobs*.yaml')):
+        with open(jobsPath) as file:
+            jobsFile = Configuration.validateJobConfiguration(expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader)), DataJobsFile)
 
-    Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databases))
+        Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databases))
 
-    assert jobsFile.jobs
-    if 'masking' in demoDirectory.parent.name:
-        assert all(job.masking is not None for job in jobsFile.jobs.values())
+        assert jobsFile.jobs, jobsPath.name
+        if 'masking' in demoDirectory.parent.name:
+            assert all(job.masking is not None for job in jobsFile.jobs.values()), jobsPath.name

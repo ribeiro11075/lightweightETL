@@ -314,3 +314,50 @@ fn cheap_strategies_match_python() {
     assert!(compared > 150, "only {compared} cheap-strategy vectors compared");
     println!("hash/email/digits: {compared} vectors compared");
 }
+
+
+#[test]
+fn fake_strategies_match_python() {
+    use bauta_core::{FakeKind, FakeLists, FakeStrategy};
+
+    let vectors = vectors();
+    let hash = keyedHash(&vectors);
+    let strings = |value: &Value| -> Vec<String> { value.as_array().unwrap().iter().map(|item| item.as_str().unwrap().to_owned()).collect() };
+    let listsFor = |locale: &str| -> FakeLists {
+        let lists = &vectors["fakeLists"][locale];
+        FakeLists {
+            firstNames: strings(&lists["firstNames"]),
+            lastNames: strings(&lists["lastNames"]),
+            cities: strings(&lists["cities"]),
+            streets: strings(&lists["streets"]),
+            streetKinds: strings(&lists["streetKinds"]),
+            address: lists["address"].as_str().unwrap().to_owned(),
+            companySuffixes: strings(&lists["companySuffixes"]),
+            companyWords: strings(&lists["companyWords"]),
+        }
+    };
+
+    let mut compared = 0;
+    for (name, cases) in vectors["strategies"].as_object().unwrap() {
+        let Some((strategyName, options)) = name.split_once(' ') else { continue };
+        let Some(kind) = FakeKind::parse(strategyName) else { continue };
+        let options: Value = serde_json::from_str(options).unwrap();
+        let locale = options.get("locale").and_then(Value::as_str).unwrap_or("default");
+        let maxLength = options.get("maxLength").and_then(Value::as_u64).map(|length| length as usize);
+        let strategy = FakeStrategy::new(kind, listsFor(locale), maxLength).unwrap();
+
+        for case in cases.as_array().unwrap() {
+            // Text and integers are keyed on their UTF-8 and decimal forms; the
+            // rest (UUIDs, bools) are Python's, and so is None.
+            let bytes = match case["type"].as_str().unwrap() {
+                "str" | "int" => case["value"].as_str().unwrap().as_bytes().to_vec(),
+                _ => continue,
+            };
+            assert_eq!(strategy.mask(&hash, &bytes), case["masked"].as_str().unwrap(), "{name}: {:?}", case["value"]);
+            compared += 1;
+        }
+    }
+
+    // Six strategies, each by default, with maxLength, and in every locale.
+    assert!(compared > 2_000, "compared only {compared}");
+}

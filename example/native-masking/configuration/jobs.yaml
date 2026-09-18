@@ -1,5 +1,5 @@
-# The job demo.py runs twice, once with each masker. Five of its six columns
-# use strategies the native masker covers; fakeName stays in Python either way.
+# The narrow job demo.py runs in Python and in Rust: six masked columns, whose
+# strategies the native masker all covers, fakeName included.
 workers: 1
 jobs:
   maskCustomers:

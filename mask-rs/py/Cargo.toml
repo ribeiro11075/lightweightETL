@@ -8,8 +8,19 @@ license.workspace = true
 [lib]
 name = "bauta_rs"
 crate-type = ["cdylib"]
+# Tested from Python (tests/test_nativeMasking.py), which it needs to run: a
+# test binary can't link Python's symbols, which only the interpreter provides.
+test = false
+doctest = false
 
 [dependencies]
 bauta-core = { path = "../core" }
 pyo3 = { version = "0.29", features = ["extension-module", "abi3-py310", "num-bigint"] }
 num-bigint = "0.4"
+# Masks a chunk's distinct values across cores; see Masker::maskColumn.
+rayon = "1.10"
+# The extension's own allocations only -- Python keeps its allocator. The
+# system allocators serialise the many small allocations masking makes across
+# threads: this is 30% faster on one core on Linux, 44% on macOS, and what lets
+# masking scale past four.
+mimalloc = { version = "0.1", default-features = false }

@@ -17,7 +17,7 @@ The walkthrough runs the `bauta` command itself. The other demos call the Python
 | [`walkthrough/`](#walkthrough) | the whole workflow, through the commands a person would type |
 | [`incremental/`](#incremental) | streaming, and incremental loads that extract only what changed |
 | [`masking/`](#masking) | masking, discovery and subsetting, from Python |
-| [`native-masking/`](#native-masking) | the same job masked in Python and in Rust, in turn and overlapped: the speed, and identical results |
+| [`native-masking/`](#native-masking) | Python against Rust on a narrow table, and Rust on one core against all of them on a wide one: the speed, and identical results |
 | [`starter/`](#starter) | not a demo: a configuration to copy for your own databases |
 
 
@@ -77,23 +77,37 @@ Tested by `tests/test_masking_demo.py`.
 ## native-masking
 
 ```
-python example/native-masking/demo.py            # 100,000 customers
-python example/native-masking/demo.py 1000000    # or as many as you like
+python example/native-masking/demo.py                  # 100,000 narrow rows and 1,000,000 wide ones: about 2½ minutes
+python example/native-masking/demo.py 100000 200000    # the same comparison, quicker
 ```
 
-Runs one masked job four times, each into a staging copy of its own: masked in Python or in Rust (the [native masker](../docs/masking.md#the-native-masker), `bauta-rs`), with reading, masking and writing either taking turns or overlapped. `BAUTA_NATIVE` and `BAUTA_PIPELINE` set each combination; by default a job overlaps only with Rust. It prints a table of the four, and checks every copy is identical:
+Masks two tables in Python and in Rust (the [native masker](../docs/masking.md#the-native-masker), `bauta-rs`), each run into a staging copy of its own, and checks every copy of a table is identical.
+
+A narrow table, six masked columns, where writing to the database sets the pace. Reading, masking and writing take turns or overlap (`BAUTA_PIPELINE`), in Python or in Rust (`BAUTA_NATIVE`):
 
 ```
-                        seconds   rows a second  vs Python in turn
-Python, in turn             7.4          13,563               1.0x
-Python, overlapped          7.3          13,644               1.0x
-Rust, in turn               2.4          41,783               3.1x
-Rust, overlapped            1.9          53,486               3.9x
+Narrow table: 100,000 rows, 6 masked columns
+                               seconds   rows a second     vs first
+Python, in turn                    7.5          13,309         1.0x
+Python, overlapped                 7.5          13,351         1.0x
+Rust, in turn                      1.8          54,742         4.1x
+Rust, overlapped                   1.3          78,786         5.9x
 ```
 
-Overlapping gains little for Python, whose masking leaves no wait worth hiding, and more for Rust. Against a remote database, where each round trip is a real wait, it gains more still.
+A wide table, 25 masked columns, where masking sets the pace. Rust masks on one core or on all of them (`BAUTA_MASKING_THREADS`):
 
-The Rust extension is optional. Without it, the demo runs the two Python runs and says how to install it: with Rust 1.83 or newer, `pip install ./mask-rs/py` from the repository root.
+```
+Wide table: 1,000,000 rows, 25 masked columns
+                               seconds   rows a second     vs first
+Rust, in turn                     46.4          21,529         1.0x
+Rust, overlapped                  39.5          25,336         1.2x
+Rust, in turn, all cores          19.4          51,669         2.4x
+Rust, overlapped, all cores       13.6          73,366         3.4x
+```
+
+Ten cores, an M1 Pro. Overlapping gains little for Python, whose masking leaves no wait worth hiding, and more for Rust. More cores gain little on the narrow table, whose time goes to writing, and the most on the wide one. Against a remote database, where each round trip is a real wait, overlapping gains more still.
+
+The Rust extension is optional. Without it, the demo runs the two Python runs and says how to install it: with Rust 1.83 or newer, `pip install ./mask-rs/py` from the repository root. One run at a time: each empties `transaction/` first, so a second refuses to start while one is running.
 
 Tested by `tests/test_native_masking_demo.py`.
 

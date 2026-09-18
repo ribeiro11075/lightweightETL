@@ -159,9 +159,10 @@ jobs:
 | `memory` | optional, `memory.yaml` | Where the CLI keeps run state: a file relative to this one (`../transaction/memory.yaml` keeps it out of the configuration directory), or a [table](#tables). `--memory FILE` or `--memory-database ALIAS` overrides it. |
 | `history` | optional, none | Where `run` records each job's outcome after every cycle, and `bauta history` reads it: a JSON-lines file relative to this one, or a [table](#tables). `--history FILE` or `--history-database ALIAS` overrides it. See [run history](operations.md#run-history). |
 | `manifest` | optional, none | Where `run` writes its [masking manifest](masking.md#the-manifest), and `verify-manifest` reads it: a file relative to this one, replaced each run, or a [table](#tables), which keeps every run's. `--manifest FILE` or `--manifest-database ALIAS` overrides it. |
+| `maskingThreads` | optional, `1` | Threads the [native masker](masking.md#the-native-masker) spreads each job's chunks over: a number, up to the cores available (a container's CPU limit), or `auto`, which shares the cores as each job starts with the jobs running alongside it. More than the cores is refused by `validate` and `run`. Results are the same for any count. `BAUTA_MASKING_THREADS` overrides it. |
 | `jobs` | required | A map of job name to job definition. |
 
-`validate` prints where all three resolve.
+`validate` prints where all three resolve, and how many masking threads a run would use.
 
 #### Tables
 

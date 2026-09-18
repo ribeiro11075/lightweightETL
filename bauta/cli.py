@@ -459,6 +459,13 @@ def _commandValidate(arguments: argparse.Namespace, log: Log) -> int:
         except ConfigurationError as error:
             problems.append('{}: {}'.format(alias, error))
 
+    from .masking import effectiveMaskingThreads
+
+    try:
+        effectiveMaskingThreads(jobsFile.maskingThreads)
+    except ValueError as error:
+        problems.append(str(error))
+
     if problems:
         raise ConfigurationError('invalid configuration:\n' + '\n'.join(problems))
 
@@ -467,6 +474,20 @@ def _commandValidate(arguments: argparse.Namespace, log: Log) -> int:
     for setting, missing in (('history', 'not recorded'), ('manifest', 'not written')):
         location = _resolveLocation(arguments, setting, getattr(jobsFile, setting))
         print('{}: {}'.format(setting, _describeLocation(location) if location else missing))
+
+    from .masking import MASKING_THREADS_VARIABLE, availableCores, maskingThreadsFor, nativeVersion
+
+    if any(job.masking is not None for job in jobsFile.jobs.values()):
+        if nativeVersion() is None:
+            print('masking: in Python, one thread per job (pip install "bauta[native]" to use more)')
+        else:
+            concurrent = max(1, min(jobsFile.workers, sum(job.active for job in jobsFile.jobs.values())))
+            source = '${}={}'.format(MASKING_THREADS_VARIABLE, os.environ[MASKING_THREADS_VARIABLE]) if os.environ.get(MASKING_THREADS_VARIABLE) \
+                else 'maskingThreads: {}'.format(jobsFile.maskingThreads)
+            shared, alone = maskingThreadsFor(jobsFile.maskingThreads, concurrent), maskingThreadsFor(jobsFile.maskingThreads, 1)
+            print('masking: bauta-rs {}, {} thread(s) per job ({}; {} core(s)){}'.format(
+                nativeVersion(), shared if shared == alone else '{} to {}'.format(shared, alone), source, availableCores(),
+                '' if shared == alone else ': {} with {} jobs running, {} for a job running alone'.format(shared, concurrent, alone)))
 
     rulesPath, rulesFile = _discoveryRulesFile(arguments)
     if rulesFile is None:

@@ -7,7 +7,9 @@
 //! One call per column rather than per value. The interpreter is entered once
 //! for the batch, and the work between the conversions runs with the GIL
 //! released -- which is what lets a masking thread overlap with a reader and a
-//! writer, and, later, with other masking threads.
+//! writer, and spread a chunk's values over several cores (`setThreads`).
+//! Every mask depends on its value alone, so neither the thread count nor the
+//! cache changes a result: only how soon it arrives.
 //!
 //! Values this crate does not handle are not errors. `Decimal`, `UUID`, dates,
 //! bytes and non-ASCII text come back marked, and the Python layer masks those
@@ -16,6 +18,9 @@
 #![allow(non_snake_case)]
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
+
+use rayon::prelude::*;
 
 use num_bigint::BigInt;
 use pyo3::exceptions::PyValueError;
@@ -23,7 +28,25 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PyString};
 
 use bauta_core::cheap;
-use bauta_core::{Charset, FpeStrategy, KeyStrategy, KeyedHash, MaskError};
+use bauta_core::{Charset, FakeKind, FakeLists, FakeStrategy, FpeStrategy, KeyStrategy, KeyedHash, MaskError};
+
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// Values a `key`, `fpe` or `fake*` column remembers across chunks, and the
+/// longest text it remembers. Foreign keys and statuses are mostly repeats, but seldom
+/// within one chunk; the cache keeps the first values it sees rather than
+/// churning, so a column of distinct values costs a lookup, not an eviction.
+const CACHE_ENTRIES: usize = 65_536;
+const CACHE_MAXIMUM_TEXT: usize = 64;
+
+/// Distinct values in a call below which splitting it across threads costs
+/// more than it saves.
+const PARALLEL_MINIMUM: usize = 256;
+
+/// The pool masking runs on in this process, or None for the calling thread
+/// alone. Set by `setThreads`; one per process, shared by its columns.
+static POOL: RwLock<Option<Arc<rayon::ThreadPool>>> = RwLock::new(None);
 
 /// Why a position came back unmasked. The Python layer turns REFUSED into
 /// MaskingError with the message alongside it, and FALLBACK into a call to its
@@ -43,6 +66,7 @@ enum Input {
     Bool,
 }
 
+#[derive(Clone)]
 enum Output {
     Null,
     Int(BigInt),
@@ -57,6 +81,7 @@ enum Strategy {
     Hash { length: usize, prefix: String },
     Email { length: usize, mailDomain: String, keepDomain: bool },
     Digits { keepLeading: usize, keepTrailing: usize },
+    Fake(Box<FakeStrategy>),
 }
 
 impl Strategy {
@@ -68,6 +93,7 @@ impl Strategy {
             Strategy::Hash { .. } => "hash",
             Strategy::Email { .. } => "email",
             Strategy::Digits { .. } => "digits",
+            Strategy::Fake(_) => "fake",
         }
     }
 
@@ -77,6 +103,11 @@ impl Strategy {
             (_, Input::Other) => return Output::Fallback,
 
             (Strategy::Key(_) | Strategy::Fpe(_), Input::Bool) => Err(MaskError::notABool(self.name())),
+            // Keyed on the bytes Python keys them on: text as UTF-8, whatever
+            // its script, and an integer's decimal digits.
+            (Strategy::Fake(strategy), Input::Text(value)) => Ok(Output::Text(strategy.mask(hash, value.as_bytes()))),
+            (Strategy::Fake(strategy), Input::Int(value)) => Ok(Output::Text(strategy.mask(hash, value.to_string().as_bytes()))),
+
             (Strategy::Digits { .. }, Input::Bool) => Err(MaskError::Refused(
                 "the digits strategy needs text or an integer, got bool".to_owned(),
             )),
@@ -120,12 +151,45 @@ impl Strategy {
     }
 }
 
+/// A value as a cache or a batch's repeats know it.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum CacheKey {
+    Text(String),
+    Int(BigInt),
+}
+
+impl CacheKey {
+    fn of(input: &Input) -> Option<Self> {
+        match input {
+            Input::Text(text) => Some(CacheKey::Text(text.clone())),
+            Input::Int(number) => Some(CacheKey::Int(number.clone())),
+            _ => None,
+        }
+    }
+
+    fn remembered(&self) -> bool {
+        match self {
+            CacheKey::Text(text) => text.len() <= CACHE_MAXIMUM_TEXT,
+            CacheKey::Int(_) => true,
+        }
+    }
+}
+
+/// Where a position's answer comes from.
+enum Source {
+    Ready(Output),
+    Computed(usize),
+}
+
 /// One column's masker: the key, the domain and the strategy, built once and
 /// called per chunk.
 #[pyclass]
 struct Masker {
     hash: KeyedHash,
     strategy: Strategy,
+    /// Masks remembered across calls, for the strategies that cost enough to
+    /// be worth it; None for the rest.
+    cache: Option<Mutex<HashMap<CacheKey, Output>>>,
 }
 
 #[pymethods]
@@ -177,10 +241,34 @@ impl Masker {
                 keepLeading: number("keepLeading", 0)?,
                 keepTrailing: number("keepTrailing", 0)?,
             },
-            other => return Err(PyValueError::new_err(format!("no native masker for strategy {other:?}"))),
+            other => match FakeKind::parse(other) {
+                Some(kind) => {
+                    let list = |name: &str| -> PyResult<Vec<String>> {
+                        options.get_item(name)?.ok_or_else(|| PyValueError::new_err(format!("{other} needs {name}")))?.extract()
+                    };
+                    let lists = FakeLists {
+                        firstNames: list("firstNames")?,
+                        lastNames: list("lastNames")?,
+                        cities: list("cities")?,
+                        streets: list("streets")?,
+                        streetKinds: list("streetKinds")?,
+                        address: text("address", "")?,
+                        companySuffixes: list("companySuffixes")?,
+                        companyWords: list("companyWords")?,
+                    };
+                    let maxLength = match options.get_item("maxLength")? {
+                        Some(value) if !value.is_none() => Some(value.extract::<usize>()?),
+                        _ => None,
+                    };
+                    Strategy::Fake(Box::new(FakeStrategy::new(kind, lists, maxLength).map_err(PyValueError::new_err)?))
+                }
+                None => return Err(PyValueError::new_err(format!("no native masker for strategy {other:?}"))),
+            },
         };
 
-        Ok(Self { hash, strategy })
+        let cache = matches!(strategy, Strategy::Key(_) | Strategy::Fpe(_) | Strategy::Fake(_)).then(|| Mutex::new(HashMap::new()));
+
+        Ok(Self { hash, strategy, cache })
     }
 
     /// Masks one column.
@@ -209,32 +297,9 @@ impl Masker {
             });
         }
 
-        // Compute without it. Repeats within a batch are masked once: a foreign
-        // key or a status column is mostly repeats, and `key` and `fpe` cost
-        // tens of microseconds a value.
-        let outputs = py.detach(|| {
-            let mut seen: HashMap<&str, usize> = HashMap::new();
-            let mut outputs: Vec<Output> = Vec::with_capacity(inputs.len());
-
-            for (index, input) in inputs.iter().enumerate() {
-                if let Input::Text(text) = input {
-                    if let Some(first) = seen.get(text.as_str()) {
-                        outputs.push(match &outputs[*first] {
-                            Output::Text(masked) => Output::Text(masked.clone()),
-                            Output::Fallback => Output::Fallback,
-                            Output::Refused(message) => Output::Refused(message.clone()),
-                            Output::Null => Output::Null,
-                            Output::Int(number) => Output::Int(number.clone()),
-                        });
-                        continue;
-                    }
-                    seen.insert(text.as_str(), index);
-                }
-                outputs.push(self.strategy.maskOne(&self.hash, input));
-            }
-
-            outputs
-        });
+        // Compute without it: each distinct value once, from the cache where it
+        // can be, the rest across the pool.
+        let outputs = py.detach(|| self.maskInputs(&inputs));
 
         // Build results with it again.
         let masked = PyList::empty(py);
@@ -259,12 +324,110 @@ impl Masker {
     }
 }
 
+impl Masker {
+    fn maskInputs(&self, inputs: &[Input]) -> Vec<Output> {
+        let mut sources: Vec<Source> = Vec::with_capacity(inputs.len());
+        let mut work: Vec<usize> = Vec::new();
+        let mut firstOf: HashMap<CacheKey, usize> = HashMap::new();
+
+        {
+            let cache = self.cache.as_ref().map(|cache| cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+
+            for (index, input) in inputs.iter().enumerate() {
+                let Some(key) = CacheKey::of(input) else {
+                    // Nulls and values Python masks are cheap to answer here.
+                    sources.push(Source::Ready(self.strategy.maskOne(&self.hash, input)));
+                    continue;
+                };
+                if let Some(output) = cache.as_ref().and_then(|cache| cache.get(&key)) {
+                    sources.push(Source::Ready(output.clone()));
+                    continue;
+                }
+                let slot = *firstOf.entry(key).or_insert_with(|| {
+                    work.push(index);
+                    work.len() - 1
+                });
+                sources.push(Source::Computed(slot));
+            }
+        }
+
+        let mask = |index: &usize| self.strategy.maskOne(&self.hash, &inputs[*index]);
+        let pool = POOL.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+        let computed: Vec<Output> = match pool {
+            Some(pool) if work.len() >= PARALLEL_MINIMUM => pool.install(|| work.par_iter().map(mask).collect()),
+            _ => work.iter().map(mask).collect(),
+        };
+
+        if let Some(cache) = &self.cache {
+            let mut cache = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            for (slot, index) in work.iter().enumerate() {
+                if cache.len() >= CACHE_ENTRIES {
+                    break;
+                }
+                // Only answers: a refusal or a fallback is decided again, by
+                // whichever implementation meets it first.
+                if matches!(computed[slot], Output::Text(_) | Output::Int(_)) {
+                    if let Some(key) = CacheKey::of(&inputs[*index]).filter(CacheKey::remembered) {
+                        cache.insert(key, computed[slot].clone());
+                    }
+                }
+            }
+        }
+
+        sources
+            .into_iter()
+            .map(|source| match source {
+                Source::Ready(output) => output,
+                Source::Computed(slot) => computed[slot].clone(),
+            })
+            .collect()
+    }
+}
+
+/// The cores this process may use: a container's CPU quota on Linux, where
+/// Python's os.cpu_count() reports the host's.
+#[pyfunction]
+fn availableCores() -> usize {
+    std::thread::available_parallelism().map(|cores| cores.get()).unwrap_or(1)
+}
+
+/// How many threads mask a chunk in this process, 1 for the calling thread
+/// alone. Results are the same for any count.
+#[pyfunction]
+fn setThreads(threads: usize) -> PyResult<()> {
+    if threads == 0 {
+        return Err(PyValueError::new_err("threads must be at least 1"));
+    }
+    let pool = if threads == 1 {
+        None
+    } else {
+        let built = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .thread_name(|index| format!("bauta-mask-{index}"))
+            .build()
+            .map_err(|error| PyValueError::new_err(format!("could not start {threads} masking threads: {error}")))?;
+        Some(Arc::new(built))
+    };
+    *POOL.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = pool;
+
+    Ok(())
+}
+
+/// The masking threads in this process.
+#[pyfunction]
+fn threads() -> usize {
+    POOL.read().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().map_or(1, |pool| pool.current_num_threads())
+}
+
 #[pymodule]
 fn bauta_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add("FALLBACK", FALLBACK)?;
     module.add("REFUSED", REFUSED)?;
     module.add_class::<Masker>()?;
+    module.add_function(wrap_pyfunction!(availableCores, module)?)?;
+    module.add_function(wrap_pyfunction!(setThreads, module)?)?;
+    module.add_function(wrap_pyfunction!(threads, module)?)?;
 
     Ok(())
 }
