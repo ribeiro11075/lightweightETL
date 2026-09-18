@@ -1,10 +1,9 @@
-"""The example YAML under example/configuration/ is documentation that can rot.
+"""The example YAML under example/ is documentation that can rot.
 
-Running example/example_jobs.py used to validate it as a side effect; that
-script is gone now that the CLI is the supported entry point, so this takes over
-the job. It keeps docs/configuration.md honest -- a field renamed in
-configuration.py without the sample being updated fails here rather than in
-somebody's first five minutes with the tool.
+This keeps it honest: a field renamed in configuration.py without the samples
+being updated fails here rather than in somebody's first five minutes with the
+tool. The starter configuration is what people copy; each demo's configuration
+is what its script runs.
 """
 from pathlib import Path
 
@@ -14,7 +13,9 @@ import yaml
 from understudy_data.configuration import Configuration, ConfigurationError, DataJobsFile, expandEnvironmentVariables
 from understudy_data.transform import resolveTransformer
 
-CONFIGURATION_DIRECTORY = Path(__file__).resolve().parents[1] / 'example' / 'configuration'
+EXAMPLE_DIRECTORY = Path(__file__).resolve().parents[1] / 'example'
+CONFIGURATION_DIRECTORY = EXAMPLE_DIRECTORY / 'starter' / 'configuration'
+DEMO_CONFIGURATION_DIRECTORIES = sorted(path for path in EXAMPLE_DIRECTORY.glob('*/configuration') if path != CONFIGURATION_DIRECTORY)
 
 # The sample reads credentials from the environment, so validating it means
 # supplying them the way a deployment would. This list doubles as a check that
@@ -47,6 +48,7 @@ def test_the_shipped_jobs_configuration_validates(databaseAliases):
     Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=databaseAliases)
 
     assert jobsFile.jobs
+    assert jobsFile.memory == '../transaction/memory.yaml', 'the starter keeps run state out of its configuration'
 
 
 def test_the_sample_masked_jobs_share_a_domain_and_read_their_key_from_the_environment(databaseAliases):
@@ -62,19 +64,6 @@ def test_the_sample_masked_jobs_share_a_domain_and_read_their_key_from_the_envir
     assert keys
     for key in keys:
         assert key.startswith('${') and ':-' not in key, 'a masking key belongs in the environment, with no default: {}'.format(key)
-
-
-def test_the_masking_demo_configuration_validates_as_a_complete_config_directory():
-    maskingDirectory = CONFIGURATION_DIRECTORY / 'masking'
-
-    with open(maskingDirectory / 'database.yaml') as file:
-        databases = Configuration.validateDatabaseConfiguration(expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader)))
-    with open(maskingDirectory / 'jobs.yaml') as file:
-        jobsFile = Configuration.validateJobConfiguration(expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader)), DataJobsFile)
-
-    Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databases))
-
-    assert all(job.masking is not None for job in jobsFile.jobs.values())
 
 
 def test_every_transformer_the_sample_references_actually_resolves():
@@ -117,17 +106,27 @@ def test_the_sample_refuses_to_load_when_its_secrets_are_absent(monkeypatch):
         _load('database.yaml')
 
 
-def test_the_demo_configuration_validates_as_a_complete_config_directory():
-    """example/configuration/demo/ follows the same database.yaml-plus-jobs.yaml
-    layout that `--config DIR` expects, so it must validate as one.
-    """
-    demoDirectory = CONFIGURATION_DIRECTORY / 'demo'
+def test_every_demo_has_its_configuration():
+    assert {path.parent.name for path in DEMO_CONFIGURATION_DIRECTORIES} == {'incremental', 'masking', 'native-masking', 'walkthrough'}
 
+
+@pytest.mark.parametrize('demoDirectory', DEMO_CONFIGURATION_DIRECTORIES, ids=lambda path: path.parent.name)
+def test_each_demo_configuration_validates(demoDirectory):
+    """Each demo's configuration/ is laid out as `--config DIR` expects. The
+    walkthrough ships only database.yaml, since `subset` generates its jobs.
+    """
     with open(demoDirectory / 'database.yaml') as file:
         databases = Configuration.validateDatabaseConfiguration(expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader)))
+
+    if demoDirectory.parent.name == 'walkthrough':
+        assert not (demoDirectory / 'jobs.yaml').exists()
+        return
+
     with open(demoDirectory / 'jobs.yaml') as file:
         jobsFile = Configuration.validateJobConfiguration(expandEnvironmentVariables(yaml.load(file, Loader=yaml.FullLoader)), DataJobsFile)
 
     Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databases))
 
-    assert jobsFile.jobs['loadOrders'].watermarkColumn == 'updatedAt'
+    assert jobsFile.jobs
+    if 'masking' in demoDirectory.parent.name:
+        assert all(job.masking is not None for job in jobsFile.jobs.values())

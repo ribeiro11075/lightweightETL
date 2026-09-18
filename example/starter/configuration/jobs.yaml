@@ -1,8 +1,11 @@
 # Sample configuration -- placeholder table/column names, not a real deployment.
 # Replace with your own job definitions; database aliases must match
-# configuration/environment/database.yaml.
+# database.yaml beside this file.
 workers: 2
 cycleSleepSeconds: 0.5
+# Run state (last runs, watermarks), relative to this file: kept out of the
+# configuration, in a transaction/ folder beside it.
+memory: ../transaction/memory.yaml
 jobs:
   loadTable1:
     active: true

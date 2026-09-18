@@ -1,6 +1,7 @@
-# The jobs masking_demo.py runs: production customers and orders, masked on
+# The jobs demo.py runs: production customers and orders, masked on
 # their way into staging.
 workers: 2
+memory: ../transaction/memory.yaml
 jobs:
   maskCustomers:
     active: true

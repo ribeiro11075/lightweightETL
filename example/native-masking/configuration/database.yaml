@@ -1,0 +1,11 @@
+# The databases demo.py runs against: a throwaway production, and a staging
+# copy for each masker, so the two copies can be compared.
+#
+# Paths come from the environment because the demo picks them at run time. A
+# default is fine for a path -- never for a secret.
+production:
+  type: sqlite
+  database: ${NATIVE_DEMO_PRODUCTION_PATH:-production.db}
+staging:
+  type: sqlite
+  database: ${NATIVE_DEMO_STAGING_PATH:-staging.db}

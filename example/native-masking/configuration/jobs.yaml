@@ -1,0 +1,21 @@
+# The job demo.py runs twice, once with each masker. Five of its six columns
+# use strategies the native masker covers; fakeName stays in Python either way.
+workers: 1
+jobs:
+  maskCustomers:
+    active: true
+    sourceDatabase: production
+    sourceQuery: select id, email, phone, national_id, token, full_name from customers
+    targetDatabase: staging
+    targetTableFinal: customers
+    insertStrategy: upsert
+    chunkSize: 5000
+    masking:
+      key: ${MASKING_KEY}
+      columns:
+        id:          key
+        email:       email
+        phone:       digits
+        national_id: { strategy: key, charset: digits }
+        token:       { strategy: hash, prefix: tok_ }
+        full_name:   fakeName

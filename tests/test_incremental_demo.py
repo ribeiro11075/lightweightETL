@@ -1,4 +1,4 @@
-"""Keeps example/incremental_demo.py from rotting.
+"""Keeps example/incremental/demo.py from rotting.
 
 The sample YAML config is validated by test_shipped_example_configuration.py;
 this applies the same standard to the other half of example/. A showcase script
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-DEMO_PATH = Path(__file__).resolve().parents[1] / 'example' / 'incremental_demo.py'
+DEMO_PATH = Path(__file__).resolve().parents[1] / 'example' / 'incremental' / 'demo.py'
 
 
 @pytest.fixture(scope='module')
@@ -98,9 +98,9 @@ def test_the_demo_loads_its_job_from_the_shipped_configuration(demo):
 
 
 def test_the_demo_writes_only_inside_the_directory_it_is_given(demoRun):
-    """It defaults to example/memory/, so a caller that supplies a directory must
+    """It defaults to its transaction/ folder, so a caller that supplies a directory must
     get everything there -- otherwise running the tests litters the source tree.
     """
     _, workingDirectory = demoRun
 
-    assert {path.name for path in workingDirectory.iterdir()} == {'demo.db', 'memory.yaml', 'memory.yaml.lock', 'incremental.log'}
+    assert {path.name for path in workingDirectory.iterdir()} == {'demo.db', 'memory.yaml', 'memory.yaml.lock', 'demo.log'}

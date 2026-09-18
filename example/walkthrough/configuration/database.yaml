@@ -1,0 +1,9 @@
+# The databases the walkthrough runs against: SQLite files it builds in
+# transaction/. Every command runs from there, so these relative paths land in
+# it too. Only this file is written by hand; `subset` generates the jobs.
+production:
+  type: sqlite
+  database: production.db
+staging:
+  type: sqlite
+  database: staging.db

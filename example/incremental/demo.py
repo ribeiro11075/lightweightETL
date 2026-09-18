@@ -1,11 +1,12 @@
 """A runnable demonstration of streaming and incremental loads.
 
-    python example/incremental_demo.py
+    python example/incremental/demo.py
 
-Needs no server and no credentials. It loads its job from
-example/configuration/demo/ through the same path the CLI uses -- YAML, then
-${NAME} expansion, then validation -- builds a throwaway SQLite database, and
-runs the job three times so you can watch the watermark move.
+Needs no server and no credentials. It loads its job from configuration/ beside
+this script, the way the CLI does -- YAML, then ${NAME} expansion, then
+validation -- builds a throwaway SQLite database in transaction/, and runs the
+job three times so you can watch the watermark move. It prints the `understudy`
+command each run is equivalent to.
 
 The interesting moment is the second run. Between runs one already-loaded
 source row is edited *without* its updatedAt changing, and a new row is added.
@@ -17,21 +18,22 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 
-exampleDirectory = Path(__file__).resolve().parent
-sys.path.append(str(exampleDirectory.parent))
+demoDirectory = Path(__file__).resolve().parent
+sys.path.append(str(demoDirectory.parents[1]))
 
 from understudy_data import Configuration, Database, DataJobsFile, FileMemory, expandEnvironmentVariables, runDataJobs
 
-DEFAULT_WORKING_DIRECTORY = exampleDirectory / 'memory' / 'incremental_demo'
+DEFAULT_WORKING_DIRECTORY = demoDirectory / 'transaction'
 
-DEMO_CONFIGURATION_DIRECTORY = exampleDirectory / 'configuration' / 'demo'
+DEMO_CONFIGURATION_DIRECTORY = demoDirectory / 'configuration'
 
 
 def loadConfiguration(name: str) -> Any:
@@ -39,6 +41,34 @@ def loadConfiguration(name: str) -> Any:
 
     with open(DEMO_CONFIGURATION_DIRECTORY / name) as file:
         return expandEnvironmentVariables(yaml.safe_load(file))
+
+
+def showCommand(arguments: List[Any], environment: Optional[Dict[str, Any]] = None) -> None:
+    """Prints the `understudy` command that does what the next step does, with
+    paths relative to where this was run from, ready to paste into a shell.
+    """
+
+    def shown(value: Any) -> str:
+        text = os.path.relpath(value) if isinstance(value, Path) else str(value)
+        if "'" in text and not any(character in text for character in '"$`\\'):
+            return '"{}"'.format(text)
+        return shlex.quote(text)
+
+    # A variable, the command, or an option with its value: kept whole on a line.
+    pieces = ['{}={}'.format(name, shown(value)) for name, value in (environment or {}).items()]
+    pieces.append('understudy ' + shown(arguments[0]))
+    rest = [shown(argument) for argument in arguments[1:]]
+    while rest:
+        takesValue = len(rest) > 1 and not rest[1].startswith('--')
+        pieces.append(' '.join(rest[:2] if takesValue else rest[:1]))
+        rest = rest[2:] if takesValue else rest[1:]
+
+    lines = ['$']
+    for piece in pieces:
+        if len(lines[-1]) + len(piece) > 100 and lines[-1] != '$':
+            lines.append('   ')
+        lines[-1] += ' ' + piece
+    print('  ' + ' \\\n  '.join(lines))
 
 
 def describe(database: Database, memory: FileMemory, heading: str) -> Optional[str]:
@@ -66,7 +96,7 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY) -> List[Optional[st
     """
 
     memoryPath = workingDirectory / 'memory.yaml'
-    logPath = workingDirectory / 'incremental.log'
+    logPath = workingDirectory / 'demo.log'
 
     shutil.rmtree(workingDirectory, ignore_errors=True)
     workingDirectory.mkdir(parents=True, exist_ok=True)
@@ -92,6 +122,10 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY) -> List[Optional[st
             (2, 'second', '2026-01-02T00:00:00'),
             (3, 'third', '2026-01-03T00:00:00'),
             ], chunkSize=10)
+
+        print('Each run is the same as:')
+        showCommand(['run', '--config', DEMO_CONFIGURATION_DIRECTORY, '--log', logPath, '--log-level', 'debug', '--quiet'],
+                    {'DEMO_DB_PATH': workingDirectory / 'demo.db'})
 
         runDataJobs(jobsFile=jobsFile, databaseConfiguration=databaseConfiguration,
                      logFile=logPath, memory=memory, logLevel=logging.DEBUG)

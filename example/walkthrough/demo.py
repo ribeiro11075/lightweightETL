@@ -1,6 +1,6 @@
 """The whole workflow, end to end, through the same commands you would type.
 
-    python example/walkthrough.py
+    python example/walkthrough/demo.py
 
 Needs no server and no credentials. It builds a small shop's "production"
 database in SQLite -- customers with national ids and phone numbers, orders,
@@ -21,8 +21,10 @@ a safe staging copy of its Portuguese and Spanish customers:
                numbers never leave production, not even masked
 8. history     shows what ran
 
-Each command's output is printed as it runs, and the whole session is
-written to walkthrough.md next to the databases.
+It reads configuration/database.yaml beside this script, and writes everything
+else -- the databases, the generated jobs, run state, the manifest and history
+-- to transaction/. Each command's output is printed as it runs, and the whole
+session is written to transaction/walkthrough.md.
 """
 from __future__ import annotations
 
@@ -39,12 +41,14 @@ from typing import Any, Dict, List
 
 import yaml
 
-exampleDirectory = Path(__file__).resolve().parent
-sys.path.append(str(exampleDirectory.parent))
+demoDirectory = Path(__file__).resolve().parent
+sys.path.append(str(demoDirectory.parents[1]))
 
 from understudy_data.cli import main as cli  # noqa: E402
 
-DEFAULT_WORKING_DIRECTORY = exampleDirectory / 'memory' / 'walkthrough'
+DEFAULT_WORKING_DIRECTORY = demoDirectory / 'transaction'
+
+DATABASE_CONFIGURATION = demoDirectory / 'configuration' / 'database.yaml'
 
 # Throwaway keys for throwaway databases. Real ones are random, come from a
 # secret store, and are never written into a script.
@@ -152,13 +156,10 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY) -> Dict[str, Any]:
     """Runs the walkthrough, and returns what it observed so a test can check it."""
 
     shutil.rmtree(workingDirectory, ignore_errors=True)
-    configuration = workingDirectory / 'configuration'
-    configuration.mkdir(parents=True)
+    workingDirectory.mkdir(parents=True)
     production, staging = workingDirectory / 'production.db', workingDirectory / 'staging.db'
     buildProduction(production)
     sqlite3.connect(staging).close()
-    (configuration / 'database.yaml').write_text(
-        'production:\n  type: sqlite\n  database: {}\nstaging:\n  type: sqlite\n  database: {}\n'.format(production, staging))
 
     os.environ.setdefault('MASKING_KEY', DEMO_MASKING_KEY)
     os.environ.setdefault('UNDERSTUDY_MANIFEST_KEY', DEMO_SIGNING_KEY)
@@ -195,36 +196,39 @@ def _walkthrough(workingDirectory: Path, production: Path, staging: Path) -> Dic
         say('\n$ understudy {}\n{}\n(exit {})'.format(' '.join(_quoted(argument) for argument in arguments), shown, exitCode))
         return text
 
-    config = ['--config', 'configuration']
+    # The configuration stays where it is, and the CLI is pointed at it; what
+    # the commands generate stays here.
+    databases = ['--databases', os.path.relpath(DATABASE_CONFIGURATION, workingDirectory)]
+    jobs = databases + ['--jobs', 'jobs.yaml']
 
     say('# Walkthrough: a safe staging copy of production\n')
     say('Production has {} customers. Staging gets the Portuguese and Spanish ones, masked, with everything they reference.'.format(
         _count(production, 'customers')))
 
     say('\n## 1. Propose a policy')
-    command('discover', 'discover', *config, '--database', 'production', '--table', 'customers', '--target', 'staging')
+    command('discover', 'discover', *databases, '--database', 'production', '--table', 'customers', '--target', 'staging')
 
     say('\n## 2. Generate the subset, then review it')
-    command('subset', 'subset', *config, '--database', 'production', '--target', 'staging', '--root', 'customers',
-            '--where', "country IN ('PT', 'ES')", '--mask', '--output', 'configuration/generated.yaml')
-    decisions = review(Path('configuration/generated.yaml'), Path('configuration/jobs.yaml'))
+    command('subset', 'subset', *databases, '--database', 'production', '--target', 'staging', '--root', 'customers',
+            '--where', "country IN ('PT', 'ES')", '--mask', '--output', 'generated.yaml')
+    decisions = review(Path('generated.yaml'), Path('jobs.yaml'))
     say('Review decisions, recorded at the top of jobs.yaml:\n' + '\n'.join('- ' + decision for decision in decisions))
 
     say('\n## 3. Create staging\'s tables')
-    command('schema', 'schema', *config, '--database', 'production', '--target', 'staging', '--table', 'customers', '--related', '--apply')
+    command('schema', 'schema', *databases, '--database', 'production', '--target', 'staging', '--table', 'customers', '--related', '--apply')
 
     say('\n## 4. Audit the policy against production')
-    command('audit', 'audit', *config, '--connect', '--strict', show=60)
+    command('audit', 'audit', *jobs, '--connect', '--strict', show=60)
 
     say('\n## 5. Copy and mask')
-    command('run', 'run', *config, '--manifest', 'manifest.json', '--history', 'history.jsonl')
+    command('run', 'run', *jobs, '--manifest', 'manifest.json', '--history', 'history.jsonl')
     say('(Logs go to stderr, silenced here; the history below shows what ran.)')
 
     say('\n## 6. Check the manifest')
     command('verify-manifest', 'verify-manifest', 'manifest.json')
 
     say('\n## 7. Generate what may not be copied')
-    command('synthesize', 'synthesize', *config, '--database', 'staging', '--table', 'payment_cards:40', '--seed', '1', '--yes')
+    command('synthesize', 'synthesize', *databases, '--database', 'staging', '--table', 'payment_cards:40', '--seed', '1', '--yes')
 
     say('\n## 8. What ran')
     command('history', 'history', '--history', 'history.jsonl')

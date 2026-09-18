@@ -1,4 +1,4 @@
-"""Keeps example/masking_demo.py from rotting, as test_incremental_demo.py does
+"""Keeps example/masking/demo.py from rotting, as test_incremental_demo.py does
 for the other demo: it runs the script into a temporary directory and checks
 that each thing it claims to show actually happened.
 """
@@ -11,7 +11,7 @@ import pytest
 
 from understudy_data.dependencyGraph import JobStatus
 
-DEMO_PATH = Path(__file__).resolve().parents[1] / 'example' / 'masking_demo.py'
+DEMO_PATH = Path(__file__).resolve().parents[1] / 'example' / 'masking' / 'demo.py'
 ENVIRONMENT = ('MASKING_DEMO_PROD_PATH', 'MASKING_DEMO_STAGING_PATH', 'MASKING_KEY')
 
 
@@ -81,4 +81,4 @@ def test_the_subset_follows_the_foreign_key(demoRun):
 def test_the_demo_writes_only_inside_the_directory_it_is_given(demoRun):
     _, workingDirectory = demoRun
 
-    assert {path.name for path in workingDirectory.iterdir()} == {'prod.db', 'staging.db', 'memory.yaml', 'memory.yaml.lock', 'masking.log', 'manifest.json'}
+    assert {path.name for path in workingDirectory.iterdir()} == {'prod.db', 'staging.db', 'memory.yaml', 'memory.yaml.lock', 'demo.log', 'manifest.json'}

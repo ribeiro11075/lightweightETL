@@ -1,5 +1,6 @@
-# The job incremental_demo.py runs three times, to show the watermark moving.
+# The job demo.py runs three times, to show the watermark moving.
 workers: 1
+memory: ../transaction/memory.yaml
 jobs:
   loadOrders:
     active: true

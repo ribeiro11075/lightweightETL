@@ -1,4 +1,4 @@
-# The databases masking_demo.py runs against: two throwaway SQLite files, one
+# The databases demo.py runs against: two throwaway SQLite files, one
 # standing in for production and one for a staging copy.
 #
 # Paths come from the environment because the demo picks its working directory

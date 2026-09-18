@@ -1,4 +1,4 @@
-# The database incremental_demo.py runs against: a throwaway SQLite file.
+# The database demo.py runs against: a throwaway SQLite file.
 #
 # Its location comes from the environment, because the demo writes to a working
 # directory it chooses at run time (and the test that exercises the demo points

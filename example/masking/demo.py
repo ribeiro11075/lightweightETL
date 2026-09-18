@@ -1,10 +1,10 @@
 """A runnable demonstration of masking, discovery and subsetting.
 
-    python example/masking_demo.py
+    python example/masking/demo.py
 
-Needs no server and no credentials. It builds two throwaway SQLite databases,
-one standing in for production and one for staging, loads its jobs from
-example/configuration/masking/ the way the CLI does, and then:
+Needs no server and no credentials. It builds two throwaway SQLite databases in
+transaction/, one standing in for production and one for staging, loads its
+jobs from configuration/ beside this script the way the CLI does, and then:
 
 1. Masks customers and orders into staging. The masked tables still join,
    because both key columns share a domain.
@@ -12,28 +12,31 @@ example/configuration/masking/ the way the CLI does, and then:
    The job fails before writing anything: new columns never leak by default.
 3. Proposes a policy for the changed table, as `understudy discover` does.
 4. Plans a referentially complete subset, as `understudy subset` does.
+
+Each step prints the `understudy` command it is equivalent to.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import shlex
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import yaml
 
-exampleDirectory = Path(__file__).resolve().parent
-sys.path.append(str(exampleDirectory.parent))
+demoDirectory = Path(__file__).resolve().parent
+sys.path.append(str(demoDirectory.parents[1]))
 
 from understudy_data import (Configuration, Database, DataJobsFile, FileMemory, expandEnvironmentVariables, planSubset, proposeTable,
                              runDataJobs)
 
-DEFAULT_WORKING_DIRECTORY = exampleDirectory / 'memory' / 'masking_demo'
+DEFAULT_WORKING_DIRECTORY = demoDirectory / 'transaction'
 
-DEMO_CONFIGURATION_DIRECTORY = exampleDirectory / 'configuration' / 'masking'
+DEMO_CONFIGURATION_DIRECTORY = demoDirectory / 'configuration'
 
 # A throwaway key for a throwaway database. A real key is random, lives in a
 # secret store, and is never written into a script or a YAML file.
@@ -62,6 +65,34 @@ def loadConfiguration(name: str) -> Any:
         return expandEnvironmentVariables(yaml.safe_load(file))
 
 
+def showCommand(arguments: List[Any], environment: Optional[Dict[str, Any]] = None) -> None:
+    """Prints the `understudy` command that does what the next step does, with
+    paths relative to where this was run from, ready to paste into a shell.
+    """
+
+    def shown(value: Any) -> str:
+        text = os.path.relpath(value) if isinstance(value, Path) else str(value)
+        if "'" in text and not any(character in text for character in '"$`\\'):
+            return '"{}"'.format(text)
+        return shlex.quote(text)
+
+    # A variable, the command, or an option with its value: kept whole on a line.
+    pieces = ['{}={}'.format(name, shown(value)) for name, value in (environment or {}).items()]
+    pieces.append('understudy ' + shown(arguments[0]))
+    rest = [shown(argument) for argument in arguments[1:]]
+    while rest:
+        takesValue = len(rest) > 1 and not rest[1].startswith('--')
+        pieces.append(' '.join(rest[:2] if takesValue else rest[:1]))
+        rest = rest[2:] if takesValue else rest[1:]
+
+    lines = ['$']
+    for piece in pieces:
+        if len(lines[-1]) + len(piece) > 100 and lines[-1] != '$':
+            lines.append('   ')
+        lines[-1] += ' ' + piece
+    print('  ' + ' \\\n  '.join(lines))
+
+
 def printRows(heading: str, rows: Any) -> None:
 
     print('  {}'.format(heading))
@@ -76,7 +107,7 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY) -> Dict[str, Any]:
 
     shutil.rmtree(workingDirectory, ignore_errors=True)
     workingDirectory.mkdir(parents=True, exist_ok=True)
-    logPath = workingDirectory / 'masking.log'
+    logPath = workingDirectory / 'demo.log'
 
     os.environ['MASKING_DEMO_PROD_PATH'] = str(workingDirectory / 'prod.db')
     os.environ['MASKING_DEMO_STAGING_PATH'] = str(workingDirectory / 'staging.db')
@@ -87,6 +118,12 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY) -> Dict[str, Any]:
     Configuration.validateJobGraph(jobsFile.jobs, databaseAliases=set(databases))
     memory = FileMemory(memoryFile=workingDirectory / 'memory.yaml')
     observed: Dict[str, Any] = {}
+    # What the CLI needs to do the same: the paths database.yaml reads, and the
+    # key -- shown only when it's the throwaway one, never a real key.
+    paths = {'MASKING_DEMO_PROD_PATH': workingDirectory / 'prod.db', 'MASKING_DEMO_STAGING_PATH': workingDirectory / 'staging.db'}
+    if os.environ['MASKING_KEY'] == DEMO_MASKING_KEY:
+        paths['MASKING_KEY'] = DEMO_MASKING_KEY
+    runCommand = ['run', '--config', DEMO_CONFIGURATION_DIRECTORY, '--log', logPath, '--log-level', 'debug', '--quiet']
 
     for alias in databases:
         with Database(connectionSettings=databases[alias]) as database:
@@ -98,6 +135,7 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY) -> Dict[str, Any]:
         prod.insert(table='orders', data=ORDERS, chunkSize=100)
 
         print('\n1. MASK production into staging')
+        showCommand(runCommand + ['--manifest', workingDirectory / 'manifest.json'], paths)
         result = runDataJobs(jobsFile=jobsFile, databaseConfiguration=databases, memory=memory, logFile=logPath, logLevel=logging.DEBUG)
         observed['firstRun'] = result.succeeded
         printRows('production customers:', prod.query('SELECT * FROM customers ORDER BY id'))
@@ -119,6 +157,7 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY) -> Dict[str, Any]:
         staging.alter('ALTER TABLE customers ADD COLUMN ssn TEXT')
         prod.alter("INSERT INTO customers VALUES (6, 'fay@corp.example', 'Fay Ito', '+81 90 1234 5678', '1995-05-05', 'apac', NULL, '987-65-4321')")
 
+        showCommand(runCommand, paths)
         result = runDataJobs(jobsFile=jobsFile, databaseConfiguration=databases, memory=memory, logFile=logPath, logLevel=logging.DEBUG)
         [failure] = [outcome for outcome in result.outcomes if outcome.job == 'maskCustomers']
         observed['secondRun'] = failure
@@ -128,12 +167,15 @@ def main(workingDirectory: Path = DEFAULT_WORKING_DIRECTORY) -> Dict[str, Any]:
             observed['stagingCustomersAfterFailure'], staging.query('SELECT count(ssn) FROM customers')[0][0] == 0))
 
         print('\n3. DISCOVER a policy for the changed table')
+        showCommand(['discover', '--config', DEMO_CONFIGURATION_DIRECTORY, '--database', 'prod', '--table', 'customers', '--sample', '100'], paths)
         proposal = proposeTable(prod, 'customers', sampleSize=100)
         observed['proposal'] = {suggestion.column: suggestion.policy for suggestion in proposal.columns}
         for suggestion in proposal.columns:
             print('  {:<11} {:<48} # {}'.format(suggestion.column, json.dumps(suggestion.policy), suggestion.reason))
 
         print("\n4. SUBSET: customers in region 'eu', and everything they need")
+        showCommand(['subset', '--config', DEMO_CONFIGURATION_DIRECTORY, '--database', 'prod', '--target', 'staging', '--root', 'customers',
+                     '--where', "region = 'eu'"], paths)
         plan = planSubset(prod.getForeignKeys(), root='customers', where="region = 'eu'",
                           materialize=prod.dialect.supportsMaterializedSelections())
         observed['subset'] = {table: len(prod.query(plan.queries[table])) for table in plan.tables}
