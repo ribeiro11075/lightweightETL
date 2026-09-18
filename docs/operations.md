@@ -4,6 +4,7 @@ Running `bauta` unattended: where its state lives, and how to know what it did. 
 
 - [Run state](#run-state)
 - [Run history](#run-history)
+- [Masking manifest](#masking-manifest)
 - [Tables](#tables)
 - [Throughput](#throughput)
 - [Environment variables](#environment-variables)
@@ -64,6 +65,24 @@ HAVING max(finished_at) < <now, in seconds since 1970> - 3 * 3600
 ```
 
 
+## Masking manifest
+
+With `manifest` set in `jobs.yaml`, each run writes a sealed record of what was masked, how, and under which key fingerprint: a file, replaced by each run, or a table, which keeps every run's. It's what an auditor asks for.
+
+```yaml
+manifest: ../transaction/manifest.json   # a file, relative to jobs.yaml
+manifest:
+  database: warehouse                    # or a table
+```
+
+```
+bauta verify-manifest                    # the latest; exit 0 intact, 1 altered
+bauta verify-manifest --run RUN_ID       # an earlier one, from a table
+```
+
+`--manifest FILE` or `--manifest-database ALIAS` overrides the setting, on `run` and on `verify-manifest`. Set `BAUTA_MANIFEST_KEY` to sign manifests; only a signature shows who wrote one. [The manifest](masking.md#the-manifest) describes its content and how verification works.
+
+
 ## Tables
 
 Run state, history and manifests each need their table to exist before a run uses it. These definitions are `DATABASE_MEMORY_SCHEMA`, `DATABASE_HISTORY_SCHEMA` and `DATABASE_MANIFEST_SCHEMA` in the package, and their types work on all six databases. Times are seconds since 1970.
@@ -104,9 +123,9 @@ A manifest is stored in pieces of `content`, in `part` order, because its JSON c
 
 Three things decide how fast a job moves rows, in this order.
 
-**The masking policy**, by about sevenfold. `key` is expensive because it must be a permutation; `hash` hides as much for a thirtieth of the work wherever a column needn't stay one-to-one. See [speed](masking.md#speed).
+**The masking policy**, by about sixfold. `key` is expensive because it must be a permutation; `hash` hides as much for a thirtieth of the work wherever a column needn't stay one-to-one. See [speed](masking.md#speed).
 
-**The [native masker](masking.md#the-native-masker)**, four to five times faster on the same policy, with identical results. Ten million rows of six masked columns take 99 seconds with it and about eight minutes without. On a wide table, where masking rather than the database sets the pace, it also spreads each chunk over several cores (`maskingThreads`): 25 masked columns went from 25,000 rows a second on one core to 73,000 on ten.
+**The [native masker](masking.md#the-native-masker)**, seven to nine times faster on the same policy, with identical results: a million rows of six masked columns take under 7 seconds with it and a minute without. See [speed](masking.md#speed) for the conditions. On a wide table, where masking rather than the database sets the pace, it can also spread each chunk over several cores ([`maskingThreads`](masking.md#masking-threads)): 25 masked columns went from 25,000 rows a second on one thread to 73,000 on ten.
 
 **`chunkSize` — for latency, not throughput.** On a local database, chunks from 500 rows to 200,000 finish the same job in 8.6 to 9.2 seconds. What a chunk costs is a round trip: against a database 25 ms away, a million rows take 123 seconds at `chunkSize: 500` and 8.8 at `10000`. Latency stops mattering once a chunk's masking outlasts its round trips:
 
@@ -123,12 +142,12 @@ If a job is still slow, look at the database: the target's indexes and constrain
 
 | Variable | Effect |
 | --- | --- |
-| `BAUTA_CONFIG` | where to look for configuration |
-| `BAUTA_NOTIFY_URL` | webhook for failed cycles |
-| `BAUTA_MANIFEST_KEY` | signs and verifies masking manifests |
-| `BAUTA_MASKING_THREADS` | a number, or `auto`: overrides `jobs.yaml`'s [`maskingThreads`](configuration.md#file-level) |
-| `BAUTA_NATIVE=0` | mask in Python even where the extension is installed |
-| `BAUTA_PIPELINE=0` / `=1` | force reading, masking and writing to take turns, or to overlap |
+| `BAUTA_CONFIG` | The configuration directory, when `--config` isn't given. |
+| `BAUTA_NOTIFY_URL` | The webhook, when `--notify-url` isn't given. |
+| `BAUTA_MANIFEST_KEY` | Sign manifests, and verify their signatures. |
+| `BAUTA_MASKING_THREADS` | Threads the native masker uses per job: a number or `auto`. Overrides `jobs.yaml`'s `maskingThreads`; see [masking threads](masking.md#masking-threads). |
+| `BAUTA_NATIVE=0` | Mask in Python even where the extension is installed. |
+| `BAUTA_PIPELINE=0` or `=1` | Force reading, masking and writing to take turns, or to overlap. |
 
 The last two are for diagnosis. The implementations are tested to agree, so a difference `BAUTA_NATIVE=0` reveals is a bug worth reporting. By default the stages overlap only with the native masker; overlapping pure-Python masking costs about 2%.
 

@@ -44,7 +44,7 @@ production --(TLS, if configured)--> job process memory --(masked)--> target sta
 - **In memory only.** A job streams rows a chunk at a time (`chunkSize`), transforms them, masks them, and only then writes them. Unmasked rows are never written to the target, not even to its stage table.
 - **Logs and errors.** Masking errors name the column and the value's type, never the value. Transform errors do the same and drop the transformer's own message, which often quotes the value. Run history, the manifest and notifications carry job names, counts and error text.
 - **Driver errors are scrubbed.** Every server but SQLite quotes data in its error messages: the duplicate key, the text that wasn't a number, the row that broke a constraint, and PostgreSQL's `COPY` context lines. When the failing statement is a `sourceQuery`, those are production values that were never masked. Before an error reaches a log, a traceback, run history, a notification or an `audit` report, each quoted value is replaced with `<redacted>`, keeping the rest of the message (which constraint, which column). The patterns cover the messages PostgreSQL 16, MySQL 8.4, MariaDB 11, Oracle 23ai and SQL Server 2022 were seen to write for constraint, conversion and truncation failures, including values containing quotes and newlines, and the integration suite checks them against those servers. Where a server quotes the statement around an error (PostgreSQL's `LINE 1:`, MySQL's `near '...'`), the whole quote is removed, since drivers write values into statement text. **A message in a format not covered passes through unchanged**, and some drivers can also log through their own loggers, outside the package's.
-- **Process boundaries.** Job processes send log records and outcomes to the main process over private pipes; neither carries row data.
+- **Process boundaries.** Job processes send log records and outcomes to the main process over private pipes; neither carries row data. [Masking threads](masking.md#masking-threads) run inside the job's own process and share its memory, so masking on several cores moves no data anywhere new.
 - **Transport.** Connections are encrypted only if configured to be (see [driver options and TLS](configuration.md#driver-options-and-tls)). `run --dry-run` and `audit --connect` report what each server says about its connection, and `audit` warns when a masked job reads over an unencrypted one.
 
 
@@ -77,45 +77,20 @@ expand(m, n, p) = digest(m, p || "#" || counter), counter = 0, 1, ...   truncate
 
 ### Two implementations
 
-The same constructions exist twice: in Python, and in the optional
-`bauta-rs` extension, which computes them in Rust several times faster
-(see [the native masker](masking.md#the-native-masker)). Which one ran is
-recorded in the manifest as `maskedBy`.
+The same constructions exist twice: in Python, and in the optional `bauta-rs` extension, which computes them in Rust several times faster (see [the native masker](masking.md#the-native-masker)). Which one ran is recorded in the manifest as `maskedBy`.
 
-**They are required to agree byte for byte.** A difference would not present as
-a wrong answer. It would present as a changed key: masks that no longer match
-the ones already in a target, joins that silently stop matching, an incremental
-job writing rows its earlier rows can't be linked to. The key fingerprint would
-not change, because the key did not.
+**They are required to agree byte for byte.** A difference would not present as a wrong answer. It would present as a changed key: masks that no longer match the ones already in a target, joins that silently stop matching, an incremental job writing rows its earlier rows can't be linked to. The key fingerprint would not change, because the key did not.
 
 How that is held:
 
-- **Recorded vectors.** `mask-rs/vectors/reference.json` holds what the Python
-  implementation produces for every covered strategy over a corpus chosen for
-  boundaries rather than volume: the lengths where a Feistel half stops fitting
-  a machine word, domains of exactly 2\*\*128, `MAXIMUM_KEY_LENGTH`, single-character
-  alphabets, mixed-case hex, and every refusal with its exact message. The Rust
-  tests check against it, and a Python test fails if Python itself drifts from
-  it — so changing masks requires changing the file, deliberately.
-- **Both implementations, same corpus.** `tests/test_nativeMasking.py` runs each
-  strategy and option combination through both and compares masks, types and
-  error messages.
-- **The whole suite, twice.** CI runs it with the extension and with
-  `BAUTA_NATIVE=0`.
-- **A trace if they ever didn't.** Every masked job records the implementation
-  beside its key fingerprint, and an upsert job run under a different one logs a
-  warning naming both, rather than refusing. The fingerprint alone couldn't show
-  it, since the key hasn't changed — and it is the evidence an operator would
-  need if rows masked before and after stopped joining.
-- **Published vectors.** FF1 is checked against NIST's sample vectors on both
-  sides, and the keyed hash against RFC 4231.
+- **Recorded vectors.** `mask-rs/vectors/reference.json` holds what the Python implementation produces for every covered strategy over a corpus chosen for boundaries rather than volume: the lengths where a Feistel half stops fitting a machine word, domains of exactly 2\*\*128, `MAXIMUM_KEY_LENGTH`, single-character alphabets, mixed-case hex, and every refusal with its exact message. The Rust tests check against it, and a Python test fails if Python itself drifts from it — so changing masks requires changing the file, deliberately.
+- **Both implementations, same corpus.** `tests/test_nativeMasking.py` runs each strategy and option combination through both and compares masks, types and error messages.
+- **Any number of threads.** The same tests mask columns large enough to be split across threads, on one thread and on eight, chunk after chunk with the cross-chunk cache warm, and require the same masks as pure Python.
+- **The whole suite, twice.** CI runs it with the extension and with `BAUTA_NATIVE=0`.
+- **A trace if they ever didn't.** Every masked job records the implementation beside its key fingerprint, and an upsert job run under a different one logs a warning naming both, rather than refusing. The fingerprint alone couldn't show it, since the key hasn't changed — and it is the evidence an operator would need if rows masked before and after stopped joining.
+- **Published vectors.** FF1 is checked against NIST's sample vectors on both sides, and the keyed hash against RFC 4231.
 
-The Rust implementation is not a second design. It is a port, and where the two
-could differ, Python is the reference and the port is the bug. Values whose
-handling depends on Python's own Unicode rules — the refusal of letters and
-digits outside ASCII, `str.isspace()` when an address is stripped, digits
-normalised across scripts — are not reimplemented at all: they are handed back
-to Python per value.
+The Rust implementation is not a second design. It is a port, and where the two could differ, Python is the reference and the port is the bug. Values whose handling depends on Python's own Unicode rules — the refusal of letters and digits outside ASCII, `str.isspace()` when an address is stripped, digits normalised across scripts — are not reimplemented at all: they are handed back to Python per value.
 
 **Small domains.** Format-preserving encryption over small domains has known message-recovery attacks for anyone who holds enough pairs of real and masked values (Bellare, Hoang and Tessaro, 2016; Durak and Vaudenay, 2017). NIST responded by requiring at least a million possible values for FF1. `fpe` follows that rule, and by default masks shorter values with `key` instead; **`strict: true`** refuses them. `key` applies its permutation to domains of any size, down to single digits, so a two-digit value has only 90 possible masks, and an adversary who knows enough real/masked pairs in one domain learns the whole mapping. This is inherent to one-to-one masking of short values, not a flaw in either cipher: use `hash`, `null`, or a longer key space where short identifiers are sensitive.
 
@@ -156,7 +131,7 @@ These follow from masking being deterministic and shape-preserving. They are why
 - **Passwords** are held as secrets and never logged. `passwordCommand` output is never logged, and the command is never run by `validate`. Driver `options` are kept out of the configuration's `repr`, since some (a wallet password) are secrets.
 - **Short-lived credentials.** `passwordCommand` runs at every connection, so cloud IAM tokens are always fresh; its failures are retried like connection errors.
 - **TLS** is configured per driver through `options`. Settings express intent; the server's own report, shown by `run --dry-run` and `audit --connect`, is what to rely on. SQL Server encryption is configured through FreeTDS; pymssql's own `encryption` argument had no effect in testing.
-- **Run state and history** (memory files, history files, their tables) hold job names, times, watermarks and key fingerprints. Watermarks are values from the source: an `updated_at` timestamp, usually, but a watermark column could be anything. Protect them like the configuration.
+- **Run state, history and manifests** (their files, or their tables) hold job names, times, watermarks and key fingerprints; manifests hold no values. Watermarks are values from the source: an `updated_at` timestamp, usually, but a watermark column could be anything. Protect them like the configuration.
 
 
 ## Trusted inputs
@@ -167,6 +142,7 @@ The configuration is trusted: whoever can change it controls what the tool does.
 - **Code.** Transformer references and custom masking strategies import and run Python modules named in the configuration. Transformer arguments are limited to literals.
 - **Commands.** `passwordCommand` runs a program named in the configuration, without a shell.
 - **Files.** `${file:...}` reads any file the process can read.
+- **Discovery rules.** `discovery.yaml`'s regular expressions run against values sampled from production, in memory; like any regular expression, a badly written one can be slow.
 - **YAML** is parsed with PyYAML's safe loader, and run memory is written with its safe dumper, so neither can construct Python objects.
 
 Keep the configuration directory writable only by the people who may run jobs against production.

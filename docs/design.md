@@ -36,7 +36,7 @@ One statement can't update a row twice, so for both, rows repeating a key within
 
 Where the [native masker](masking.md#the-native-masker) is installed, the three stages overlap rather than taking turns: masking moves to a worker thread while the reader and writer keep the database connections, which they must — `mysqlclient` and PyMySQL forbid a connection being used by a thread other than its own, and SQLite enforces the same. Drivers release the GIL while they wait on a socket and the native masker releases it for a whole chunk, so the waiting and the masking genuinely overlap. A job then holds about three chunks rather than one. Pure-Python masking is slow enough to swamp any wait worth hiding, so it stays sequential; `BAUTA_PIPELINE` overrides either default.
 
-One chunk is still masked at a time, and chunks are written in the order they were read. A stage-less upsert writes straight into the live target, where one statement can't update the same row twice, so a key repeating across chunks has to arrive as it was read.
+One chunk is still masked at a time, and chunks are written in the order they were read. With [`maskingThreads`](masking.md#masking-threads) above 1, that chunk's distinct values are spread over several threads, which changes how fast it's masked, not the result. A stage-less upsert writes straight into the live target, where one statement can't update the same row twice, so a key repeating across chunks has to arrive as it was read.
 
 **One consequence to know before sizing a job:** extract and load interleave, so a source that fails part-way leaves the rows it already yielded written.
 
@@ -121,7 +121,7 @@ A reasonable split: `swap` for small tables and anywhere deletes matter; waterma
 
 ### Where watermarks are kept
 
-In the `MemoryBackend`. `FileMemory` writes each update to a temporary file and renames it into place, so a process killed mid-write leaves the previous version rather than a file nothing can parse. It assumes a filesystem that persists between runs and is shared by every worker. Where that's false — a container without a volume, anything scaled across machines, serverless — use `DatabaseMemory`. `FileMemory` there doesn't fail loudly: it silently forgets every watermark and re-extracts from `watermarkInitial`. See [library.md](library.md#memory-backends).
+In run state: `jobs.yaml`'s `memory`, a file or a table (see [run state](operations.md#run-state)); from Python, a `MemoryBackend`. `FileMemory` writes each update to a temporary file and renames it into place, so a process killed mid-write leaves the previous version rather than a file nothing can parse. It assumes a filesystem that persists between runs and is shared by every worker. Where that's false — a container without a volume, anything scaled across machines, serverless — use `DatabaseMemory`. `FileMemory` there doesn't fail loudly: it silently forgets every watermark and re-extracts from `watermarkInitial`. See [library.md](library.md#memory-backends).
 
 
 ## refresh and predecessors
@@ -142,14 +142,14 @@ The trade-off is freshness, not correctness: between windows the dependent reads
 `refresh` still works across separate invocations, since it's checked against the durable memory backend. Running every 5 minutes with `refresh: 60` correctly skips 11 runs in 12:
 
 ```cron
-*/5 * * * *  cd /srv/etl && bauta run --memory ./memory.yaml
+*/5 * * * *  cd /srv/etl && bauta run
 ```
 
 `--forever` keeps the process resident, for freshness below cron's one-minute floor or where there's no scheduler.
 
 **Stopping.** On `SIGINT` or `SIGTERM`, a run starts no new jobs, lets the running ones finish, reports the rest as skipped, and exits with status 130. Killing jobs mid-load instead would leave a streaming cursor or a half-loaded table for the database to clean up. A container's grace period has to cover the longest job for this to finish; give long jobs a `timeoutSeconds` shorter than that grace period, so a hung one can't hold the shutdown.
 
-**Overlapping runs.** `run` holds a lock (`memory.yaml.run.lock`, beside the memory file) for as long as it runs. A second invocation sharing that memory file exits with status 1 instead of running the same jobs at the same time, which a cron interval shorter than a slow run would otherwise cause. The operating system releases the lock if the process dies.
+**Overlapping runs.** `run` holds a lock (`memory.yaml.run.lock`, beside the run state file; see [run state](operations.md#run-state) for run state in a table) for as long as it runs. A second invocation sharing that memory file exits with status 1 instead of running the same jobs at the same time, which a cron interval shorter than a slow run would otherwise cause. The operating system releases the lock if the process dies.
 
 A skipped job exits non-zero just as a failed one does: it didn't run, so its data isn't there.
 
@@ -160,6 +160,8 @@ Each job runs in a process of its own, as soon as its predecessors have complete
 
 - **A job that dies** — killed for memory, crashed in a driver — fails, and only that job. Its dependents are skipped, and the run still ends; it doesn't wait for an outcome that will never come.
 - **A job past its `timeoutSeconds`** is sent `SIGTERM`, then `SIGKILL` five seconds later if it hasn't exited. It fails with a `Timeout` error and its dependents are skipped. Its database connections close with it, so each server rolls back whatever the job hadn't committed; what it had committed stays, as for any failure part-way (see [how a data job moves rows](#how-a-data-job-moves-rows)). The timeout covers the whole job, retries included.
+
+Within its process, a job masks on one thread, or on several with [`maskingThreads`](masking.md#masking-threads); `auto` divides the cores between the jobs running when each starts.
 
 Processes are started with Python's `spawn` method on every platform, so a program embedding the library needs an `if __name__ == '__main__':` guard; see [library.md](library.md#running-jobs).
 
@@ -204,7 +206,7 @@ Every mask is derived from `HMAC(key, domain, value)`, keyed on the value itself
 
 A policy must list **every column the query returns**, or the job fails before writing anything. A new production column should stop the job, not flow into a non-production copy unmasked.
 
-[masking.md](masking.md) has the strategies, the key, the manifest, `audit`, `discover`, `subset`, `schema`, `clear`, and how to migrate from the removed `scramble` command.
+[masking.md](masking.md) has the strategies, the key, the manifest, `audit`, `discover`, `subset`, `schema`, `synthesize` and `clear`.
 
 
 ## Moving values between drivers

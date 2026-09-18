@@ -5,7 +5,8 @@ The optional native masker for [Bauta](https://github.com/ribeiro11075/bauta).
 Bauta masks data on its way from production to a copy. Masking `key` and
 `fpe` columns costs tens of microseconds a value in Python, most of it spent in
 the interpreter rather than in cryptography. This computes the same masks in
-Rust, four to five times faster on a whole job.
+Rust, seven to nine times faster on a whole job on one core, and can use
+several.
 
 It is optional. Bauta works without it, and produces identical output
 either way.
@@ -23,7 +24,7 @@ Python. Elsewhere pip compiles it, which needs Rust 1.83 or newer.
 
 ## Layout
 
-| | |
+| Path | What it is |
 | --- | --- |
 | `core/` | The constructions. No Python dependency, so they are testable without an interpreter. |
 | `py/` | The PyO3 layer: conversions in, results out, and every unsafe boundary. |
@@ -40,19 +41,21 @@ cd py && maturin build --release
 pip install ../target/wheels/bauta_rs-*.whl
 ```
 
+`--release` matters for the tests: two of them measure SHA-256 and AES
+throughput to catch a backend that has silently fallen back to software, and a
+debug build is indistinguishable from one. `cargo test` covers `core/`; `py/`
+needs a Python interpreter to link, so it is tested from Python, by
+`tests/test_nativeMasking.py`.
+
 ## Threads, and remembering masks
 
 A chunk's distinct values are masked across a thread pool, whose size the
-Python layer sets per process (`setThreads`) from `maskingThreads`; each mask
-depends on its value alone, so the count changes no result.
-`availableCores()` reads a container's CPU quota, which Python's
-`os.cpu_count()` doesn't. `key` and `fpe` also remember masks across chunks.
-The extension allocates through mimalloc: the system allocators serialise
-masking's many small allocations across threads.
-
-`--release` matters for the tests: two of them measure SHA-256 and AES
-throughput to catch a backend that has silently fallen back to software, and a
-debug build is indistinguishable from one.
+Python layer sets per process (`setThreads`) from `jobs.yaml`'s
+`maskingThreads`; each mask depends on its value alone, so the count changes no
+result. `availableCores()` reads a container's CPU quota, which Python's
+`os.cpu_count()` doesn't. `key`, `fpe` and the `fake*` strategies also remember
+masks across chunks. The extension allocates through mimalloc: the system
+allocators serialise masking's many small allocations across threads.
 
 ## The rule
 

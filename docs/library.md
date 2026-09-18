@@ -7,7 +7,7 @@ You load configuration however you like and hand it over as plain data. Each dri
 - [Running jobs](#running-jobs)
 - [Results](#results)
 - [Memory backends](#memory-backends)
-- [History and notifications](#history-and-notifications)
+- [History, manifests and notifications](#history-manifests-and-notifications)
 - [Masking, discovery and subsets](#masking-discovery-and-subsets)
 - [Streaming directly](#streaming-directly)
 
@@ -17,7 +17,7 @@ You load configuration however you like and hand it over as plain data. Each dri
 ```python
 import yaml
 from bauta import (Configuration, DataJobsFile, FileMemory,
-                             expandEnvironmentVariables, runDataJobs)
+                   expandEnvironmentVariables, runDataJobs)
 
 def load(path):
     with open(path) as file:
@@ -51,22 +51,23 @@ runDataJobs(jobsFile, databaseConfiguration, memory,
             acceptKeyChange=False, onCycle=None)
 ```
 
-- **`onCycle`** is called with each cycle's `RunResult` as the cycle ends, including under `runForever`. See [below](#history-and-notifications). An exception it raises is logged, not raised.
+- **`onCycle`** is called with each cycle's `RunResult` as the cycle ends, including under `runForever`. See [below](#history-manifests-and-notifications). An exception it raises is logged, not raised.
 - **`acceptKeyChange=True`** runs upsert jobs whose masking key changed since their last run; see [the key](masking.md#the-key).
 - **`runForever=False`** makes one pass and returns. `True` keeps running, honouring `refresh`, until `SIGINT` or `SIGTERM`. Either signal stops new jobs from starting and lets running ones finish; see [stopping](design.md#single-runs-not-a-daemon).
 - **`logFile`** is optional. Without one, attach a stream yourself: `Log(level=...).addStreamHandler(sys.stderr)`. Workers' records are written by the calling process's handlers, whichever those are.
 - **`logFormat='json'`** writes structured records — see [design.md](design.md#structured-logs).
+- **`jobsFile.maskingThreads`** sets how many threads each job masks with, as in the CLI; see [masking threads](masking.md#masking-threads).
 
 To keep two runs that share run state from overlapping, as the CLI does, hold `exclusiveRun(path)` around the call. It raises `RunInProgressError` if another process holds the same lock file.
 
-Validation raises `ConfigurationError`. `runDataJobs` also raises it before starting any work if a job sets `watermarkColumn` against a backend that can't store watermarks, and `DependencyGraph` raises it for predecessors that form a cycle.
+Validation raises `ConfigurationError`. `runDataJobs` also raises it before starting any work if a job sets `watermarkColumn` against a backend that can't store watermarks, or if `maskingThreads` is more than the cores available, and `DependencyGraph` raises it for predecessors that form a cycle.
 
 
 ## Results
 
 `runDataJobs` returns a `RunResult`, for you to turn into an exit code, an alert or a log line.
 
-| `RunResult` | |
+| `RunResult` | Meaning |
 | --- | --- |
 | `succeeded` | `True` only if every active job completed. A skipped job counts against it. |
 | `completed`, `failed`, `skipped` | Lists of `JobOutcome`. |
@@ -74,7 +75,7 @@ Validation raises `ConfigurationError`. `runDataJobs` also raises it before star
 | `outcomes` | Every `JobOutcome`, in completion order. |
 | `interrupted` | `True` if a signal stopped the run. The CLI exits with 130. |
 
-| `JobOutcome` | |
+| `JobOutcome` | Meaning |
 | --- | --- |
 | `job` | The job name. |
 | `status` | A `JobStatus`: `COMPLETED`, `FAILED` or `SKIPPED`. |
@@ -99,13 +100,13 @@ A `MemoryBackend` holds what the scheduler needs *before* a job runs: when it la
 | `FileMemory(memoryFile=...)` | A filesystem persists between runs and every worker shares it. |
 | `DatabaseMemory(connectionSettings=..., table=...)` | It doesn't: a container without a volume, anything across several machines, or serverless. |
 
-`FileMemory` in the wrong environment doesn't fail loudly: it forgets every watermark and re-extracts from `watermarkInitial`. `DatabaseMemory`'s table must exist first; its shape is `DATABASE_MEMORY_SCHEMA`, shown in [operations.md](operations.md#run-state).
+`FileMemory` in the wrong environment doesn't fail loudly: it forgets every watermark and re-extracts from `watermarkInitial`. `DatabaseMemory`'s table must exist first; its shape is `DATABASE_MEMORY_SCHEMA`, shown in [operations.md](operations.md#tables).
 
 ### Writing your own
 
 Subclass `MemoryBackend`:
 
-| Method | |
+| Method | Behaviour |
 | --- | --- |
 | `read()` | **abstract** — every job's last run time |
 | `recordRun(job)` | **abstract** — record that `job` ran now |
@@ -117,9 +118,9 @@ Subclass `MemoryBackend`:
 **One constraint:** the same instance is pickled into every worker process. Hold settings — a path, connection details — rather than an open file or connection, and open what you need inside each method.
 
 
-## History and notifications
+## History, manifests and notifications
 
-What the CLI's `--history` and `--notify-url` do, as functions to call from `onCycle`:
+What the CLI's `history`, `manifest` and `--notify-url` do, as functions to call from `onCycle` or after a run:
 
 ```python
 import os
@@ -135,7 +136,7 @@ def report(result):
 runDataJobs(jobsFile, databases, memory, onCycle=report)
 ```
 
-| | |
+| Name | What it is |
 | --- | --- |
 | `FileHistory(path)`, `DatabaseHistory(connectionSettings, table=...)` | `RunHistory` backends: `append(result, runId)`, and `read(limit=20, job=None)` newest first. `DATABASE_HISTORY_SCHEMA` is the table. |
 | `DatabaseManifests(connectionSettings, table=...)` | Sealed manifests in a table: `write(manifest, runId)`, and `read(runId=None)`, which returns `(runId, manifest)`, the latest if no run is named. `DATABASE_MANIFEST_SCHEMA` is the table. |
@@ -161,10 +162,11 @@ with Database(connectionSettings=databases['prod']) as database:
     subset = planSubset(database.getForeignKeys(), root='customers', where="region = 'eu'")
 ```
 
-| | |
+| Name | What it is |
 | --- | --- |
 | `MaskingPlan(key, columns, defaultStrategy=None)` | A validated policy. `bind(columns)` checks coverage and returns an object whose `apply(rows)` masks one chunk, and whose `manifest` lists what each column gets. `fingerprint` is the key's safe identifier. |
-| `STRATEGIES` | Strategy name → class. Each `Strategy` validates its own options in `validateOptions`. |
+| `STRATEGIES` | Strategy name → class, for the built-in strategies. Each `Strategy` validates its own options in `validateOptions`. |
+| `masking.setMaskingThreads(n)` | How many threads the native masker spreads a chunk over, in this process; one until set. `runDataJobs` sets it in each job's process from `maskingThreads`, so call it only when using `MaskingPlan` directly. Results are the same for any `n`. |
 | `resolveStrategy(name)` | A built-in strategy, or your own named `module.path:ClassName`; see [your own strategies](masking.md#your-own-strategies). |
 | `LOCALES` | The fake-data locales, as name → `Locale`. |
 | `keyFingerprint(key)` | The same fingerprint, for a key on its own. |

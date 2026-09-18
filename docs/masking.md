@@ -21,7 +21,6 @@ Since masking runs inside a data job, it also gets streaming, retries, watermark
 - [Creating and refreshing the copy](#creating-and-refreshing-the-copy)
 - [Generating data instead: `synthesize`](#generating-data-instead-synthesize)
 - [Limits](#limits)
-- [Migrating from `scramble.yaml`](#migrating-from-scrambleyaml)
 
 
 ## A masked job
@@ -49,7 +48,7 @@ maskCustomers:
       created_at:  keep
 ```
 
-| Field | | |
+| Field | Required or default | Meaning |
 | --- | --- | --- |
 | `key` | required | The secret every mask is derived from, at least 16 characters. Read it from the environment. See [the key](#the-key). |
 | `columns` | required | Column name → policy. A policy is a strategy name, or a mapping with `strategy`, an optional `domain`, and that strategy's options. |
@@ -68,8 +67,8 @@ A NULL stays NULL under every strategy except `constant` and `null`.
 
 | Strategy | Result | Options |
 | --- | --- | --- |
-| `keep` | Unchanged. The explicit way to say a column was reviewed. | |
-| `null` | NULL. The right choice for free text. | |
+| `keep` | Unchanged. The explicit way to say a column was reviewed. | none |
+| `null` | NULL. The right choice for free text. | none |
 | `constant` | `value` in every row, NULLs included. | `value` (required) |
 | `hash` | An opaque hex token, e.g. `cust_9f86d081884c7d65`. | `length` (12–64, default 16), `prefix` |
 | `email` | Still an email address, e.g. `u9f86d081884c@example.test`. Keyed on the lower-cased address. | `length` (8–40, default 12), `mailDomain` (default `example.test`), `keepDomain` |
@@ -80,7 +79,7 @@ A NULL stays NULL under every strategy except `constant` and `null`.
 | `fpe` | Like `key`, but using NIST's FF1 format-preserving encryption, for policies that must name a standard. See below. | `charset`: `alphanumeric` (default), `digits`, `hex`; `strict` |
 | `fakeName`, `fakeFirstName`, `fakeLastName`, `fakeCity`, `fakeCompany`, `fakeStreetAddress` | Realistic values from bundled lists. Not unique. | `maxLength`; `locale`, below |
 | `redact` | Free text with each recognisable identifier replaced: emails, phone numbers, US SSNs, card numbers and IBANs (both checksum-verified), IPv4 addresses. **Names aren't found.** See below. | `replacement`: `label` (default) or `mask`; `detect`: a list of `email`, `phone`, `ssn`, `card`, `iban`, `ip`; `patterns`: extra regular expressions |
-| `shuffle` | The column's values rearranged among rows in the same chunk. **Not anonymization:** every real value is still in the table, and a small chunk barely moves them. See [limits](#limits). | |
+| `shuffle` | The column's values rearranged among rows in the same chunk. **Not anonymization:** every real value is still in the table, and a small chunk barely moves them. See [limits](#limits). | none |
 
 A value a strategy can't handle fails the job, for example text given to `number`. The error names the column and the value's type, never the value itself.
 
@@ -109,7 +108,7 @@ The output has the same shape as the input:
 - It keeps shapes the way `key` does: integers keep sign and digit count, text keeps its length and every character outside `charset`. With `alphanumeric`, letters and digits share one alphabet, so a letter may become a digit; `key` keeps each character's class.
 - The masking key is turned into an AES key per domain, and the domain goes into FF1's tweak.
 - **FF1 needs at least a million possible values**: six digits, five hex characters or four alphanumerics. Shorter values are masked with `key`'s permutation instead, and still never collide with longer ones, since lengths are kept. **`strict: true`** fails the job on a shorter value instead, for policies that require FF1 for every value; the error gives the minimum length, never the value. `audit` notes each `fpe` column without `strict`.
-- It is slower than `key`: roughly 25,000 distinct values a second per worker. Repeated values are remembered, as described under [speed](#speed).
+- It is slower than `key`. With two `fpe` columns among six, a million rows run at 11,000 rows a second in pure Python, against 17,000 with `key`; the native masker takes it to 115,000. Repeated values are remembered, as described under [speed](#speed).
 
 Only encryption is implemented. Nothing in the package can reverse a mask.
 
@@ -170,14 +169,14 @@ If `mask()` depends on nothing but the value, set `CACHEABLE = True` on the clas
 
 ### Speed
 
-**The policy decides throughput, by about sevenfold.** One million rows of six masked columns, with the [native masker](#the-native-masker), on one core:
+**The policy decides throughput, by about sixfold.** A million rows of six columns plus an id, SQLite to SQLite, with the [native masker](#the-native-masker) on one thread (`maskingThreads: 1`), reading, masking and writing overlapped:
 
 | Policy | Rows a second |
 | --- | --- |
-| `hash`, `email` and `keep` only | 310,000 |
-| two `key` columns, `email`, two `hash`, `digits` | 113,000 |
-| two `fpe` columns, four cheap ones | 86,000 |
-| five `key` columns | 43,000 |
+| `email`, two `hash`, three `keep` | 277,000 |
+| two `key` columns, `email`, two `hash`, `digits` | 149,000 |
+| two `fpe` columns, `email`, two `hash`, `digits` | 115,000 |
+| five `key` columns, one `hash` | 45,000 |
 
 `key` costs the most because it has to be a *permutation*: a Feistel network per value, about thirty times the work of `hash`'s one digest. Where nothing joins on a column, `hash` hides as much far more cheaply.
 
@@ -199,27 +198,64 @@ From a clone, `pip install ./mask-rs/py` builds the extension at the checkout's 
 
 It covers `key`, `fpe`, `hash`, `email`, `digits` and the `fake*` strategies, which is where the time goes; the `fake*` ones pick from the lists Python hands it, so there is one copy of those. Everything else stays in Python: the strategies that are already cheap, `redact`, and [custom strategies](#your-own-strategies), which are Python by definition and mask on one thread whatever `maskingThreads` says. So do values the extension doesn't handle (`Decimal`, `UUID`, dates, and non-ASCII text for the strategies that read characters), so a value Python would refuse still refuses with the same message.
 
-One million rows of six masked columns, SQLite to SQLite:
+The second policy above, a million rows, SQLite to SQLite:
 
-| | Rows a second |
+| Masker | Rows a second |
 | --- | --- |
-| Python | 21,000 |
-| Rust (`bauta-rs`) | 93,000 |
-| Rust, overlapped with the database | 112,000 |
-
-**It spreads each chunk over several cores.** Every mask depends on its value alone, so a chunk's distinct values are masked across threads with the same result as one. `jobs.yaml`'s [`maskingThreads`](configuration.md#file-level) sets how many. One by default, so nothing takes more of the machine than it's told to. A number sets it for every job, up to the cores available; more is refused. `auto` shares the cores as each job starts, with the jobs running alongside it: one job gets them all, eight at once on eight cores get one each, and the last job of a run, once the others have finished, gets them all again. A running job keeps its share. In a container, the cores are its CPU limit, not the host's. `BAUTA_MASKING_THREADS` overrides the setting, and `validate` prints what a run would use. Lower it where the database shares the machine, since every core masking takes is one the database doesn't get. Pure-Python masking always uses one.
-
-Threads help where masking, not the database, is what a job waits for: wide tables with many masked columns. A million rows of 25 masked columns, SQLite to SQLite on ten cores, from [the native-masking demo](../example/README.md#native-masking):
-
-| | Rows a second |
-| --- | --- |
-| Rust, one core, overlapped | 25,000 |
-| Rust, all cores, overlapped | 73,000 |
-
-A narrow table gains little: the six-column job above spends its time writing, not masking. So do columns in the strategies the extension doesn't cover, such as custom ones, which Python masks one thread at a time.
+| Python | 17,000 |
+| Rust, one thread, reading, masking and writing in turn | 113,000 |
+| Rust, one thread, overlapped with the database (the default) | 149,000 |
+| Rust, `maskingThreads: auto` (10 threads) | 277,000 |
 
 **The two implementations compute identical masks**, a release requirement: a difference would silently break joins between old and new copies. See [two implementations](security.md#two-implementations). `BAUTA_NATIVE=0` masks in Python even with the extension installed, and the manifest records which one ran as `maskedBy`.
 
+
+### Masking threads
+
+The native masker can spread each chunk over several cores. Every mask depends on its value alone, so the result is identical for any number of threads; only the time changes. `jobs.yaml`'s [`maskingThreads`](configuration.md#file-level) sets how many threads each job masks with:
+
+| `maskingThreads` | Each job masks with | Use it when |
+| --- | --- | --- |
+| `1` (default) | One thread. | You haven't measured a need, or the database shares the machine. |
+| A number, such as `4` | That many threads, every job. | You want a fixed share. It can't exceed the cores available: `validate` and `run` refuse it. |
+| `auto` | The cores available, divided between the jobs running when it starts. | Bauta has the machine to itself, and you want it all used. |
+
+**How `auto` divides the cores.** When a job starts, it gets `cores ÷ jobs running`, counting the jobs already running and those starting with it. A running job keeps its share; cores freed later go to the next job to start. With `workers: 2` on 8 cores, where `a` and `b` run together and `c` waits for both:
+
+| Job | Starts | Jobs running | Threads |
+| --- | --- | --- | --- |
+| `a` | first | 2 | 4 |
+| `b` | with `a` | 2 | 4 |
+| `c` | once `a` and `b` finish | 1 | 8 |
+
+**Cores available** are the ones the process may use: on Linux, a container's CPU limit and CPU affinity, not the host's total; on macOS, the core count.
+
+**A number applies to every job.** It's checked against the cores, not multiplied by `workers`: `workers: 4` with `maskingThreads: 4` on 8 cores runs 16 masking threads at once. Only `auto` shares the cores between jobs.
+
+**`BAUTA_MASKING_THREADS`** overrides the setting for one environment, as a number or `auto`, and is checked the same way.
+
+**What never uses more than one thread:** masking without the extension (not installed, or `BAUTA_NATIVE=0`), and strategies the extension doesn't cover, such as `redact`, `shuffle`, `dateShift` and [your own](#your-own-strategies).
+
+**Seeing what it chose.** `bauta validate` prints the plan:
+
+```
+masking: bauta-rs 0.1.3, 5 to 10 thread(s) per job (maskingThreads: auto; 10 core(s)): 5 with 2 jobs running, 10 for a job running alone
+```
+
+and each masked job logs what it got as it starts:
+
+```
+maskCustomers: masking with 4 thread(s) (2 job(s) running, 8 core(s))
+```
+
+**When it helps.** Threads help where masking, not the database, sets the pace: wide tables with many masked columns. A million rows of 25 masked columns, SQLite to SQLite on ten cores, from [the native-masking demo](../example/README.md#native-masking):
+
+| `maskingThreads` | Rows a second |
+| --- | --- |
+| `1` | 25,000 |
+| `auto` (10 threads) | 73,000 |
+
+A narrow table gains little, since its time goes to writing.
 
 ## Domains: keeping joins intact
 
@@ -291,7 +327,7 @@ maskCustomersInPlace:
   masking: ...
 ```
 
-Masked rows stream into the stage table, and the stage is then swapped with the original. If a run fails before the swap, the original is untouched. The removed `scramble` command truncated the table first, so a failed run could leave it empty.
+Masked rows stream into the stage table, and the stage is then swapped with the original. If a run fails before the swap, the original is untouched.
 
 Use `swap` rather than `upsert` for this if any key column is masked. An upsert matches rows by primary key, and a masked key would add new rows instead of replacing the old ones.
 
@@ -324,8 +360,8 @@ Every run then writes a record of what was masked, how, and under which key fing
       ]
     }
   ],
-  "maskedBy": "bauta-rs/0.1.0",
-  "tool": {"name": "bauta", "version": "0.1.0"},
+  "maskedBy": "bauta-rs/0.1.3",
+  "tool": {"name": "bauta", "version": "0.1.3"},
   "configuration": {"jobsFile": "configuration/jobs.yaml", "sha256": "9f2c…"},
   "integrity": {
     "algorithm": "sha256",
@@ -355,7 +391,7 @@ manifest:
   table: audit.bauta_manifest   # optional; bauta_manifest by default
 ```
 
-or `--manifest-database ALIAS` for one run. Each manifest is stored exactly as it would be written to a file, in 2000-character pieces so one table definition fits every database, under a new run id that the log line names. The table must exist first ([`DATABASE_MANIFEST_SCHEMA`](operations.md#run-state)).
+or `--manifest-database ALIAS` for one run. Each manifest is stored exactly as it would be written to a file, in 2000-character pieces so one table definition fits every database, under a new run id that the log line names. The table must exist first: [operations.md](operations.md#tables) has its definition.
 
 `bauta verify-manifest` with no file reads the latest manifest from there, and `--run RUN_ID` picks an earlier one.
 
@@ -459,7 +495,7 @@ exclude: [ip]                           # built-in rules to leave out
 - **`policy`** is a column policy as in `jobs.yaml`: a strategy name, or a mapping with its options. `reason` is the comment written beside the proposal; without one, it says the rule came from `discovery.yaml`.
 - **Leaving built-in rules out.** `exclude` names built-in rules to drop, and one name covers a rule's name and value forms both: leaving out `phone` means nothing is taken for a phone number. `builtins: false` drops them all, `personalTables` included, leaving only yours.
 
-| Field | | |
+| Field | Required or default | Meaning |
 | --- | --- | --- |
 | `names` | optional | Rules on column names, each with `words`, a `policy` and an optional `reason`. |
 | `values` | optional | Rules on sampled values, each with a `pattern`, a `policy` and an optional `reason`. |
@@ -602,25 +638,3 @@ customers: 1000 row(s)
 - **`shuffle` needs large chunks.** Values only move within a chunk, so a row keeps its own value with probability 1/chunk size, and a chunk of one row isn't shuffled at all. The last chunk of a load and a small incremental run are both small. Don't use `shuffle` on incremental jobs.
 - **Masking hides values, not patterns.** Row counts, NULL rates and relationships are all preserved, which is the point, and a combination of kept columns (zip code, birth year and gender) can still identify someone. Review what you `keep`.
 - **Hard deletes** aren't propagated by incremental loads, masked or not. See [design.md](design.md#deletes).
-
-
-## Migrating from `scramble.yaml`
-
-`bauta scramble` and `scramble.yaml` have been **removed**. A scramble job held the whole table in memory, truncated it and reinserted the rows. It had none of the properties above: masks weren't consistent across tables or runs, and a failure could leave the table empty.
-
-To migrate, turn each scramble job into an in-place data job ([masking in place](#masking-in-place)) with `sourceQuery: select * from <table>`, and translate its fields:
-
-| `scramble.yaml` | `masking.columns` |
-| --- | --- |
-| `defaultColumnValues: {status: active}` | `status: {strategy: constant, value: active}` |
-| `identifierColumns: [id]` | `id: keep`, or `key` if the id should be masked too |
-| `scrambleColumns: [name]` | `name: shuffle`, or better, `fakeName` |
-| `randomColumns` (text) | `hash`, `email` or a `fake*` strategy |
-| `randomColumns` (number) | `number` with `min`/`max` |
-| `randomColumns` (date) | `dateShift` |
-| `randomSalt` | `key`, read from the environment |
-| `allDataRandom: true` | list every column explicitly |
-| a column mentioned nowhere (shuffled) | must now be listed. Nothing is shuffled by default. |
-| `pre/postTargetAdhocQueries` | unchanged: data jobs have the same fields |
-
-`bauta discover --database <alias> --table <table>` writes that in-place job for you, with a proposed policy.

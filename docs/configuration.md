@@ -12,24 +12,28 @@ The field reference. For *why* things behave as they do, see [design.md](design.
 
 ## Where configuration is found
 
-The CLI looks for a directory holding `database.yaml` and `jobs.yaml`, in this order. `discover`, `subset`, `schema` and `synthesize` read only `database.yaml`.
+The CLI reads its configuration from one directory, found in this order:
 
 1. `--config DIR`
 2. `$BAUTA_CONFIG`
 3. `./configuration`
 
-`--jobs FILE` and `--databases FILE` override either file individually.
+| File | Required | Holds | Read by |
+| --- | --- | --- | --- |
+| `database.yaml` | yes | The [database aliases](#databaseyaml). | Every command, except `history` and `verify-manifest` given a file. |
+| `jobs.yaml` | for jobs | The [data jobs](#jobsyaml--data-jobs), and where run state, history and the manifest are kept. | `run`, `validate`, `jobs`, `audit`, `clear`; `history` and `verify-manifest` when no flag names a file or table. |
+| `discovery.yaml` | no | [Rules of your own](masking.md#your-own-rules-discoveryyaml) for recognising personal data. | `discover`, `subset --mask`, `audit`, `synthesize`, `validate`. |
 
-Run state (last-run times and watermarks) goes where `jobs.yaml`'s [`memory`](#file-level) says, or `memory.yaml` beside `jobs.yaml` without it. Run history and the masking manifest go where its `history` and `manifest` say, or nowhere. Each can be a file, found relative to `jobs.yaml` rather than the working directory so a cron entry and a shell started elsewhere share it, or a table. A command-line flag overrides each. See [operations.md](operations.md#run-state).
+`--databases FILE`, `--jobs FILE` and `--rules FILE` name a file anywhere else.
 
-A layout that keeps what you write apart from what runs write:
+Paths inside `jobs.yaml` are relative to `jobs.yaml`, so a cron entry and a shell started elsewhere find the same files. Paths on the command line are relative to the working directory. A layout that keeps what you write apart from what runs write:
 
 ```
-configuration/    database.yaml, jobs.yaml (with memory: ../transaction/memory.yaml), and discovery.yaml if you have one
-transaction/      memory.yaml and its locks; history and the manifest belong here too
+configuration/    database.yaml, jobs.yaml, discovery.yaml
+transaction/      run state, history and the manifest, which jobs.yaml points at as ../transaction/...
 ```
 
-`example/starter/configuration/` is set up this way. Logs are only written where `--log` names, relative to the working directory like any other command-line path.
+`example/starter/configuration/` is set up this way.
 
 
 ## Credentials
@@ -65,7 +69,7 @@ warehouse:
   password: ${WAREHOUSE_PASSWORD}
 ```
 
-| Field | | |
+| Field | Required or default | Meaning |
 | --- | --- | --- |
 | `type` | required | `oracle`, `mysql`, `postgresql`, `mssql`, `mariadb` or `sqlite` |
 | `database` | required | The database name. For `sqlite`, a file path or `:memory:`. |
@@ -152,14 +156,14 @@ jobs:
 
 ### File level
 
-| Field | | |
+| Field | Required or default | Meaning |
 | --- | --- | --- |
 | `workers` | required | Worker processes to run jobs concurrently, at least 1. |
 | `cycleSleepSeconds` | optional, `0.5` | Pause between cycles under `--forever`. |
-| `memory` | optional, `memory.yaml` | Where the CLI keeps run state: a file relative to this one (`../transaction/memory.yaml` keeps it out of the configuration directory), or a [table](#tables). `--memory FILE` or `--memory-database ALIAS` overrides it. |
-| `history` | optional, none | Where `run` records each job's outcome after every cycle, and `bauta history` reads it: a JSON-lines file relative to this one, or a [table](#tables). `--history FILE` or `--history-database ALIAS` overrides it. See [run history](operations.md#run-history). |
-| `manifest` | optional, none | Where `run` writes its [masking manifest](masking.md#the-manifest), and `verify-manifest` reads it: a file relative to this one, replaced each run, or a [table](#tables), which keeps every run's. `--manifest FILE` or `--manifest-database ALIAS` overrides it. |
-| `maskingThreads` | optional, `1` | Threads the [native masker](masking.md#the-native-masker) spreads each job's chunks over: a number, up to the cores available (a container's CPU limit), or `auto`, which shares the cores as each job starts with the jobs running alongside it. More than the cores is refused by `validate` and `run`. Results are the same for any count. `BAUTA_MASKING_THREADS` overrides it. |
+| `memory` | optional, `memory.yaml` | Where `run` keeps run state: last runs, watermarks and key fingerprints. A file, or a [table](#tables). `--memory FILE` or `--memory-database ALIAS` overrides it. See [run state](operations.md#run-state). |
+| `history` | optional | Where `run` records each job's outcome after every cycle, for `bauta history`. A JSON-lines file, or a [table](#tables). Not recorded when unset. `--history FILE` or `--history-database ALIAS` overrides it. See [run history](operations.md#run-history). |
+| `manifest` | optional | Where `run` writes its [masking manifest](masking.md#the-manifest), for `bauta verify-manifest`. A file, replaced each run, or a [table](#tables), which keeps every run's. Not written when unset. `--manifest FILE` or `--manifest-database ALIAS` overrides it. |
+| `maskingThreads` | optional, `1` | Threads the [native masker](masking.md#the-native-masker) masks each job with: `1`, a number up to the cores available, or `auto` to divide the cores between the jobs running. Results are the same for any count. `BAUTA_MASKING_THREADS` overrides it. See [masking threads](masking.md#masking-threads). |
 | `jobs` | required | A map of job name to job definition. |
 
 `validate` prints where all three resolve, and how many masking threads a run would use.
@@ -176,11 +180,11 @@ history:
   table: etl.run_history
 ```
 
-`table` defaults to `bauta_memory`, `bauta_history` or `bauta_manifest`, and `--memory-table`, `--history-table` or `--manifest-table` overrides it. Each table must exist first; [operations.md](operations.md#run-state) has their definitions.
+`table` defaults to `bauta_memory`, `bauta_history` or `bauta_manifest`, and `--memory-table`, `--history-table` or `--manifest-table` overrides it. The alias must be in `database.yaml`, and the table must exist first: [operations.md](operations.md#tables) has their definitions.
 
 ### Scheduling
 
-| Field | | |
+| Field | Required or default | Meaning |
 | --- | --- | --- |
 | `active` | required | Whether the job runs at all. |
 | `refresh` | optional | Minimum minutes between runs. Applies across separate invocations too. A predecessor inside its own refresh window is **not** waited for — see [refresh and predecessors](design.md#refresh-and-predecessors). |
@@ -191,7 +195,7 @@ history:
 
 ### Extract
 
-| Field | | |
+| Field | Required or default | Meaning |
 | --- | --- | --- |
 | `sourceDatabase` | required | An alias from `database.yaml`. |
 | `sourceQuery` | required | The query to extract with. |
@@ -203,7 +207,7 @@ A job with `watermarkColumn` must also put a `{{ watermark }}` placeholder in `s
 
 ### Transform
 
-| Field | | |
+| Field | Required or default | Meaning |
 | --- | --- | --- |
 | `sourceQueryColumnTransforms` | optional | A map of column name to a list of transformer references, applied in order. |
 
@@ -256,7 +260,7 @@ Transforms apply to **`sourceQuery`'s own result columns**, not the target's. Na
 
 ### Load
 
-| Field | | |
+| Field | Required or default | Meaning |
 | --- | --- | --- |
 | `targetDatabase` | required | An alias from `database.yaml`. |
 | `targetTableFinal` | required | The table to load: `table`, or `schema.table` for one outside the connection's current schema. |
@@ -271,7 +275,7 @@ Transforms apply to **`sourceQuery`'s own result columns**, not the target's. Na
 
 ### Mask
 
-| Field | | |
+| Field | Required or default | Meaning |
 | --- | --- | --- |
 | `masking` | optional | Masks rows between the extract and the load. Its fields are `key`, `columns` and `defaultStrategy`, all documented in [masking.md](masking.md#a-masked-job). |
 
@@ -295,6 +299,6 @@ Masking runs after transforms, on `sourceQuery`'s result columns. **Every column
 
 ## Validation
 
-`bauta validate` checks everything above without connecting to anything: every field, every alias, every predecessor and that they form no cycle, every transformer reference, and every masking strategy, option and key length. Problems are reported all at once, as `ConfigurationError`, rather than one per run.
+`bauta validate` checks everything above without connecting to anything: every field, every alias (including those `memory`, `history` and `manifest` name), every predecessor and that they form no cycle, every transformer reference, every masking strategy, option and key length, `maskingThreads` against the cores available, and `discovery.yaml` if there is one. Problems are reported all at once, as `ConfigurationError`, rather than one per run. It then prints where run state, history and the manifest resolve, how many masking threads a run would use, and which discovery rules apply.
 
 `bauta run --dry-run` adds the checks that need a connection: that each database is reachable, that target tables exist, that upsert targets have a primary key, and that each masking policy covers every column its query returns.

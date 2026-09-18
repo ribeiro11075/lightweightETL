@@ -4,7 +4,7 @@ Runnable demonstrations, and a starter configuration to copy. None needs a serve
 
 Each demo has the same shape:
 
-| | |
+| File or folder | What it is |
 | --- | --- |
 | `demo.py` | the script: `python example/<demo>/demo.py` from the repository root |
 | `configuration/` | what it reads: `database.yaml`, and `jobs.yaml` where the demo doesn't generate its own |
@@ -105,7 +105,7 @@ Rust, in turn, all cores          19.4          51,669         2.4x
 Rust, overlapped, all cores       13.6          73,366         3.4x
 ```
 
-Ten cores, an M1 Pro. Overlapping gains little for Python, whose masking leaves no wait worth hiding, and more for Rust. More cores gain little on the narrow table, whose time goes to writing, and the most on the wide one. Against a remote database, where each round trip is a real wait, overlapping gains more still.
+Ten cores, an M1 Pro. Overlapping gains little for Python, whose masking leaves no wait worth hiding, and more for Rust. The narrow table runs on one core only: its time goes to writing the database, which more cores don't speed up. Against a remote database, where each round trip is a real wait, overlapping gains more still.
 
 The Rust extension is optional. Without it, the demo runs the two Python runs and says how to install it: with Rust 1.83 or newer, `pip install ./mask-rs/py` from the repository root. One run at a time: each empties `transaction/` first, so a second refuses to start while one is running.
 
@@ -121,7 +121,7 @@ mkdir configuration
 cp example/starter/configuration/*.yaml configuration/
 ```
 
-| File | |
+| File | What it holds |
 | --- | --- |
 | `database.yaml` | two database aliases, with credentials read from the environment |
 | `jobs.yaml` | data jobs, including an incremental one and two masked ones, with run state, history and the manifest kept in `transaction/` |

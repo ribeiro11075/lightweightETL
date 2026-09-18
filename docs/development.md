@@ -4,7 +4,7 @@
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[all,dev]" ./mask-rs/py    # leave off ./mask-rs/py without Rust
 pytest
-mypy
+mypy                                         # targets Python 3.10, the oldest supported
 ```
 
 
@@ -17,6 +17,7 @@ mypy
 - The CLI, driven through `main()` against a real SQLite database, including its exit codes, and `discover` and `subset` output that is then run.
 - Masking end to end through real worker processes (`tests/test_masking_end_to_end.py`), and the masking strategies' properties (`tests/test_masking.py`): determinism, consistency within a domain, one-to-one keys, and preserved types.
 - The shipped examples: every `configuration/` under `example/` is validated against the real models, and every demo is run end to end, so none can drift from what the code accepts.
+- With the native masker installed, Python against Rust over the same values (`tests/test_nativeMasking.py`), on one thread and on eight, with identical masks and errors required.
 
 `tests/conftest.py` stubs `oracledb` and `psycopg` only when they aren't installed, so the default run needs no native client libraries.
 
@@ -27,12 +28,12 @@ mypy
 
 ```
 cd mask-rs
-cargo test --release              # 918 recorded vectors, NIST FF1, RFC 4231
+cargo test --release              # bauta-core: 3,426 recorded vectors, NIST FF1, RFC 4231
 cd py && maturin build --release
 pip install ../target/wheels/bauta_rs-*.whl
 ```
 
-`--release` matters: two tests measure SHA-256 and AES throughput to catch a backend that fell back to software, which a debug build is indistinguishable from.
+`--release` matters: two tests measure SHA-256 and AES throughput to catch a backend that fell back to software, which a debug build is indistinguishable from. `cargo test` covers `bauta-core`; the extension crate needs a Python interpreter to link, so it's tested from Python, by `tests/test_nativeMasking.py`.
 
 **Python is the reference.** Change masking in Python first, port it, then regenerate the vectors with `python3 mask-rs/generate_vectors.py`. `tests/test_maskVectors.py` fails if Python drifts from the recorded file, so regenerating it is deliberate: it means every masked value has changed. Run the suite both ways, as CI does:
 
@@ -70,11 +71,6 @@ Each test creates its own uniquely named table and drops it afterwards, so the s
 Run them before trusting a change to anything database-facing; they have found bugs the mocked suite couldn't.
 
 
-## Notes
-
-mypy targets Python 3.10, the oldest version the package supports.
-
-
 ## Dependency versions
 
 `pyproject.toml` gives ranges, not pins, so the package installs beside other tools that have their own. Two files in `constraints/` pin them:
@@ -92,7 +88,7 @@ mypy targets Python 3.10, the oldest version the package supports.
 `.github/workflows/release.yml` publishes a release when a tag matching the version in `pyproject.toml`, and in `mask-rs/Cargo.toml`, is pushed. Bump both, and the `native` extra's pin, together:
 
 ```
-git tag v0.1.1 && git push origin v0.1.1
+git tag v0.1.3 && git push origin v0.1.3      # the version in pyproject.toml
 ```
 
 It builds and checks `bauta`'s sdist and wheel, and `bauta-rs`'s sdist and a wheel for each of Linux x86-64 and ARM and macOS Apple silicon and Intel, each on its own hardware. Each wheel is installed and the suite run against it, on the oldest and newest supported Python, before anything is published; so is a wheel built from the sdist. Then both go to PyPI together. PyPI publishing uses trusted publishing, so there is no token to store. Set it up once per project, before its first tag:
