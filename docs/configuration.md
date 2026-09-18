@@ -1,6 +1,6 @@
 # Configuration
 
-The field reference. For *why* things behave as they do, see [design.md](design.md). `example/starter/configuration/` is a complete set of these files, validated on every test run — copying it is the fastest start.
+The field reference. For *why* things behave as they do, see [design.md](design.md). `bauta init` writes a complete set of these files, validated on every test run — editing them is the fastest start.
 
 - [Where configuration is found](#where-configuration-is-found)
 - [Credentials](#credentials)
@@ -29,7 +29,7 @@ configuration/    database.yaml, jobs.yaml (with memory: ../transaction/memory.y
 transaction/      memory.yaml and its locks; point --log, --manifest and --history here too
 ```
 
-`example/starter/configuration/` is set up this way. Logs, manifests and history are only written where you name them, relative to the working directory like any other command-line path.
+`bauta init` sets them up this way. Logs, manifests and history are only written where you name them, relative to the working directory like any other command-line path.
 
 
 ## Credentials

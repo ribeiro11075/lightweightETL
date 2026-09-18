@@ -19,14 +19,18 @@ import hashlib
 import functools
 import hmac
 import importlib
-import os
+import importlib.metadata
 import json
+import logging
+import os
 import math
 import random
 import re
 import unicodedata
 import uuid
 from typing import Any, Callable, ClassVar, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Type
+
+from .log import LOGGER_NAME
 
 KEY_MINIMUM_LENGTH = 16
 
@@ -53,8 +57,12 @@ HMAC_BLOCK_SIZE = 64
 
 @functools.cache
 def _nativeModule() -> Any:
-    """The optional `bauta_rs` extension, or None if it isn't installed
-    or BAUTA_NATIVE=0 turns it off.
+    """The optional `bauta_rs` extension, or None if it isn't installed,
+    BAUTA_NATIVE=0 turns it off, or its version isn't this package's.
+
+    The two install separately, so nothing else stops a pairing whose masks
+    differ -- which would reach a deployment as joins that quietly stop
+    matching. Masking in Python instead is only slower.
     """
 
     if os.environ.get('BAUTA_NATIVE') == '0':
@@ -63,6 +71,19 @@ def _nativeModule() -> Any:
     try:
         import bauta_rs
     except ImportError:
+        return None
+
+    try:
+        expected = importlib.metadata.version('bauta')
+    except importlib.metadata.PackageNotFoundError:
+        # Imported from a source tree that was never installed: nothing to compare against.
+        return bauta_rs
+
+    installed = getattr(bauta_rs, '__version__', None)
+    if installed != expected:
+        logging.getLogger(LOGGER_NAME).warning(
+            'Masking in Python: bauta-rs %s does not match bauta %s, and only the same version is certain to mask identically. '
+            'pip install "bauta[native]==%s" installs the matching one.', installed, expected, expected)
         return None
 
     return bauta_rs

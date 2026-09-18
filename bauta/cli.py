@@ -899,6 +899,36 @@ def _commandJobs(arguments: argparse.Namespace, log: Log) -> int:
     return EXIT_SUCCESS
 
 
+STARTER_FILES = ('database.yaml', 'jobs.yaml')
+
+
+def _commandInit(arguments: argparse.Namespace, log: Log) -> int:
+    """Writes the starter configuration, which ships with the package, into
+    the configuration directory. Writes nothing if either file is already
+    there, since a reviewed jobs.yaml is worth more than a sample.
+    """
+
+    from importlib.resources import files
+
+    configDirectory = _configDirectory(arguments)
+    existing = [configDirectory / name for name in STARTER_FILES if (configDirectory / name).exists()]
+    if existing:
+        raise UsageError('{} already exist{}; remove {} or choose another --config'.format(
+            ' and '.join(str(path) for path in existing), 's' if len(existing) == 1 else '', 'it' if len(existing) == 1 else 'them'))
+
+    configDirectory.mkdir(parents=True, exist_ok=True)
+    for name in STARTER_FILES:
+        (configDirectory / name).write_text((files('bauta') / 'starter' / name).read_text())
+        print('wrote {}'.format(configDirectory / name))
+
+    print('\nEdit both files for your databases, set SOURCE_DB_PASSWORD, TARGET_DB_PASSWORD and MASKING_KEY, then:\n\n'
+          '  bauta validate{0}          # check the configuration, offline\n'
+          '  bauta run --dry-run{0}     # check connections and tables, moving nothing'.format(
+              '' if configDirectory == Path('configuration') else ' --config {}'.format(configDirectory)))
+
+    return EXIT_SUCCESS
+
+
 def _addCommonArguments(parser: argparse.ArgumentParser, jobs: bool = True) -> None:
 
     parser.add_argument('--config', help='directory holding jobs.yaml and database.yaml (default: ${} or ./configuration)'.format(
@@ -969,6 +999,12 @@ def _buildParser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(prog='bauta', description='Move, mask and subset data between databases, with jobs defined in YAML.')
     subparsers = parser.add_subparsers(dest='command', required=True)
+
+    initParser = subparsers.add_parser('init', help='write a starter configuration to edit for your databases')
+    initParser.add_argument('--config', help='directory to write jobs.yaml and database.yaml into (default: ${} or ./configuration)'.format(
+        CONFIG_DIRECTORY_VARIABLE))
+    _addLoggingArguments(initParser)
+    initParser.set_defaults(handler=_commandInit)
 
     runParser = subparsers.add_parser('run', help='run data jobs')
     _addCommonArguments(runParser)

@@ -8,13 +8,25 @@ build-backend = "maturin"
 [project]
 name = "bauta-rs"
 description = "The native masking core for Bauta. Optional: bauta works without it."
+readme = "../README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+authors = [{ name = "David Ribeiro" }]
+keywords = ["data masking", "format-preserving encryption", "bauta"]
 classifiers = [
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Security",
     ]
 dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/ribeiro11075/bauta"
+Documentation = "https://github.com/ribeiro11075/bauta/blob/master/docs/masking.md#the-native-masker"
+Issues = "https://github.com/ribeiro11075/bauta/issues"
 
 [tool.maturin]
 # abi3 so one wheel per platform covers every supported Python.

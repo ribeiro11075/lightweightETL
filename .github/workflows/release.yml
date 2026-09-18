@@ -1,26 +1,35 @@
 name: Release
 
-# Push a tag such as v0.1.0 whose number matches pyproject.toml's version.
+# Push a tag such as v0.1.1 whose number matches pyproject.toml's version and
+# mask-rs/Cargo.toml's: bauta and bauta-rs are always released together.
+# Running the workflow by hand builds and tests everything, and publishes nothing.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build the distributions
+    name: Build bauta
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
-      - name: Check the tag matches the version
+      - name: Check the tag matches both versions
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
-          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
-          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME does not match version $version"; exit 1; }
+          python - <<'EOF'
+          import os, tomllib
+          python = tomllib.load(open('pyproject.toml', 'rb'))['project']['version']
+          rust = tomllib.load(open('mask-rs/Cargo.toml', 'rb'))['workspace']['package']['version']
+          tag = os.environ['GITHUB_REF_NAME']
+          assert tag == 'v' + python == 'v' + rust, 'tag {} does not match bauta {} and bauta-rs {}'.format(tag, python, rust)
+          EOF
       - name: Build
         run: |
           python -m pip install build==1.6.1 twine==7.0.0
@@ -28,12 +37,94 @@ jobs:
           python -m twine check --strict dist/*
       - uses: actions/upload-artifact@v4
         with:
-          name: dist
+          name: dist-bauta
           path: dist/
+
+  # One abi3 wheel per platform covers every supported Python. Each is built
+  # and tested on its own hardware, so nothing is cross-compiled and every
+  # wheel published has computed the Python implementation's masks.
+  native-wheels:
+    name: Build bauta-rs, ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64
+            os: ubuntu-latest
+            target: x86_64
+          - name: Linux ARM
+            os: ubuntu-24.04-arm
+            target: aarch64
+          - name: macOS Apple silicon
+            os: macos-latest
+            target: aarch64
+          - name: macOS Intel
+            os: macos-26-intel
+            target: x86_64
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: |
+            3.10
+            3.14
+      - name: Build
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: mask-rs/py
+          target: ${{ matrix.target }}
+          # glibc 2.17, the oldest manylinux still built for; ignored on macOS
+          manylinux: '2014'
+          args: --release --out dist
+      - name: Test on the oldest and newest Python
+        run: |
+          for python in python3.10 python3.14; do
+            $python -m venv "$RUNNER_TEMP/$python"
+            "$RUNNER_TEMP/$python/bin/python" -m pip install -e ".[dev,fpe]"
+            "$RUNNER_TEMP/$python/bin/python" -m pip install --no-index --find-links mask-rs/py/dist bauta-rs
+            # The native tests skip when the extension isn't in use, so a wheel
+            # that failed to load would otherwise pass.
+            "$RUNNER_TEMP/$python/bin/python" -c "import sys; from bauta.masking import nativeVersion; sys.exit(nativeVersion() is None)"
+            "$RUNNER_TEMP/$python/bin/python" -m pytest -q
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-bauta-rs-${{ matrix.target }}-${{ runner.os }}
+          path: mask-rs/py/dist/
+
+  # For every other platform, where pip compiles it. Built into a wheel and
+  # tested here, so an sdist missing a file fails before it's published.
+  native-sdist:
+    name: Build bauta-rs, source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: mask-rs/py
+          command: sdist
+          args: --out dist
+      - name: Test a wheel built from it
+        run: |
+          python -m pip install -e ".[dev,fpe]"
+          python -m pip install mask-rs/py/dist/bauta_rs-*.tar.gz
+          python -c "import sys; from bauta.masking import nativeVersion; sys.exit(nativeVersion() is None)"
+          python -m pytest -q
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-bauta-rs-sdist
+          path: mask-rs/py/dist/
 
   pypi:
     name: Publish to PyPI
-    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, native-wheels, native-sdist]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -41,6 +132,11 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: dist
+          pattern: dist-*
+          merge-multiple: true
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # A re-run after a partial upload finishes the rest instead of failing
+          # on what already went up; the tag check makes those files the same.
+          skip-existing: true

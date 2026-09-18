@@ -1,9 +1,14 @@
-"""Keeps pyproject.toml's dependency ranges and the files that pin them in step.
+"""Keeps pyproject.toml's dependency ranges and the files that pin them in step,
+and bauta's version in step with the native masker's.
 
 The package takes ranges, so it can install beside other tools. CI tests the
 bottom of each range with constraints/lowest.txt, and a pinned set near the
 top with constraints/image.txt; either drifting from pyproject.toml would make
 that testing describe something nobody installs.
+
+The native masker is the exception: masking.py uses it only at bauta's own
+version, so the `native` extra pins exactly that, and both are released from
+one tag.
 """
 import sys
 from pathlib import Path
@@ -19,6 +24,7 @@ else:
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']
+NATIVE_VERSION = tomllib.loads((ROOT / 'mask-rs' / 'Cargo.toml').read_text())['workspace']['package']['version']
 
 
 def _requirements():
@@ -30,7 +36,7 @@ def _requirements():
     requirements = {}
     for text in texts:
         requirement = Requirement(text)
-        if requirement.name != 'bauta':
+        if requirement.name not in ('bauta', 'bauta-rs'):
             requirements[requirement.name] = requirement
     return requirements
 
@@ -71,3 +77,14 @@ def test_the_image_pins_everything_within_the_ranges():
     for name, requirement in REQUIREMENTS.items():
         assert name in pins, '{} is not pinned in image.txt'.format(name)
         assert requirement.specifier.contains(pins[name]), '{}=={} is outside {}'.format(name, pins[name], requirement)
+
+
+def test_the_native_masker_is_released_at_bauta_s_version():
+    assert NATIVE_VERSION == PROJECT['version']
+
+
+def test_the_native_extra_pins_exactly_that_version():
+    (requirement,) = [Requirement(text) for text in PROJECT['optional-dependencies']['native']]
+
+    assert requirement.name == 'bauta-rs'
+    assert str(requirement.specifier) == '=={}'.format(PROJECT['version'])

@@ -22,15 +22,7 @@ Python 3.10 or newer. Choose the drivers you need as extras; each is loaded only
 pip install "bauta[postgresql,oracle]"
 ```
 
-It isn't on PyPI yet. Until the first release, install from a clone:
-
-```
-git clone https://github.com/ribeiro11075/bauta.git
-cd bauta
-pip install -e ".[postgresql,oracle]"
-```
-
-| Extra | Driver | Needs besides pip |
+| Extra | Installs | Needs besides pip |
 | --- | --- | --- |
 | `mysql`, `mariadb` | mysql-connector-python | nothing |
 | `postgresql` | psycopg2, built from source | a C compiler and PostgreSQL's client library (below) |
@@ -38,6 +30,7 @@ pip install -e ".[postgresql,oracle]"
 | `mssql` | pymssql | nothing |
 | `sqlite` | Python's own `sqlite3` | nothing |
 | `fpe` | cryptography, for the `fpe` masking strategy | nothing; `oracle` already brings it |
+| `native` | `bauta-rs`, the native masker (below) | nothing on Linux (x86-64, ARM) or macOS; elsewhere, [Rust](https://rustup.rs) 1.83 or newer |
 | `all` | every driver above | as for `postgresql` |
 
 **Building psycopg2.** pip compiles it, so it needs a compiler and `pg_config`:
@@ -47,23 +40,16 @@ pip install -e ".[postgresql,oracle]"
 
 To skip the build, leave `postgresql` (and `all`) out and install the prebuilt driver beside the other extras: `pip install "bauta[mysql,oracle,mssql]" psycopg2-binary`. psycopg2's maintainers recommend the source build for production.
 
-**The native masker (optional).** `bauta-rs`, in `mask-rs/`, masks in Rust: four to five times the throughput, identical masks, nothing to configure. With [Rust](https://rustup.rs) 1.83 or newer, pip builds it in the same command as the rest:
-
-```
-pip install -e ".[all]" ./mask-rs/py
-```
-
-Without Rust, leave `./mask-rs/py` off; everything works, only slower. See [the native masker](docs/masking.md#the-native-masker).
+**The native masker (optional).** `bauta-rs` masks in Rust: four to five times the throughput, identical masks, nothing to configure. `pip install "bauta[postgresql,native]"` installs the version that matches, which is the only one Bauta uses. Without it, everything works, only slower. See [the native masker](docs/masking.md#the-native-masker).
 
 
 ## Quickstart
 
 ```
-mkdir configuration
-cp example/starter/configuration/*.yaml configuration/
+bauta init
 ```
 
-Edit `configuration/database.yaml` and `configuration/jobs.yaml` for your databases, then supply the credentials they reference:
+writes a starter `configuration/database.yaml` and `configuration/jobs.yaml`. Edit them for your databases, then supply the credentials they reference:
 
 ```
 export SOURCE_DB_PASSWORD=...  TARGET_DB_PASSWORD=...  MASKING_KEY=...
@@ -73,9 +59,12 @@ bauta run --dry-run     # check connections and tables, moving nothing
 bauta run               # run every job once
 ```
 
-To see it work without any of that, using throwaway SQLite databases:
+To see it work without any of that, the demos in a clone of this repository use throwaway SQLite databases:
 
 ```
+git clone https://github.com/ribeiro11075/bauta.git && cd bauta
+pip install -e ".[fpe]"
+
 python example/walkthrough/demo.py       # the whole workflow: discover, subset, audit, mask, verify, synthesize
 python example/incremental/demo.py       # streaming and incremental loads
 python example/masking/demo.py           # masking, discovery and a subset, from Python
@@ -86,6 +75,7 @@ python example/native-masking/demo.py    # the same job masked in Python and in 
 ## The command
 
 ```
+bauta init             write a starter configuration to edit
 bauta run              run data jobs once, masking any with a `masking` section
 bauta validate         check configuration without connecting
 bauta jobs             show the job graph and what's due
@@ -144,9 +134,9 @@ bauta verify-manifest  check a manifest is unaltered, and who signed it
 
 | | |
 | --- | --- |
-| `bauta/` | the package; `runner.py` runs jobs, `masking.py` masks, `databaseDialects.py` holds per-database SQL |
+| `bauta/` | the package; `runner.py` runs jobs, `masking.py` masks, `databaseDialects.py` holds per-database SQL, `starter/` is what `bauta init` writes |
 | `mask-rs/` | the optional native masker, in Rust — see [its README](mask-rs/README.md) |
-| `example/` | runnable demos, each with its `configuration/`, and a starter configuration — see [its README](example/README.md) |
+| `example/` | runnable demos, each with its `configuration/` — see [its README](example/README.md) |
 | `docs/` | the documentation above |
 | `tests/` | the test suite |
 

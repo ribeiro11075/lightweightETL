@@ -10,6 +10,17 @@ Rust, four to five times faster on a whole job.
 It is optional. Bauta works without it, and produces identical output
 either way.
 
+## Installing
+
+```
+pip install "bauta[native]"
+```
+
+The extra installs the `bauta-rs` released with your version of `bauta`, which
+is the only one Bauta uses; any other is ignored with a warning. Wheels cover
+Linux (x86-64 and ARM) and macOS (Apple silicon and Intel) on every supported
+Python. Elsewhere pip compiles it, which needs Rust 1.83 or newer.
+
 ## Layout
 
 | | |
@@ -21,7 +32,7 @@ either way.
 
 ## Building
 
-Needs Rust 1.83 or newer.
+From a clone, with Rust 1.83 or newer.
 
 ```
 cargo test --release

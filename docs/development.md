@@ -25,7 +25,7 @@ mypy
 
 ## The native masker
 
-`mask-rs/` holds `bauta-rs`, the optional Rust extension: a separate distribution, so this package installs anywhere without a Rust toolchain. See [its README](../mask-rs/README.md) for the layout. Rust 1.83 or newer:
+`mask-rs/` holds `bauta-rs`, the optional Rust extension: a separate distribution, so this package installs anywhere without a Rust toolchain. It is released at `bauta`'s own version, which the Cargo workspace's `version` must match; `tests/test_packaging.py` checks, along with the `native` extra's pin. See [its README](../mask-rs/README.md) for the layout. Rust 1.83 or newer:
 
 ```
 cd mask-rs
@@ -95,16 +95,18 @@ mypy targets Python 3.10, the oldest version the package supports.
 
 `.github/workflows/ci.yml` runs mypy and the default tests on every supported Python, with the newest dependency versions the ranges allow. It runs the integration suite against the `docker-compose.yml` servers twice: with `image.txt`'s versions on Python 3.14, and with the lowest versions on Python 3.10.
 
-`.github/workflows/release.yml` publishes a release when a tag matching the version in `pyproject.toml` is pushed:
+`.github/workflows/release.yml` publishes a release when a tag matching the version in `pyproject.toml`, and in `mask-rs/Cargo.toml`, is pushed. Bump both, and the `native` extra's pin, together:
 
 ```
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.1 && git push origin v0.1.1
 ```
 
-It builds and checks the sdist and wheel, and publishes them to PyPI. PyPI publishing uses trusted publishing, so there is no token to store. Set it up once, before the first tag:
+It builds and checks `bauta`'s sdist and wheel, and `bauta-rs`'s sdist and a wheel for each of Linux x86-64 and ARM and macOS Apple silicon and Intel, each on its own hardware. Each wheel is installed and the suite run against it, on the oldest and newest supported Python, before anything is published; so is a wheel built from the sdist. Then both go to PyPI together. PyPI publishing uses trusted publishing, so there is no token to store. Set it up once per project, before its first tag:
 
-1. On PyPI, add a pending trusted publisher for the project `bauta`: this repository, workflow `release.yml`, environment `pypi`.
+1. On PyPI, add a trusted publisher for each of `bauta` and `bauta-rs`: this repository, workflow `release.yml`, environment `pypi`.
 2. In the repository's settings, create an environment named `pypi`. Requiring a reviewer there makes each release wait for approval.
+
+If publishing stops partway, re-run the job: files already on PyPI are skipped. `Run workflow` on the Release workflow builds and tests everything without publishing, to try a change to the workflow before tagging.
 
 To check the distributions locally:
 

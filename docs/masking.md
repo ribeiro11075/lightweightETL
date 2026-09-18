@@ -185,13 +185,17 @@ If `mask()` depends on nothing but the value, set `CACHEABLE = True` on the clas
 
 ### The native masker
 
-`bauta-rs` is an optional extension that masks in Rust. It changes no result, and everything works without it. It isn't published yet, so install it from a clone, which needs Rust 1.83 or newer; pip compiles it:
+`bauta-rs` is an optional extension that masks in Rust. It changes no result, and everything works without it. Install it as an extra:
 
 ```
-pip install ./mask-rs/py
+pip install "bauta[native]"
 ```
 
-To build a wheel to install elsewhere instead, `cd mask-rs/py && maturin build --release`; it lands in `mask-rs/target/wheels/`, and as an abi3 wheel covers every supported Python.
+Wheels are published for Linux (x86-64 and ARM, glibc 2.17 or newer) and macOS (Apple silicon and Intel), each covering every supported Python. Elsewhere pip compiles it, which needs Rust 1.83 or newer.
+
+**Only the matching version is used.** `bauta-rs` is released with every version of `bauta`, and the extra pins the one that matches. Any other version is ignored with a warning and masking runs in Python, since two versions aren't certain to mask identically, and a difference would reach a deployment as joins that quietly stop matching. `maskingImplementation`, recorded with each job's key fingerprint and in the manifest, says which one masked.
+
+From a clone, `pip install ./mask-rs/py` builds the extension at the checkout's version.
 
 It covers `key`, `fpe`, `hash`, `email` and `digits`, which is where the time goes. Everything else stays in Python, and so do values it doesn't handle (`Decimal`, `UUID`, dates, non-ASCII text), so a value Python would refuse still refuses with the same message.
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bauta"
-version = "0.1.0"
+version = "0.1.1"
 description = "Safe, realistic copies of production across databases: masking, subsets, synthetic data, and the ETL to move them"
 readme = "README.md"
 license = "MIT"
@@ -62,13 +62,17 @@ sqlite = []
 # The fpe masking strategy's AES; oracledb already depends on it
 fpe = ["cryptography>=42"]
 all = ["bauta[mysql,postgresql,oracle,mssql,mariadb,sqlite,fpe]"]
+# The native masker, pinned to this exact version rather than a range: the two
+# must compute identical masks, and masking.py ignores any other version. Left
+# out of `all`, which would otherwise need Rust wherever no wheel is published.
+native = ["bauta-rs==0.1.1"]
 dev = ["pytest==9.1.1", "mypy==2.3.1", "types-PyYAML==6.0.12.20260815", "build==1.6.1", "twine==7.0.0"]
 
 [tool.setuptools]
 packages = ["bauta"]
 
 [tool.setuptools.package-data]
-bauta = ["py.typed"]
+bauta = ["py.typed", "starter/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

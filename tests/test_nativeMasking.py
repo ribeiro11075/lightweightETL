@@ -11,7 +11,11 @@ of the suite runs in that configuration.
 """
 import datetime
 import decimal
+import importlib.metadata
+import logging
 import random
+import sys
+import types
 import uuid
 
 import pytest
@@ -129,6 +133,57 @@ def test_the_extension_can_be_turned_off(monkeypatch):
     finally:
         # Or every later test would find the extension off.
         masking._nativeModule.cache_clear()
+
+
+@pytest.fixture
+def standInExtension(monkeypatch):
+    """A module in bauta_rs's place, whatever is installed, and the warnings
+    the package logs while it's there. The package's logger doesn't propagate,
+    so caplog wouldn't see them.
+    """
+    import bauta.masking as masking
+
+    extension = types.ModuleType('bauta_rs')
+    monkeypatch.setitem(sys.modules, 'bauta_rs', extension)
+    monkeypatch.delenv('BAUTA_NATIVE', raising=False)
+
+    warnings = []
+    handler = logging.Handler(level=logging.WARNING)
+    handler.emit = lambda record: warnings.append(record.getMessage())
+    logging.getLogger('bauta').addHandler(handler)
+    masking._nativeModule.cache_clear()
+
+    yield extension, warnings
+
+    logging.getLogger('bauta').removeHandler(handler)
+    masking._nativeModule.cache_clear()
+
+
+def test_an_extension_of_the_same_version_is_used(standInExtension):
+    import bauta.masking as masking
+
+    extension, warnings = standInExtension
+    extension.__version__ = importlib.metadata.version('bauta')
+
+    assert masking._nativeModule() is extension
+    assert warnings == []
+
+
+@pytest.mark.parametrize('installed', ['0.0.1', None], ids=['another version', 'no version'])
+def test_an_extension_of_another_version_is_ignored_with_a_warning(standInExtension, installed):
+    """The two install separately, so a mismatched pair is one pip command
+    away, and nothing but this check stops it masking differently.
+    """
+    import bauta.masking as masking
+
+    extension, warnings = standInExtension
+    if installed is not None:
+        extension.__version__ = installed
+
+    assert masking._nativeModule() is None
+    assert masking.maskingImplementation() == 'python'
+    (warning,) = warnings
+    assert 'bauta-rs {} does not match bauta {}'.format(installed, importlib.metadata.version('bauta')) in warning
 
 
 @native

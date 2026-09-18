@@ -869,3 +869,37 @@ def test_synthesize_needs_yes_and_dry_run_writes_nothing(workspace, capsys):
 
 def test_synthesize_rejects_a_bad_table_argument(workspace):
     assert main(['synthesize', '--quiet', '--database', 'demo', '--table', 'tgt:0', '--yes']) == EXIT_BAD_CONFIGURATION
+
+
+def test_init_writes_a_starter_configuration_that_validates(tmp_path, monkeypatch, capsys):
+    """The whole first five minutes after `pip install bauta`: no clone, no
+    copying, and a configuration the CLI accepts once its secrets are set.
+    """
+    monkeypatch.chdir(tmp_path)
+    for name, value in {'SOURCE_DB_PASSWORD': 'sourceSecret', 'TARGET_DB_PASSWORD': 'targetSecret', 'MASKING_KEY': 'a-sample-masking-key'}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv('BAUTA_CONFIG', raising=False)
+
+    assert main(['init', '--quiet']) == EXIT_SUCCESS
+    assert sorted(path.name for path in (tmp_path / 'configuration').iterdir()) == ['database.yaml', 'jobs.yaml']
+    assert 'bauta validate ' in capsys.readouterr().out
+
+    assert main(['validate', '--quiet']) == EXIT_SUCCESS
+
+
+def test_init_writes_where_config_says(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+
+    assert main(['init', '--config', 'deploy/etl', '--quiet']) == EXIT_SUCCESS
+    assert (tmp_path / 'deploy' / 'etl' / 'jobs.yaml').is_file()
+    assert 'bauta validate --config deploy/etl' in capsys.readouterr().out
+
+
+def test_init_leaves_an_existing_configuration_alone(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'configuration').mkdir()
+    (tmp_path / 'configuration' / 'jobs.yaml').write_text('reviewed')
+
+    assert main(['init', '--quiet']) == EXIT_BAD_CONFIGURATION
+    assert (tmp_path / 'configuration' / 'jobs.yaml').read_text() == 'reviewed'
+    assert not (tmp_path / 'configuration' / 'database.yaml').exists()
