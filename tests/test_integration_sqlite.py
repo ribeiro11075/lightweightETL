@@ -54,7 +54,6 @@ def peopleTable(liveDatabase):
 def test_schema_introspection_against_a_real_table(liveDatabase, peopleTable):
     assert liveDatabase.getAllColumnNames(table=peopleTable) == ['id', 'name', 'amount']
     assert liveDatabase.getPrimaryColumnNames(table=peopleTable) == ['id']
-    assert liveDatabase.getNonPrimaryColumnNames(table=peopleTable) == ['name', 'amount']
 
 
 def test_insert_and_query_round_trip(liveDatabase, peopleTable):

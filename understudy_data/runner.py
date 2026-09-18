@@ -1,32 +1,32 @@
 from __future__ import annotations
 
+import collections
 import contextlib
 import logging
 import multiprocessing as mp
 import os
-import queue
 import signal
-import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from multiprocessing.connection import wait as waitForAny
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, Callable, Deque, Dict, Iterable, Iterator, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 from .configuration import ConfigurationError, DatabaseConnectionConfig, DataJobConfig, DataJobsFile, InsertStrategy
 from .database import Database
 from .dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 from .log import LOGGER_NAME, ConnectionForwarder, Log, forwardToConnection, handleForwardedRecord
 from . import masking as maskingModule
-from .masking import BoundMasking, MaskingError, MaskingPlan, buildMaskingManifest, keyFingerprint
+from .masking import (BoundMasking, MaskingError, MaskingPlan, buildMaskingManifest, keyFingerprint, maskingIdentity,
+                      maskingImplementation, splitMaskingIdentity)
 from .memory import MemoryBackend
 from .scrubbing import describeError
 from .transform import TransformError, Transformer, TransformResolutionError, resolveTransformer, Transform
 
 logger = logging.getLogger(LOGGER_NAME)
 
-# How often the run loop wakes while jobs are running, to notice SIGINT/SIGTERM.
-# Job completions and timeouts wake it on time; this only bounds how late a
-# signal is seen.
+# How late the run loop may notice SIGINT/SIGTERM. Completions and timeouts
+# wake it on time.
 SIGNAL_POLL_SECONDS = 1.0
 
 # Jobs run in processes started this way on every platform. `fork` -- Linux's
@@ -41,29 +41,15 @@ TERMINATE_GRACE_SECONDS = 5.0
 # stopped. It has nothing left to do by then but close its connections.
 EXIT_GRACE_SECONDS = 10.0
 
-# How many chunks each side of the masking worker may queue. One is enough for
-# the reader, the masker and the writer to all have work: a job then holds three
-# chunks at once -- one being read, one being masked, one being written --
-# against the one a strictly sequential loop holds. Raising it buys no more
-# overlap and costs a chunk of memory each.
-#
-# Still cheaper than the alternative. Fewer, larger chunks also hide latency,
-# but at 10 ms a round trip three chunks of 5,000 rows beat one of 20,000 on
-# both counts: 2.24s against 2.63s, holding 15,000 rows rather than 20,000.
+# How many chunks may be masked ahead of the one being written. One already
+# keeps the reader, masker and writer all busy, holding three chunks at once;
+# more buys no overlap and costs a chunk of memory each. (It also beats larger
+# chunks: at 10 ms a round trip, three chunks of 5,000 rows took 2.24s against
+# 2.63s for one of 20,000.)
 PIPELINE_DEPTH = 1
 
-# Ends the chunk stream, on either queue.
-_FINISHED = object()
-
-# How long a blocked reader waits before checking whether it should stop.
-_PIPELINE_POLL_SECONDS = 0.2
-
-# How long to wait for the writer after the sending side has already failed.
-_PIPELINE_JOIN_SECONDS = 30.0
-
-# The longest wait between two attempts at a job. Backoff doubles from
-# retryDelaySeconds, so without a ceiling `retries: 12` would wait 5.7 hours in
-# all, with nothing but timeoutSeconds to end it.
+# Caps the doubling backoff, which would otherwise wait 5.7 hours in all over
+# `retries: 12`.
 MAXIMUM_RETRY_DELAY_SECONDS = 300.0
 
 # Messages read from one job's pipe before looking at the others, so a job
@@ -73,23 +59,12 @@ MESSAGES_PER_POLL = 500
 
 @contextlib.contextmanager
 def _terminationHandling() -> Iterator[Dict[str, bool]]:
-    """Turns SIGINT/SIGTERM into a flag the run loop can act on, and restores the
-    previous handlers on the way out.
+    """Turns SIGINT/SIGTERM into a flag the run loop acts on, restoring the
+    previous handlers on the way out. See "Stopping" in docs/design.md.
 
-    On the flag, the loop starts nothing new, lets running jobs finish, and
-    reports the rest as skipped. Tearing workers down mid-job instead would
-    leave whatever they held open -- a streaming cursor, a half-committed
-    chunked load -- for the database to clean up. A long-running runForever
-    process in Kubernetes gets SIGTERM on every ordinary pod shutdown, so this
-    is the common path, not the exceptional one.
-
-    The handler only sets a flag. Doing the teardown inside a signal handler
-    would run it on whatever stack frame happened to be executing, including one
-    inside the multiprocessing machinery.
-
-    Handlers are only installed when this is the main thread of the main
-    interpreter -- signal.signal raises anywhere else, and a library has no
-    business failing because its caller ran it on a worker thread.
+    The handler only sets the flag: teardown inside it would run on whatever
+    frame was executing, possibly inside multiprocessing. Off the main thread,
+    where signal.signal raises, no handlers are installed.
     """
 
     state = {'terminating': False}
@@ -114,20 +89,11 @@ def _terminationHandling() -> Iterator[Dict[str, bool]]:
 
 
 class RunResult(NamedTuple):
-    """What one call to runDataJobs did.
+    """What one call to runDataJobs did -- with runForever, its last cycle.
+    `interrupted` says a signal ended the run.
 
-    Returned rather than written anywhere. A result is the caller's to act on --
-    turn into an exit code, raise on, print, forward to whatever they already
-    use for alerting -- and making that a return value means it needs no backend,
-    no configuration, and no decision from the user to be useful.
-
-    This is deliberately not MemoryBackend's job. Memory is scheduler *input*:
-    read before a job runs, one overwritten row per job, and required for
-    correctness. A run's results are output: written after, append-only if kept
-    at all, and read by people rather than by the scheduler.
-
-    With runForever, this describes the last cycle, and is only returned once
-    a signal has stopped the loop. `interrupted` says a signal ended the run.
+    Returned rather than stored: MemoryBackend holds scheduler input, and this
+    is output for the caller to act on.
     """
 
     outcomes: List[JobOutcome]
@@ -155,21 +121,16 @@ class RunResult(NamedTuple):
 
     @property
     def succeeded(self) -> bool:
-        """True only if every active job completed.
-
-        A skipped job counts against this as much as a failed one: it didn't run,
-        and the data it was meant to produce isn't there. A cycle with no active
-        jobs at all succeeded trivially -- there was nothing to get wrong.
+        """True only if every active job completed; a skipped job counts as a
+        failure, since its data isn't there.
         """
 
         return not self.failed and not self.skipped
 
 
     def maskingManifest(self, jobs: Mapping[str, DataJobConfig]) -> Dict[str, Any]:
-        """The masking manifest for this run: see masking.buildMaskingManifest.
-
-        Takes the job configurations because a skipped job never produced
-        anything to describe itself with, yet still belongs in the record.
+        """See masking.buildMaskingManifest. Takes the configurations because a
+        skipped job still belongs in the manifest but has no outcome to describe it.
         """
 
         return buildMaskingManifest(self.outcomes, _declaredMasking(jobs))
@@ -190,10 +151,8 @@ def _declaredMasking(jobs: Mapping[str, DataJobConfig]) -> Dict[str, Dict[str, A
 
 
 def _bindMasking(job: str, jobConfig: DataJobConfig, columns: List[str]) -> Optional[BoundMasking]:
-    """Binds the job's masking policy to the columns its query returned.
-
-    Raises MaskingError -- before anything is written -- if the policy doesn't
-    cover every column. See MaskingPlan for why that is the default.
+    """Binds the job's masking policy to the columns its query returned, raising
+    MaskingError before anything is written if it doesn't cover them all.
     """
 
     if jobConfig.masking is None:
@@ -211,38 +170,13 @@ def _bindMasking(job: str, jobConfig: DataJobConfig, columns: List[str]) -> Opti
 
 
 def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: Dict[str, DatabaseConnectionConfig], watermark: Any = None) -> JobOutcome:
-    """Runs one data job to completion, raising on failure.
+    """Runs one data job to completion, raising on failure. See "How a data job
+    moves rows" in docs/design.md.
 
-    Rows are pulled, transformed and written a chunk at a time, so peak memory is
-    bounded by chunkSize rather than by the result set -- by a small multiple of
-    it, in fact: masking runs on a worker thread so that it and the database
-    overlap, which leaves up to three chunks in hand at once (PIPELINE_DEPTH).
-    Extract and load
-    interleave, so a source failing part-way leaves the rows already yielded
-    written. That is invisible for `swap` and stage-backed `upsert`, which only
-    touch targetTableFinal in their last step; a stage-less `upsert` writes
-    partial results into the live target, so prefer a stage table for large loads.
-
-    Transforms apply to sourceQuery's own result columns, not the target's, since
-    they act on a value as extracted. Transform.validate() runs before the first
-    write, so naming a column the query doesn't return fails with nothing loaded.
-
-    Masking runs after transforms, so a value is normalized (stripped, lower
-    cased) before it is keyed and masks consistently. Its policy is bound to the
-    returned columns before the first write too, so a column the policy doesn't
-    cover fails the job with nothing loaded -- unmasked rows never reach the
-    target, not even a stage table.
-
-    Target columns come from targetColumns if set, otherwise from introspecting
-    targetTableFinal, and are matched to the SELECT list by position.
-
-    preTargetAdhocQueries run before any write, the stage load included, so they
-    can prepare the stage table -- drop an index, clear a partition.
-
-    With watermarkColumn set, `watermark` is bound into the {{ watermark }}
-    placeholder, and the outcome carries that column's highest value. It is read
-    from the raw rows, not the transformed ones: a transform may reformat the
-    column, and the next run's predicate needs a value the source can compare.
+    Transforms and the masking policy are both checked against the query's
+    columns before the first write, so a misconfigured job fails with nothing
+    loaded. Masking runs after transforms, so values are normalized before
+    they are keyed.
     """
 
     columnTransforms: Dict[str, List[Transformer]] = {
@@ -308,8 +242,8 @@ def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: D
                 targetDatabase.insert(table=loadTable, data=rows, chunkSize=jobConfig.chunkSize, columns=columns)
 
             rowCount += len(rows)
-            # Only now: a job that dies part-way must not record a watermark
-            # covering rows it never landed, or the next run starts past them.
+            # Only once the rows have landed, or a failed job's next run would
+            # start past them.
             if watermark is not None and (highWatermark is None or watermark > highWatermark):
                 highWatermark = watermark
 
@@ -319,22 +253,12 @@ def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: D
             rows = transform.apply(chunk)
 
             if masking is not None:
-                # Numbered by where the chunk was read rather than by when it
-                # was masked: `shuffle` keys its permutation on this.
+                # By read order, not masking order: `shuffle` keys on it.
                 rows = masking.apply(rows, chunkIndex=chunkIndex)
 
             return rows
 
-        with _MaskAhead(prepareChunk, _pipelineDepth()) as preparing:
-
-            for chunkIndex, chunk in enumerate(chunks):
-                watermark = _highestWatermark(chunk, watermarkIndex)
-
-                for rows, chunkWatermark in preparing.send(chunkIndex, chunk, watermark):
-                    writeChunk(rows, chunkWatermark)
-
-            for rows, chunkWatermark in preparing.finish():
-                writeChunk(rows, chunkWatermark)
+        _streamChunks(chunks, prepareChunk, writeChunk, watermarkIndex, _pipelineDepth())
 
         logger.info('Streamed {} row(s) from {} into {}'.format(rowCount, jobConfig.sourceDatabase, loadTable))
 
@@ -361,10 +285,7 @@ def _executeDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: D
 def _pipelineDepth() -> int:
     """PIPELINE_DEPTH, or 0 to read, mask and write strictly in turn.
 
-    On by default only where the native masker is installed, because that is
-    the only place it pays. Overlapping hides the database's round trips behind
-    masking, so what it is worth depends on how much masking there is to hide
-    them behind:
+    On by default only with the native masker, the only place it pays:
 
         200,000 rows, 6 masked columns, 5 ms round trip each way
 
@@ -373,14 +294,7 @@ def _pipelineDepth() -> int:
         native masking, in turn       2.92s     3.96x
         native masking, overlapped    2.16s     5.35x
 
-    Pure-Python masking is slow enough to swamp any wait worth hiding, so the
-    handoff costs more than it saves. With the extension the round trips vanish
-    entirely: 2.16s against 2.17s with no latency at all, where the sequential
-    path gives up a quarter of its advantage as the database gets further away.
-
-    UNDERSTUDY_PIPELINE=1 forces it on, =0 forces it off -- the latter for
-    diagnosing a problem with the worker thread out of the picture. Depth 0
-    starts no threads at all rather than sizing a queue differently.
+    UNDERSTUDY_PIPELINE=1 or =0 overrides the default.
     """
 
     setting = os.environ.get('UNDERSTUDY_PIPELINE')
@@ -392,10 +306,8 @@ def _pipelineDepth() -> int:
 
 
 def _highestWatermark(chunk: Sequence[Sequence[Any]], index: Optional[int]) -> Any:
-    """The largest value of the watermark column in one chunk, or None.
-
-    Read from the raw rows, before transforms: a transform may reformat the
-    column, and the next run's predicate needs a value the source can compare.
+    """The largest value of the watermark column in one chunk, or None. Read
+    from the raw rows, since a transform may reformat the column.
     """
 
     if index is None:
@@ -410,189 +322,48 @@ def _highestWatermark(chunk: Sequence[Sequence[Any]], index: Optional[int]) -> A
     return highest
 
 
-class _MaskAhead:
-    """Transforms and masks on a worker thread, so the database's round trips
-    and the masker's own work overlap instead of taking turns.
+def _streamChunks(chunks: Iterable[List[Tuple[Any, ...]]], prepare: Callable[[int, List[Tuple[Any, ...]]], List[Any]],
+                  write: Callable[[List[Any], Any], None], watermarkIndex: Optional[int], depth: int) -> None:
+    """Prepares (transforms and masks) each chunk and writes it, in source
+    order. With `depth` above 0, preparing runs on one worker thread up to
+    `depth` chunks ahead, overlapping the masker with the database.
 
-    The database stays on the calling thread, both connections. That is not
-    caution: DBAPI drivers at threadsafety 1 -- mysqlclient and PyMySQL among
-    them -- forbid a connection being used by any thread but its own, and
-    sqlite3 enforces the same through check_same_thread whatever its module
-    threadsafety says. Masking is the part that is ours to move.
-
-    It overlaps despite the GIL because the two sides want different things:
-    drivers release it while they wait on a socket, and the native masker
-    releases it for the whole batch. Pure-Python masking holds it, so there the
-    overlap is only as wide as the driver's waits -- which is still most of them.
-
-    One worker, in order. A stage-less upsert writes straight into the live
-    target, and a key repeated across chunks has to arrive in source order.
+    Both connections stay on the calling thread: mysqlclient, PyMySQL and
+    sqlite3 refuse use from any other.
     """
 
-    def __init__(self, prepare: Callable[[int, Any], List[Any]], depth: int) -> None:
-        self._prepare = prepare
-        self._threaded = depth > 0
-        self._inbound: 'queue.Queue[Any]' = queue.Queue(maxsize=max(depth, 1))
-        self._outbound: 'queue.Queue[Any]' = queue.Queue(maxsize=max(depth, 1))
-        self._failure: Optional[BaseException] = None
-        self._pending = 0
-        self._thread = threading.Thread(target=self._work, name='understudy-mask', daemon=True)
+    if depth == 0:
+        for chunkIndex, chunk in enumerate(chunks):
+            write(prepare(chunkIndex, chunk), _highestWatermark(chunk, watermarkIndex))
+        return
+
+    pending: Deque[Tuple['Future[List[Any]]', Any]] = collections.deque()
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix='understudy-mask') as executor:
+        try:
+            for chunkIndex, chunk in enumerate(chunks):
+                pending.append((executor.submit(prepare, chunkIndex, chunk), _highestWatermark(chunk, watermarkIndex)))
+                while len(pending) > depth:
+                    future, watermark = pending.popleft()
+                    write(future.result(), watermark)
+
+            while pending:
+                future, watermark = pending.popleft()
+                write(future.result(), watermark)
+        except BaseException:
+            # Whatever is queued behind the failure is no longer wanted.
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
 
 
-    def _work(self) -> None:
-
-        while True:
-            item = self._inbound.get()
-            if item is _FINISHED:
-                return
-
-            index, chunk, watermark = item
-            try:
-                prepared = (self._prepare(index, chunk), watermark)
-            except BaseException as error:
-                self._failure = error
-                # The sender may be waiting on a full queue, so it has to be
-                # handed something before it can notice this.
-                with contextlib.suppress(queue.Full):
-                    self._outbound.put(_FINISHED, timeout=_PIPELINE_POLL_SECONDS)
-                return
-
-            self._outbound.put(prepared)
-
-
-    def __enter__(self) -> '_MaskAhead':
-        if self._threaded:
-            self._thread.start()
-
-        return self
-
-
-    def send(self, index: int, chunk: Any, watermark: Any) -> Iterator[Any]:
-        """Queues a chunk, and yields whatever is masked and waiting.
-
-        Yielded rather than returned so the caller writes as results appear,
-        which is what keeps the worker from stalling on a full queue.
-        """
-
-        if not self._threaded:
-            yield self._prepare(index, chunk), watermark
-            return
-
-        item = (index, chunk, watermark)
-
-        while True:
-            self._raiseFailure()
-
-            # Write whatever is finished first. That frees the worker to put its
-            # next result, which is what frees the queue this is about to fill.
-            while self._pending and not self._outbound.empty():
-                yield self._take()
-
-            try:
-                self._inbound.put(item, timeout=_PIPELINE_POLL_SECONDS)
-                self._pending += 1
-                return
-            except queue.Full:
-                # Never block outright: a worker that has stopped -- because
-                # masking raised -- consumes nothing, and waiting on it is a
-                # deadlock rather than a delay.
-                self._checkAlive()
-
-
-    def finish(self) -> Iterator[Any]:
-        """Yields every chunk still in flight, in order, then stops the worker."""
-
-        if not self._threaded:
-            return
-
-        while True:
-            self._raiseFailure()
-            try:
-                self._inbound.put(_FINISHED, timeout=_PIPELINE_POLL_SECONDS)
-                break
-            except queue.Full:
-                while self._pending and not self._outbound.empty():
-                    yield self._take()
-                self._checkAlive()
-
-        while self._pending:
-            yield self._take()
-
-        self._thread.join(timeout=_PIPELINE_JOIN_SECONDS)
-        self._raiseFailure()
-
-
-    def _take(self) -> Any:
-
-        while True:
-            try:
-                item = self._outbound.get(timeout=_PIPELINE_POLL_SECONDS)
-                break
-            except queue.Empty:
-                self._checkAlive()
-
-        if item is _FINISHED:
-            self._pending = 0
-            self._raiseFailure()
-            raise RuntimeError('the masking thread stopped without reporting why')
-
-        self._pending -= 1
-
-        return item
-
-
-    def _checkAlive(self) -> None:
-        """Raises if the worker has stopped, so no wait on it can be unbounded."""
-
-        if self._thread.is_alive():
-            return
-
-        self._raiseFailure()
-        raise RuntimeError('the masking thread stopped without reporting why')
-
-
-    def _raiseFailure(self) -> None:
-
-        if self._failure is not None:
-            raise self._failure
-
-
-    def __exit__(self, *details: Any) -> None:
-        # The ordinary path drains through finish(); this only tidies up after
-        # the caller raised, where the queued chunks are no longer wanted.
-        if not self._threaded or not self._thread.is_alive():
-            return
-
-        with contextlib.suppress(queue.Full):
-            self._inbound.put(_FINISHED, timeout=_PIPELINE_POLL_SECONDS)
-
-        while self._thread.is_alive():
-            try:
-                self._outbound.get_nowait()
-            except queue.Empty:
-                self._thread.join(timeout=_PIPELINE_POLL_SECONDS)
-
-
-# Errors that a second attempt cannot fix. All are raised by this package itself
-# and are deterministic: a transformer reference that doesn't resolve, a column
-# the source query never returns, a watermark column that isn't selected, a
-# masking policy that doesn't cover a column, a target without a primary key.
-# Retrying them just delays a failure by retries * retryDelaySeconds and buries
-# the real message under identical repeats. Everything else -- notably anything
-# a driver raises -- is retried, because transient and permanent database errors
-# cannot be told apart reliably across six drivers, and a needless retry costs
-# far less than a nightly load lost to one dropped connection.
+# Deterministic errors, raised by this package, that a retry can't fix.
+# Everything else is retried; see "Retries" in docs/design.md.
 PERMANENT_ERRORS = (ConfigurationError, TransformError, TransformResolutionError, MaskingError)
 
 
 def _executeWithRetries(jobConfig: DataJobConfig, job: str, attempt: Callable[[], JobOutcome]) -> JobOutcome:
-    """Runs `attempt` up to 1 + jobConfig.retries times, backing off
-    exponentially up to MAXIMUM_RETRY_DELAY_SECONDS, and returns its outcome -- a FAILED one, carrying the last
-    error, if no attempt succeeded.
-
-    Retrying a whole data job is safe because both insert strategies converge on
-    a re-run: `swap` restages and re-swaps, and `upsert` re-applies rows that are
-    already there as a no-op.
+    """Runs `attempt` up to 1 + jobConfig.retries times with doubling backoff,
+    returning its outcome, or a FAILED one carrying the last error.
     """
 
     for attemptNumber in range(1, jobConfig.retries + 2):
@@ -617,24 +388,12 @@ def _executeWithRetries(jobConfig: DataJobConfig, job: str, attempt: Callable[[]
 
 
 def _runDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: Dict[str, DatabaseConnectionConfig], memory: MemoryBackend) -> JobOutcome:
-    """Runs one data job in a worker process, and records its success.
+    """Runs one data job in a worker process, and records its success. The
+    order of the records is what makes a crash safe; see "Crash safety" in
+    docs/design.md.
 
-    On success each step commits before the next:
-
-        load committed -> recordWatermark -> recordRun -> return the outcome
-
-    so every point this can die at falls backwards, into re-reading rows already
-    loaded -- harmless, because a watermark requires upsert.
-
-    Nothing is recorded for a failed job. A stamped failure would suppress its
-    retry for the whole refresh window, and an advanced watermark would skip rows
-    permanently, which is the one unrecoverable direction.
-
-    The stored watermark is read inside each attempt, so a memory backend that
-    fails transiently is retried like the database it may well live in.
-
-    A memory backend that fails to record is logged and tolerated: the data
-    landed, so the job is honestly COMPLETED, and the cost is an earlier re-run.
+    Nothing is recorded for a failed job. A failure to record is logged, not
+    raised: the data landed, and the cost is an earlier re-run.
     """
 
     logger.info('Starting {}'.format(job))
@@ -661,7 +420,7 @@ def _runDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: Dict[
 
         if jobConfig.masking is not None:
             try:
-                memory.recordKeyFingerprint(job, keyFingerprint(jobConfig.masking.key.get_secret_value()))
+                memory.recordKeyFingerprint(job, maskingIdentity(jobConfig.masking.key.get_secret_value()))
             except Exception as error:
                 logger.error('Completed {} but could not record its masking key fingerprint'.format(job), exc_info=error)
 
@@ -677,12 +436,9 @@ def _runDataJob(job: str, jobConfig: DataJobConfig, databaseConfiguration: Dict[
 
 
 def _initializeWorker(connection: Any, logLevel: int) -> ConnectionForwarder:
-    """Runs first in each job's process.
-
-    Ctrl-C reaches every process in the terminal's group, so without this a
-    job would die with KeyboardInterrupt part-way. The parent decides how to
-    stop instead: it lets running jobs finish. SIGTERM keeps its default, which
-    is how the parent stops a job that has run out of time.
+    """Runs first in each job's process. Ignores Ctrl-C, which reaches the whole
+    process group, so the parent decides how to stop; SIGTERM keeps its
+    default, since that is how a timed-out job is stopped.
     """
 
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -691,11 +447,8 @@ def _initializeWorker(connection: Any, logLevel: int) -> ConnectionForwarder:
 
 
 def _logCycleSummary(dependencyGraph: DependencyGraph) -> None:
-    """One line per terminal non-success, plus totals.
-
-    A skipped job never reaches a worker, so this is the only place it gets
-    reported -- named along with what it was waiting on, since a stale table
-    with no log line is the hardest failure to diagnose.
+    """One line per failed or skipped job, plus totals. The only place a
+    skipped job is logged, since it never reaches a worker.
     """
 
     result = RunResult(outcomes=list(dependencyGraph.outcomes))
@@ -716,14 +469,10 @@ def _logCycleSummary(dependencyGraph: DependencyGraph) -> None:
 
 
 def _requireWatermarkCapableMemory(jobsFile: DataJobsFile, memory: MemoryBackend) -> None:
-    """Fails before any work starts if an incremental job has nowhere to persist its watermark.
-
-    MemoryBackend.recordWatermark is deliberately not abstract, so backends
-    written before watermarks existed keep working for jobs that don't use one.
-    The cost of that choice is that the mismatch would otherwise surface inside
-    a worker process, after a job had already extracted and loaded its rows --
-    and then on every cycle after that. Checking the class up front turns it
-    into a configuration error, where it belongs.
+    """Fails before any work starts if an incremental job has nowhere to persist
+    its watermark. recordWatermark isn't abstract, so older backends still
+    work for jobs without one -- and the mismatch would otherwise surface only
+    after a job had loaded its rows.
     """
 
     incrementalJobs = sorted(name for name, job in jobsFile.jobs.items() if job.active and job.watermarkColumn)
@@ -746,26 +495,37 @@ def _jobProcess(connection: Any, logLevel: int, job: str, jobConfig: DataJobConf
 
 
 def _requireUnchangedMaskingKeys(jobsFile: DataJobsFile, memory: MemoryBackend, acceptKeyChange: bool) -> None:
-    """Refuses to run an upsert job whose masking key changed since it last completed.
-
-    Its target keeps the rows it already has, masked under the old key, and
-    new rows would be masked under the new one: the same customer would get two
-    different masked ids, and joins between old and new rows would silently
-    stop matching. A swap job replaces its whole target, so a new key is
-    harmless there. A key change is deliberate, so the fix is to acknowledge
-    it -- after emptying the targets, or knowingly.
+    """Refuses to run an upsert job whose masking key changed since it last
+    completed: its target's existing rows would no longer join with new ones.
+    A swap job replaces its whole target, so it isn't checked.
     """
 
     recorded = memory.readKeyFingerprints()
     changed = []
+    reimplemented = []
 
     for name, job in sorted(jobsFile.jobs.items()):
         if not job.active or job.masking is None or job.insertStrategy != InsertStrategy.UPSERT:
             continue
-        previous = recorded.get(name)
-        current = keyFingerprint(job.masking.key.get_secret_value())
-        if previous is not None and previous != current:
-            changed.append('{} (was {}, now {})'.format(name, previous, current))
+
+        if recorded.get(name) is None:
+            continue
+
+        previousKey, previousImplementation = splitMaskingIdentity(recorded[name])
+        currentKey = keyFingerprint(job.masking.key.get_secret_value())
+
+        if previousKey != currentKey:
+            changed.append('{} (was {}, now {})'.format(name, previousKey, currentKey))
+        elif previousImplementation is not None and previousImplementation != maskingImplementation():
+            reimplemented.append('{} (was {}, now {})'.format(name, previousImplementation, maskingImplementation()))
+
+    # Warned rather than refused: the implementations are tested to agree (see
+    # maskingIdentity), and refusing would stop every upsert job whenever the
+    # extension was installed.
+    if reimplemented:
+        logger.warning('Masking implementation changed since the last run of upsert job(s) {}. The two are tested to produce '
+                       'identical masks, so this is recorded rather than refused -- but if rows masked before and after stop '
+                       'joining, this is why'.format(', '.join(reimplemented)))
 
     if not changed:
         return
@@ -781,18 +541,11 @@ def _requireUnchangedMaskingKeys(jobsFile: DataJobsFile, memory: MemoryBackend, 
 
 
 class _JobProcess:
-    """One job, running in a process of its own.
+    """One job, running in a process of its own so it can be stopped or die
+    alone; see "Workers" in docs/design.md.
 
-    A process per job rather than a slot in a shared pool, so each job can be
-    ended on its own: one past its timeoutSeconds is stopped, and one whose
-    process dies -- killed for memory, crashed in a driver -- fails without
-    taking any other job with it. Starting a process costs a fraction of a
-    second, which is noise beside a database load.
-
-    Its log records and its outcome come back over a pipe that only this job
-    writes to, so stopping it can't leave anything another job needs in a bad
-    state. The child holds the only sending end, so a child that dies shows up
-    as end-of-file.
+    Log records and the outcome come back over a pipe only this job writes to.
+    The child holds the only sending end, so its death shows up as end-of-file.
     """
 
     def __init__(self, job: str, jobConfig: DataJobConfig, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
@@ -962,44 +715,17 @@ def runDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Databas
                 logFile: Optional[Path] = None, runForever: bool = False, logLevel: int = logging.INFO,
                 logFormat: str = 'text', acceptKeyChange: bool = False,
                 onCycle: Optional[Callable[['RunResult'], None]] = None) -> RunResult:
-    """Runs data jobs, honoring each job's `refresh` window and `predecessors`.
+    """Runs data jobs, honoring each job's `refresh` window and `predecessors`:
+    one pass, or with runForever until SIGINT or SIGTERM. See "Single runs,
+    not a daemon" in docs/design.md.
 
-    The caller supplies validated configuration, a MemoryBackend for run state,
-    optionally somewhere to log, and whether this is a single pass
-    (runForever=False, the default) or stays resident (runForever=True).
+    `onCycle` receives each cycle's RunResult, for history, metrics or alerts;
+    an exception from it is logged, not raised. A masked upsert job whose key
+    changed stops the run before it starts, unless acceptKeyChange.
 
-    Single-shot is the default because it composes with whatever already
-    schedules work in your deployment -- cron, a systemd timer, a Kubernetes
-    CronJob, an Airflow task -- rather than competing with it. Those offer
-    alerting, backfill and calendar-aware schedules that `refresh` cannot
-    express; `refresh` is a throttle, not a schedule. It still applies across
-    separate invocations, since it is evaluated against MemoryBackend.read(),
-    which is durable: running every five minutes with `refresh: 60` correctly
-    skips eleven runs out of twelve.
-
-    Use runForever=True for freshness below cron's one-minute floor, or where
-    there is no scheduler to hook into. It runs until SIGINT or SIGTERM.
-
-    `onCycle` is called with each cycle's RunResult as the cycle ends -- the
-    place to keep history, publish metrics or notify, which a run that never
-    returns couldn't otherwise do. An exception from it is logged, not raised:
-    reporting must not stop the loads.
-
-    A masked upsert job whose key changed since it last completed stops the run
-    before anything starts, unless acceptKeyChange; see
-    _requireUnchangedMaskingKeys.
-
-    Each job runs in a process of its own, at most jobsFile.workers at once,
-    so `memory` is pickled and reconstructed in each, per MemoryBackend's
-    contract, and so is everything a job's configuration references. Their log
-    records are sent back to this process, each job on its own pipe, and
-    written by its handlers -- the ones Log sets up from logFile and logFormat,
-    plus any the caller added -- so they share one format and one set of
-    destinations.
-
-    Those processes are started with multiprocessing's `spawn` method, which
-    imports the calling script afresh: call this from under
-    `if __name__ == '__main__':`.
+    Each job runs in its own process, so `memory` and each job's configuration
+    are pickled. Processes are spawned, which re-imports the calling script:
+    call this under `if __name__ == '__main__':`.
     """
 
     _requireWatermarkCapableMemory(jobsFile, memory)

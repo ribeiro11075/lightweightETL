@@ -9,19 +9,10 @@ transformer is -- by import path -- so nothing here is privileged:
       name:
       - understudy_data.builtinTransforms:truncate(50)
 
-Arguments after the column value go in parentheses, as literals. These are the
-transforms that come up in nearly every load. resolveTransformer takes any
-importable "module.path:function_name", so your own module sits alongside
-these rather than replacing them; see example/ for one written outside the
-package.
+Nothing here is privileged: your own module is referenced the same way.
 
-Every one of them passes NULL through unchanged -- except defaultIfNull, whose
-job is to replace it -- and raises on a value it can't convert rather than
-guessing, so a bad row fails the job with the column named instead of loading
-something wrong.
-
-The name is plural and prefixed to keep it distinct from transform.py, which
-holds the machinery that *applies* transformers rather than any particular one.
+Each passes NULL through -- except defaultIfNull -- and raises on a value it
+can't convert rather than guessing.
 """
 from __future__ import annotations
 
@@ -73,10 +64,7 @@ def collapseWhitespace(value: Optional[str]) -> Optional[str]:
 
 def removeAccents(value: Optional[str]) -> Optional[str]:
     """`Zoë Müller` -> `Zoe Muller`: drops combining marks after decomposing.
-
-    Useful before masking or matching, so the same name spelled with and
-    without accents is treated as one. Letters that aren't a base letter plus a
-    mark (ß, ø, ł) are left as they are.
+    Letters that aren't a base letter plus a mark (ß, ø, ł) are kept.
     """
 
     if value is None:
@@ -279,13 +267,7 @@ def toBoolean(value: Any) -> Optional[bool]:
 # Dates and times -------------------------------------------------------------------
 
 def epochSecondsToDate(value: Optional[int]) -> Optional[datetime.date]:
-    """UTC, not the machine's local timezone.
-
-    date.fromtimestamp() converts in local time, which would make the same job
-    produce different dates depending on which server it ran on -- epoch 0 is
-    1970-01-01 in UTC but 1969-12-31 anywhere west of it. A value loaded into a
-    warehouse must not depend on a worker's TZ setting.
-    """
+    """In UTC, not local time, so the result doesn't depend on the server."""
 
     if value is None:
         return value

@@ -1,13 +1,8 @@
 """FF1 format-preserving encryption, as specified in NIST SP 800-38G Rev. 1.
 
-The `fpe` masking strategy is built on this, for policies that have to name a
-published algorithm rather than this package's own keyed permutation. Only
-encryption is implemented: masking never needs to reverse a value, and not
-shipping the inverse keeps the key from becoming a way to unmask one.
-
-AES comes from the `cryptography` package, imported only when an FF1 cipher is
-created, so the rest of the package doesn't need it (`pip install
-understudy-data[fpe]`).
+For the `fpe` masking strategy. Encryption only: masking never reverses a
+value, so the inverse isn't shipped. AES comes from `cryptography`, imported
+when a cipher is created.
 """
 from __future__ import annotations
 
@@ -55,11 +50,8 @@ class FF1:
 
 
     def _prf(self, data: bytes) -> bytes:
-        """CBC-MAC with a zero IV: the last block of CBC encryption.
-
-        The chaining XOR runs on integers rather than over zipped bytes: one
-        machine-word operation per block instead of sixteen interpreted ones,
-        which more than halves this function, and it is called ten times a value.
+        """CBC-MAC with a zero IV. The XOR runs on integers, which more than
+        halves its cost.
         """
 
         state = 0

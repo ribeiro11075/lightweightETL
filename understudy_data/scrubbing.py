@@ -1,19 +1,11 @@
 """Removes data values from database error messages before they are reported.
 
-Drivers quote the values a statement choked on: the duplicate key, the text
-that wasn't a number, the row that broke a constraint. Those messages reach
-logs, run history and webhook notifications, and the values in them can be
-anything the statement carried -- masked target values, or, when the failing
-statement is a sourceQuery, production values that were never masked.
-
-Each pattern below matches a message format a driver was seen to produce
-against a real server, and replaces only the quoted value, so the rest of the
-message -- which constraint, which column -- still says what went wrong. A
-format not listed here passes through unchanged; see docs/security.md.
-
-Where a server quotes the statement itself (PostgreSQL's `LINE 1:`, MySQL's
-`near '...'`), the whole quote goes: drivers write values into the statement
-text, and nothing tells a value from the SQL around it.
+Drivers quote the values a statement choked on, which may be unmasked
+production values, and those messages reach logs, history and webhooks. Each
+pattern matches a format seen from a real server and replaces only the value,
+keeping which constraint or column failed. Unlisted formats pass through; see
+docs/security.md. Where a server quotes the statement itself, the whole quote
+goes, since values can't be told from the SQL around them.
 
 SQL Server's messages arrive as the repr of pymssql's (code, bytes) tuple, on
 one line and with quotes that may be backslash-escaped, hence QUOTE -- and the

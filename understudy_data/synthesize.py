@@ -1,21 +1,10 @@
 """Synthetic rows, for tables that can't be copied at all -- `understudy synthesize`.
 
-Some data may not leave production even masked, and a new system may have no
-production data yet. This fills existing tables with generated rows instead,
-from nothing but the target's own catalog: each column's type, size and
-nullability, the primary key, and the foreign keys.
-
-- Keys are unique: integer keys continue after the table's current maximum.
-- Foreign keys point at rows that exist: values are drawn from the parent
-  table as it stands, so parents are synthesized first.
-- Columns whose names suggest personal data get realistic values, by running
-  the masking strategies discovery would propose over generated placeholders:
-  an `email` column gets addresses at example.test, `first_name` gets names.
-- Everything else is random within its type: numbers within their precision,
-  text within its length, dates in recent years.
-
-Generation is deterministic for a given seed and starting state, and rows are
-generated and loaded a chunk at a time.
+Fills existing tables from nothing but the target's catalog. Integer keys
+continue past the current maximum; foreign keys are drawn from parent rows,
+so parents go first; columns named like personal data get what discovery's
+proposed strategy makes of a placeholder; the rest is random within its type.
+Deterministic for a seed and starting state.
 """
 from __future__ import annotations
 

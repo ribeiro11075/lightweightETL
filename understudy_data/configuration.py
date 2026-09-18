@@ -62,10 +62,7 @@ class ConfigurationError(Exception):
 
 WATERMARK_PLACEHOLDER = re.compile(r'\{\{\s*watermark\s*\}\}')
 
-# ${NAME}, ${NAME:-default} or ${file:/path}. A doubled $$ escapes the whole
-# construct, which matters because a sourceQuery is arbitrary SQL --
-# PostgreSQL's dollar-quoting ($$body$$) is untouched here since it is never
-# followed by a brace.
+# ${NAME}, ${NAME:-default} or ${file:/path}; $${...} escapes one.
 ENVIRONMENT_VARIABLE = re.compile(r'(\$?)\$\{(?:file:([^}]+)|([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?)\}')
 
 
@@ -108,33 +105,16 @@ def _expand(value: Any, missing: List[str]) -> Any:
 
 
 def expandEnvironmentVariables(value: Any) -> Any:
-    """Recursively replace ${NAME} and ${file:/path} in a loaded configuration.
-
-    This is what keeps credentials out of the YAML that sits next to your job
-    definitions, which is the first thing a security review objects to:
+    """Recursively replace ${NAME} and ${file:/path} in a loaded configuration:
 
         password: ${PROD_DB_PASSWORD}
         port: ${PROD_DB_PORT:-5432}
         key: ${file:/run/secrets/masking-key}
 
-    A file reference reads the file's content, less a trailing newline. That's
-    how Docker and Kubernetes mount secrets, and how the Vault agent and the
-    AWS and Azure secret-store drivers hand them over.
-
-    An unset variable with no default, or an unreadable file, raises
-    ConfigurationError rather than expanding to an empty string. A blank password that fails at connect time
-    with the database's own unhelpful error is a much worse outcome than
-    refusing to start, and an empty host would silently connect somewhere
-    unintended. Every unset name in the whole document is reported at once, the
-    way validation errors are here -- fixing them one run at a time is miserable.
-
-    Defaults exist for the values that are awkward without them: ports, hosts,
-    schema names. Don't give a secret a default; that just moves the credential
-    back into the file.
-
-    Escape a literal ${...} as $${...}. A sourceQuery is arbitrary SQL and may
-    legitimately contain the sequence. PostgreSQL's dollar-quoting ($$body$$) is
-    never followed by a brace, so it passes through untouched either way.
+    A file reference reads the file less a trailing newline, as mounted
+    secrets are written. An unset variable with no default, or an unreadable
+    file, raises ConfigurationError rather than expanding to an empty string,
+    naming every one at once. Escape a literal ${...} as $${...}.
     """
 
     missing: List[str] = []
@@ -195,11 +175,8 @@ def splitPasswordCommand(command: Union[str, List[str]]) -> List[str]:
 
 
 def runPasswordCommand(command: Union[str, List[str]]) -> str:
-    """Runs a passwordCommand and returns what it printed, stripped.
-
-    The output is never put in an error message, since it is the secret. A
-    command that can't be split is a ConfigurationError, since running it
-    again won't help; configuration validation normally catches it first.
+    """Runs a passwordCommand and returns what it printed, stripped. The
+    output, being the secret, never appears in an error.
     """
 
     try:
@@ -224,19 +201,10 @@ def runPasswordCommand(command: Union[str, List[str]]) -> str:
 
 
 class DatabaseConnectionConfig(BaseModel):
-    """`password` is a SecretStr, like the masking key, so it can't reach a log
-    line or a traceback through the model's repr. Drivers get it from
-    plainPassword().
-
-    `options` go to the driver's connect() as keyword arguments, for anything
-    the fields here don't cover -- TLS above all. They are left out of the
-    model's repr, since some (a wallet password, say) are secrets too.
-
-    `currentSchema` makes the connection resolve unqualified table names, and
-    every catalog lookup, in that schema.
-
-    `passwordCommand` replaces `password` with a command run at every connect,
-    for credentials that expire: an RDS IAM token, an Azure AD access token.
+    """One database connection. `password` is a SecretStr, and `options` --
+    extra driver arguments, TLS above all -- are left out of the repr, since
+    they can hold secrets too. `passwordCommand` runs at every connect, for
+    expiring credentials such as IAM tokens.
     """
 
     type: DatabaseType
@@ -280,10 +248,7 @@ class DatabaseConnectionConfig(BaseModel):
 
     @model_validator(mode='after')
     def _requireNetworkCredentialsExceptSqlite(self) -> 'DatabaseConnectionConfig':
-        """Every dialect but sqlite connects over the network and authenticates --
-        sqlite is a local file (`database` holds its path, or ":memory:") with no
-        server, user, or password to speak of.
-        """
+        """Every dialect but sqlite, a local file, needs a server and a login."""
 
         if self.password is not None and self.passwordCommand is not None:
             raise ValueError('set password or passwordCommand, not both')
@@ -315,12 +280,8 @@ class BaseJobConfig(BaseModel):
 
 
 class MaskingConfig(BaseModel):
-    """A job's masking policy -- see masking.py for what each part does.
-
-    `key` is a SecretStr so it can't reach a log line or a traceback through a
-    model's repr. `columns` and `defaultStrategy` are normalized here, so an
-    unknown strategy or a bad option fails `understudy validate` rather
-    than a run.
+    """A job's masking policy, normalized here so a bad strategy or option
+    fails `understudy validate` rather than a run.
     """
 
     key: SecretStr
@@ -387,11 +348,9 @@ class DataJobConfig(BaseJobConfig):
 
     @model_validator(mode='after')
     def _requireSeparateStageTable(self) -> 'DataJobConfig':
-        """A job truncates its stage table before loading it, so a stage table
-        naming the target would empty the target first. Identifiers here are
-        unquoted, so case doesn't tell two names apart. A qualified and an
-        unqualified name can still be the same table; `run --dry-run` can't
-        tell either, so name the stage table distinctly.
+        """A stage table naming the target would have the target truncated
+        before each load. Compared case-insensitively; a qualified and an
+        unqualified name for the same table still slip through.
         """
 
         if self.targetTableStage is not None and self.targetTableStage.upper() == self.targetTableFinal.upper():
@@ -402,9 +361,8 @@ class DataJobConfig(BaseJobConfig):
 
     @model_validator(mode='after')
     def _requireStageTableForSwap(self) -> 'DataJobConfig':
-        """A swap renames the two tables into each other's places, and a rename
-        never moves a table to another schema -- so the stage table has to live
-        in the target's schema.
+        """A rename never moves a table between schemas, so a swap's stage
+        table must share the target's.
         """
 
         if self.insertStrategy != InsertStrategy.SWAP:
@@ -434,15 +392,8 @@ class DataJobConfig(BaseJobConfig):
 
     @model_validator(mode='after')
     def _requireCoherentWatermarkConfiguration(self) -> 'DataJobConfig':
-        """watermarkColumn and the {{ watermark }} token in sourceQuery are two
-        halves of one feature and neither is any use alone: a column with no
-        token extracts everything and then advances a watermark nobody filtered
-        on, and a token with no column has no value to bind or to carry forward.
-
-        watermarkInitial is required because the first run has no stored
-        watermark to bind, and there is no safe value to invent -- None would
-        make the predicate match nothing on most dialects, so the job would
-        quietly load zero rows forever.
+        """watermarkColumn and the {{ watermark }} token need each other, and
+        watermarkInitial is required: binding None would match no rows, forever.
         """
 
         hasPlaceholder = bool(WATERMARK_PLACEHOLDER.search(self.sourceQuery))
@@ -461,15 +412,8 @@ class DataJobConfig(BaseJobConfig):
 
     @model_validator(mode='after')
     def _rejectWatermarkWithSwap(self) -> 'DataJobConfig':
-        """swap replaces targetTableFinal wholesale with the stage table's
-        contents. An incremental extract only ever stages the rows that changed,
-        so swapping one in would discard every row that didn't -- silently
-        deleting most of the target on the first incremental run.
-
-        upsert is the only strategy that composes with a watermark, and not by
-        accident: it's also what makes re-reading an overlap window (the standard
-        guard against missing rows committed by in-flight transactions) safe to
-        do at all.
+        """A watermark needs upsert: a swap would replace the target with only
+        the rows that changed.
         """
 
         if self.watermarkColumn and self.insertStrategy != InsertStrategy.UPSERT:
@@ -481,16 +425,14 @@ class DataJobConfig(BaseJobConfig):
 class DataJobsFile(BaseModel):
     workers: int = Field(ge=1)
     cycleSleepSeconds: float = 0.5
+    # Where the CLI keeps run state, relative to this file; see cli._resolveMemoryPath.
+    memory: Optional[str] = Field(default=None, min_length=1)
     jobs: Dict[str, DataJobConfig]
 
 
 def findCycle(predecessors: Mapping[str, Sequence[str]]) -> Optional[List[str]]:
     """A cycle in a job -> predecessors graph, as a path that ends where it
     starts, or None. Predecessors that aren't keys are ignored.
-
-    A cycle can never be scheduled: each job waits for another that waits for
-    it. Found before running, it's a configuration error; missed, the run
-    waits forever.
     """
 
     state: Dict[str, int] = {}
@@ -525,11 +467,8 @@ T = TypeVar('T', bound=BaseModel)
 
 
 class Configuration:
-    """Validates already-loaded configuration data.
-
-    This is deliberately I/O-free: it doesn't know or care whether the raw dict
-    came from a YAML file, JSON, environment variables, or a database -- the
-    caller loads it however they want and hands over plain dicts.
+    """Validates already-loaded configuration data, from wherever the caller
+    loaded it.
     """
 
     @staticmethod

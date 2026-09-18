@@ -5,27 +5,18 @@ named *domain*:
 
     mask = strategy( HMAC(key, domain, value) )
 
-That one construction is what the three properties people actually need from
-masking hang off:
+So the same value in the same domain masks the same way in every table and on
+every run, and nobody without the key can match candidate values to masks.
 
-- Referential consistency. The same value in the same domain masks the same way
-  in every table, so `orders.customerId` and `customers.id` still join when both
-  use `domain: customer`.
-- Reproducibility. Nothing depends on row order or an unseeded random source, so
-  a re-run -- or an incremental run next week -- produces the same masks.
-- Irreversibility without the key. The key is what stops someone who knows the
-  scheme from hashing candidate values and matching them up.
-
-Nothing here imports the rest of the package: a policy is plain data, validated
-by configuration.py and applied by runner.py. Values never appear in an error
-message or a log line -- a masking failure that printed the value it choked on
-would leak exactly what it exists to hide.
+Nothing here imports the rest of the package. Values never appear in an error
+message or a log line.
 """
 from __future__ import annotations
 
 import datetime
 import decimal
 import hashlib
+import functools
 import hmac
 import importlib
 import os
@@ -39,11 +30,8 @@ from typing import Any, Callable, ClassVar, Dict, List, Mapping, NamedTuple, Opt
 
 KEY_MINIMUM_LENGTH = 16
 
-# Masks remembered per column, for strategies that can be. A foreign key or a
-# low-cardinality column repeats values, and `key` and `fpe` cost tens of
-# microseconds a value. The bound, with MASK_CACHE_MAXIMUM_TEXT, keeps a
-# column's cache to a few megabytes; the values it holds are in the job's
-# memory anyway.
+# Masks remembered per column, for the repeated values of foreign keys and
+# low-cardinality columns. Bounded to a few megabytes a column.
 MASK_CACHE_SIZE = 16384
 MASK_CACHE_MAXIMUM_TEXT = 256
 
@@ -52,82 +40,63 @@ MASK_CACHE_MAXIMUM_TEXT = 256
 # some strategies keep, so they aren't cached; nor is bool, which equals 1.
 _CACHEABLE_TYPES = frozenset({str, int, uuid.UUID})
 
-# The longest value `key` and `fpe` mask, in characters or digits. They are
-# for identifiers, and their cost grows with the square of a value's length:
-# well under a millisecond here, but seconds for a document-sized value.
+# The longest value `key` and `fpe` mask, in characters or digits. Their cost
+# grows with the square of the length.
 MAXIMUM_KEY_LENGTH = 256
 
-# Feistel rounds for the `key` strategy's permutation. FF1 and FF3-1 use 10 and
-# 8; 10 is the conservative end, at a cost measured in microseconds per value.
+# Feistel rounds for `key`'s permutation: FF1's 10, the conservative end.
 FEISTEL_ROUNDS = 10
 
 # SHA-256's compression block, which is what HMAC pads its key out to.
 HMAC_BLOCK_SIZE = 64
 
 
+@functools.cache
 def _nativeModule() -> Any:
-    """The `understudy_mask` extension, or None if it isn't installed or is
-    turned off.
-
-    Optional by design: `pip install "understudy-data[fast]"` brings it, and
-    everything works without it. Set UNDERSTUDY_NATIVE=0 to ignore an installed
-    one, which is how the equivalence tests run both implementations and how a
-    deployment rules the extension out while diagnosing a difference.
-
-    The two are tested to produce identical masks (mask-rs/vectors), so which
-    one ran is a question of speed, not of results -- but the manifest records
-    it anyway, since a divergence would otherwise look like nothing at all.
+    """The optional `understudy_mask` extension, or None if it isn't installed
+    or UNDERSTUDY_NATIVE=0 turns it off.
     """
 
-    global _NATIVE_MODULE
+    if os.environ.get('UNDERSTUDY_NATIVE') == '0':
+        return None
 
-    if _NATIVE_MODULE is _UNSET:
-        if os.environ.get('UNDERSTUDY_NATIVE') == '0':
-            _NATIVE_MODULE = None
-        else:
-            try:
-                import understudy_mask
-                _NATIVE_MODULE = understudy_mask
-            except ImportError:
-                _NATIVE_MODULE = None
+    try:
+        import understudy_mask
+    except ImportError:
+        return None
 
-    return _NATIVE_MODULE
+    return understudy_mask
 
 
 def nativeVersion() -> Optional[str]:
-    """The native masker's version, or None when masking runs in pure Python.
-
-    Recorded in the manifest beside the key fingerprint: two runs that agree on
-    both used the same key *and* the same implementation.
-    """
+    """The native masker's version, or None when masking runs in pure Python."""
 
     module = _nativeModule()
 
     return getattr(module, '__version__', None) if module is not None else None
 
 
-_UNSET = object()
-_NATIVE_MODULE: Any = _UNSET
-# What the extension puts in `problems` for a value it doesn't mask itself.
-_NATIVE_FALLBACK = 'fallback'
+def maskingImplementation() -> str:
+    """Which implementation is masking, as one word, for the manifest and
+    maskingIdentity.
+    """
+
+    native = nativeVersion()
+
+    return 'understudy-mask/{}'.format(native) if native else 'python'
 
 
 class MaskingError(Exception):
     """A policy that can't be applied: a column it doesn't cover, or a value of
-    the wrong type for its strategy.
-
-    Deterministic, so the runner never retries it. Messages name the column and
-    the value's *type*, never the value.
+    the wrong type for its strategy. Never retried. Messages name the value's
+    type, never the value.
     """
 
 
 def _canonical(value: Any) -> bytes:
-    """The bytes a value is keyed on.
-
-    Numbers canonicalize to their plain decimal text, so an id read as an int
-    from one database and as a Decimal or a whole float from another -- or as a
-    varchar somewhere else -- masks identically. Dates canonicalize to ISO 8601, which is also how
-    SQLite hands them back as text.
+    """The bytes a value is keyed on: numbers as plain decimal text and dates
+    as ISO 8601, so the same id or date masks identically whichever driver
+    returned it, and whether as a number or as text.
     """
 
     if isinstance(value, bool):
@@ -150,34 +119,45 @@ def _canonical(value: Any) -> bytes:
     return str(value).encode('utf-8')
 
 
+def maskingIdentity(key: str) -> str:
+    """What a masked job records, so a later run can tell whether its masks
+    still agree with its target's: the key's fingerprint and the implementation.
+
+    The implementations are tested to agree byte for byte (mask-rs/vectors),
+    but a divergence wouldn't change the fingerprint, so the implementation is
+    recorded too. Space-separated because it shares one memory column with
+    older state, which is a bare fingerprint.
+    """
+
+    return '{} {}'.format(keyFingerprint(key), maskingImplementation())
+
+
+def splitMaskingIdentity(recorded: str) -> Tuple[str, Optional[str]]:
+    """A recorded identity as (fingerprint, implementation). The implementation
+    is None for state written before it was recorded.
+    """
+
+    fingerprint, _, implementation = recorded.partition(' ')
+
+    return fingerprint, implementation or None
+
+
 def keyFingerprint(key: str) -> str:
-    """A short, non-reversible identifier for a key, safe to log and to record in
-    a manifest. Two runs with the same fingerprint used the same key, so their
-    masks agree; a changed fingerprint means every mask changed.
+    """A short, non-reversible identifier for a key, safe to log and to record
+    in a manifest.
     """
 
     return hmac.digest(key.encode('utf-8'), b'understudy key fingerprint', 'sha256')[:6].hex()
 
 
 class KeyedHash:
-    """HMAC-SHA256 under a per-domain subkey.
-
-    The subkey is derived once per column rather than mixing the domain into
-    every message, which keeps the per-value cost to a single HMAC.
-    """
+    """HMAC-SHA256 under a per-domain subkey, derived once per column."""
 
     def __init__(self, key: str, domain: str) -> None:
         self._subkey = hmac.digest(key.encode('utf-8'), b'domain\x00' + domain.encode('utf-8'), 'sha256')
-        # HMAC re-keys on every call, spending two SHA-256 compressions on the
-        # padded key before it sees a byte of the message. Both pads depend only
-        # on the subkey, so their states are built once here and copied per
-        # value -- the same digest, about a third less time, which `key` and
-        # `fpe` feel most, at tens of HMACs a value.
-        #
-        # The subkey is a SHA-256 digest, so it is always shorter than the
-        # 64-byte block and is zero-padded rather than hashed first. Asserted
-        # rather than branched on: a subkey that ever grew past a block would
-        # otherwise be padded wrong here and silently mask everything anew.
+        # HMAC's two padded-key states, built once and copied per value: the
+        # same digest in about a third less time. Only valid for a key shorter
+        # than the block, hence the assert.
         assert len(self._subkey) == 32
         paddedKey = self._subkey.ljust(HMAC_BLOCK_SIZE, b'\x00')
         self._inner = hashlib.sha256(bytes(byte ^ 0x36 for byte in paddedKey))
@@ -186,10 +166,7 @@ class KeyedHash:
 
     @property
     def subkey(self) -> bytes:
-        """What a native masker is built from. Not the masking key: the key
-        never leaves the configuration model, and this is already one HMAC away
-        from it.
-        """
+        """What a native masker is built from, one HMAC away from the key."""
 
         return self._subkey
 
@@ -234,15 +211,11 @@ class KeyedHash:
 
 
     def permute(self, size: int, value: int, purpose: bytes = b'') -> int:
-        """A keyed permutation of range(size): every input maps to a distinct output.
+        """A keyed permutation of range(size).
 
-        A balanced Feistel network over the smallest even bit width that covers
-        `size`, with HMAC as the round function -- the same structure as NIST's
-        FF1 and FF3-1, without their AES dependency. Inputs outside `size` are
-        cycle-walked: the network is re-applied until the result lands back in
-        range, which always terminates, because walking a permutation's cycle
-        from an in-range point must return to one. The walk averages under four
-        steps, since the bit width never exceeds four times `size`.
+        A balanced Feistel network over the smallest even bit width covering
+        `size`, with HMAC as the round function, cycle-walked back into range.
+        The walk always terminates and averages under four steps.
         """
 
         if size <= 1:
@@ -314,12 +287,8 @@ def _requireIdentifierLength(strategy: str, length: int) -> None:
 
 
 def _requireAsciiCharset(strategy: str, text: str, charset: str) -> None:
-    """Refuses text holding letters or digits the charset can't mask.
-
-    `key` and `fpe` mask ASCII letters and digits only, and keep every other
-    character, so a name in Cyrillic or an id in Arabic-Indic digits would be
-    copied as it is while the manifest says it was masked. With `digits` or
-    `hex`, letters are deliberately kept, so only digits count.
+    """Refuses text holding letters or digits the charset can't mask, which
+    would otherwise be copied unmasked while the manifest says masked.
     """
 
     if text.isascii():
@@ -334,32 +303,27 @@ def _requireAsciiCharset(strategy: str, text: str, charset: str) -> None:
                            'which it would copy unmasked; use the digits strategy for such text'.format(strategy))
 
 
+# What the extension puts in `problems` for a value it doesn't mask itself.
+_NATIVE_FALLBACK = 'fallback'
+
+
 class Strategy:
     """How one column is masked.
 
-    Subclasses declare the options they accept in OPTIONS, as name -> the
-    check applied to the raw configured value, and implement mask() for one
-    non-NULL value. validateOptions runs at configuration time, so a bad option
-    fails `understudy validate` rather than a job.
-
-    NULL passes through untouched unless a strategy says otherwise: a NULL
-    carries nothing to hide, and replacing it would change what a query like
-    `where phone is null` returns.
+    Subclasses declare OPTIONS, as name -> check applied to the configured
+    value, and implement mask() for one non-NULL value. NULL passes through
+    unless a strategy overrides maskColumn.
     """
 
     NAME: ClassVar[str]
     OPTIONS: ClassVar[Dict[str, Callable[[Any], Any]]] = {}
     REQUIRED: ClassVar[Tuple[str, ...]] = ()
-    # Whether the strategy consults the key at all. keep/null/constant don't,
-    # and the manifest records that rather than implying a keyed transformation.
+    # Whether the strategy uses the key at all; the manifest records it.
     KEYED: ClassVar[bool] = True
-    # Whether mask() depends on nothing but the value -- and the key and
-    # options -- so its results can be remembered. A custom strategy is not
-    # assumed to; set it where that holds.
+    # Whether mask() depends only on the value, key and options, so results
+    # can be remembered.
     CACHEABLE: ClassVar[bool] = False
-    # The name the native masker knows this strategy by, where it has one. A
-    # custom strategy never does, and neither do the strategies whose work is
-    # already cheap or whose patterns Rust's regex engine can't express.
+    # The native masker's name for this strategy, where it has one.
     NATIVE: ClassVar[Optional[str]] = None
 
     def __init__(self, keyedHash: KeyedHash, options: Mapping[str, Any]) -> None:
@@ -370,10 +334,8 @@ class Strategy:
 
 
     def _buildNative(self) -> Any:
-        """A native masker for this strategy and these options, or None.
-
-        Options the extension doesn't know are not an error: an older extension
-        against a newer package simply masks in Python, which is always correct.
+        """A native masker for this strategy and these options, or None -- also
+        when an older extension doesn't know an option, so Python masks instead.
         """
 
         module = _nativeModule()
@@ -432,12 +394,9 @@ class Strategy:
 
 
     def _maskColumnNatively(self, values: Sequence[Any]) -> List[Any]:
-        """The column through the extension, with Python finishing what it
-        doesn't cover: Decimals, UUIDs, dates, non-ASCII text.
-
-        Unfinished positions are resolved in order, so a value Python would
-        have refused still refuses first -- the strategies raise on the first
-        bad value, and a job's error must not depend on which implementation ran.
+        """The column through the extension, with Python finishing the values it
+        doesn't cover. Resolved in order, so the first bad value raises whichever
+        implementation ran.
         """
 
         masked, problems = self._native.maskColumn(list(values))
@@ -454,9 +413,7 @@ class Strategy:
 
 
     def _maskRemembered(self, value: Any) -> Any:
-        """mask(), from the cache where the value's type allows. A value that
-        fails to mask raises every time, since nothing is stored for it.
-        """
+        """mask(), from the cache where the value's type allows."""
 
         kind = type(value)
         if kind not in _CACHEABLE_TYPES or (kind is str and len(value) > MASK_CACHE_MAXIMUM_TEXT):
@@ -470,8 +427,7 @@ class Strategy:
 
         masked = self.mask(value)
         if len(self._cache) >= MASK_CACHE_SIZE:
-            # Emptied rather than evicted one at a time: the hot values are
-            # back within a chunk, and a dict needs no bookkeeping per hit.
+            # Emptied, not evicted: the hot values are back within a chunk.
             self._cache.clear()
         self._cache[cacheKey] = masked
 
@@ -552,9 +508,7 @@ class KeepStrategy(Strategy):
 
 
 class NullStrategy(Strategy):
-    """Replace every value with NULL. The right choice for free text, which can
-    hold PII anywhere in it and has nothing a hash would usefully preserve.
-    """
+    """Replace every value with NULL."""
 
     NAME = 'null'
     KEYED = False
@@ -578,12 +532,8 @@ class ConstantStrategy(Strategy):
 
 
 class HashStrategy(Strategy):
-    """An opaque hex token: `prefix` followed by `length` hex characters.
-
-    The minimum length exists for unique columns. Twelve hex characters is 48
-    bits, where a collision stays unlikely into the millions of distinct values;
-    fewer bits would start breaking unique constraints at table sizes people
-    actually have.
+    """An opaque hex token: `prefix` followed by `length` hex characters. At
+    least 12 (48 bits), so unique columns stay unique into the millions.
     """
 
     NAME = 'hash'
@@ -599,13 +549,8 @@ class HashStrategy(Strategy):
 
 
 class EmailStrategy(Strategy):
-    """Still shaped like an email address: `u<hex>@example.test`.
-
-    Keyed on the lower-cased address, since email matching is effectively case
-    insensitive and `Ann@X.com` and `ann@x.com` are the same person. The domain
-    is replaced too, unless keepDomain is set -- a small company's domain can be
-    as identifying as the name in front of it. `example.test` is reserved, so a
-    masked address can never deliver mail to anyone.
+    """Still shaped like an email address: `u<hex>@example.test`, a reserved
+    domain that can't deliver mail. Keyed on the lower-cased address.
     """
 
     NAME = 'email'
@@ -635,14 +580,8 @@ class EmailStrategy(Strategy):
 
 
 class DigitsStrategy(Strategy):
-    """Replace every digit with a keyed digit, keeping everything else.
-
-    `+1 (555) 010-9999` stays the same length with its punctuation in place, so
-    formatting and length checks still pass. The key is the digits alone, so the
-    same number masks the same way however it was formatted. keepLeading and
-    keepTrailing preserve a country code or the last four of a card.
-
-    An integer keeps its digit count and sign.
+    """Replace every digit with a keyed digit, keeping everything else. Keyed
+    on the digits alone, so formatting doesn't change the mask.
     """
 
     NAME = 'digits'
@@ -701,20 +640,12 @@ class DigitsStrategy(Strategy):
 
 
 class NumberStrategy(Strategy):
-    """A keyed number of the same type and precision.
+    """A keyed number of the same type and precision, within `min`-`max` or
+    within `variance` of the original. A value the variance would round back
+    to itself moves one step instead; zero stays zero.
 
-    Either within a fixed range (`min` and `max`), or within `variance` of the
-    original -- 0.1 by default, so 200.00 becomes something in [180.00, 220.00].
-    Variance keeps magnitudes realistic, and so does leak them roughly; use a
-    range when the magnitude itself is sensitive. A value that the variance
-    would round back to itself -- any integer from 1 to 5, at 10% -- moves by
-    one step of its precision instead, so no non-zero value is kept. Zero
-    stays zero, having no magnitude to vary.
-
-    The type is preserved: an int stays an int, a float a float, and a Decimal
-    -- how PostgreSQL, MySQL and SQL Server return NUMERIC -- keeps its own
-    number of decimal places. `decimals` overrides the places, and is worth
-    setting for floats, which is how oracledb returns a NUMBER with a scale.
+    `decimals` overrides the precision -- worth setting for floats, which is
+    how oracledb returns a NUMBER with a scale.
     """
 
     NAME = 'number'
@@ -813,16 +744,10 @@ _CALENDAR_INSIDE = range(datetime.date.min.toordinal() + 1, datetime.date.max.to
 
 class DateShiftStrategy(Strategy):
     """Move a date or timestamp by a keyed number of whole days, never zero.
+    ISO 8601 text is written back in the same shape.
 
-    Whole days, so a timestamp keeps its time of day. Keyed on the value, so
-    everyone born on the same day still shares a birthday after masking.
-    ISO 8601 text -- how SQLite stores dates -- is parsed and written back in
-    the same shape.
-
-    The calendar's first and last days, 0001-01-01 and 9999-12-31, are kept:
-    they stand for "no date" or "forever", not for anyone's data, and
-    applications compare against them. A date whose shift would leave the
-    calendar, or land on one of them, is shifted the other way instead.
+    0001-01-01 and 9999-12-31 mean "no date" or "forever", so they are kept,
+    and a shift that would leave the calendar or land on them goes the other way.
     """
 
     NAME = 'dateShift'
@@ -1029,11 +954,7 @@ DEFAULT_LOCALE = Locale(FIRST_NAMES, LAST_NAMES, CITIES, STREET_NAMES, STREET_SU
 
 class _FakeStrategy(Strategy):
     """A realistic-looking replacement, chosen from bundled lists by the hash.
-
-    Not unique: the lists are small, so many values share a replacement. Use
-    `hash` or `key` where uniqueness matters. maxLength truncates for narrow
-    columns. `locale` picks a country's names, places and address layout;
-    without it, the lists are an international mix.
+    Not unique.
     """
 
     CACHEABLE = True
@@ -1125,25 +1046,13 @@ _HEX_DIGITS = '0123456789abcdef'
 
 
 class KeyStrategy(Strategy):
-    """A one-to-one mapping, safe for primary and foreign keys.
+    """A one-to-one mapping, safe for primary and foreign keys, that keeps the
+    input's shape: an integer's sign and digit count, text's length and every
+    character outside `charset`.
 
-    Every distinct input gets a distinct output -- guaranteed by construction,
-    not by probability -- so a masked primary key never collides, and a foreign
-    key masked in the same domain still points at its row.
-
-    The output has the input's shape:
-
-    - An integer keeps its sign and digit count.
-    - Text keeps its length and every character that isn't masked. `charset`
-      decides which are: `alphanumeric` (the default) maps digits to digits and
-      letters to letters of the same case; `digits` maps only digits; `hex`
-      maps 0-9 and a-f, case-insensitively, for UUIDs and hex tokens.
-    - A uuid.UUID stays a UUID. Its version digit isn't preserved.
-
-    Shape preservation is what makes the mapping one-to-one overall: two inputs
-    of different shapes can never produce the same output, and within a shape
-    it is a permutation. That is also why `charset` is a fixed choice per column
-    rather than detected per value -- detection would let two shapes overlap.
+    One-to-one because it is a permutation within each shape, and different
+    shapes can't meet. That is why `charset` is fixed per column rather than
+    detected per value, which would let shapes overlap.
     """
 
     NAME = 'key'
@@ -1247,24 +1156,12 @@ _FPE_ALPHABETS = {
 
 
 class FPEStrategy(Strategy):
-    """NIST FF1 format-preserving encryption (SP 800-38G Rev. 1), for policies
-    that must name a published algorithm.
+    """NIST FF1 format-preserving encryption (SP 800-38G Rev. 1), shaped like
+    `key`. The domain goes into FF1's tweak.
 
-    One-to-one like `key`, and shaped like it: an integer keeps its sign and
-    digit count; text keeps its length and every character outside `charset`.
-    `charset` is `alphanumeric` (the default: any of 0-9, a-z and A-Z may
-    become any other, so letters and digits can trade places), `digits`, or
-    `hex` (case-insensitive, for UUIDs). The domain goes into FF1's tweak, and
-    the AES-256 key is derived from the masking key.
-
-    FF1 is only defined for at least a million possible values: six digits,
-    five hex characters or four alphanumerics. Shorter values are masked with
-    `key`'s permutation instead, which the manifest can't distinguish. The two
-    never collide, since neither changes a value's length. With `strict`, a
-    shorter value fails the job instead, for policies that require FF1 for
-    every value.
-
-    Needs the `cryptography` package (`pip install understudy-data[fpe]`).
+    FF1 needs at least a million possible values, so shorter values fall back
+    to `key`'s permutation -- no collision, since neither changes a length --
+    or, with `strict`, fail. Needs the `fpe` extra.
     """
 
     NAME = 'fpe'
@@ -1443,24 +1340,8 @@ _DETECTOR_KINDS = tuple(kind for kind, _, _ in _DETECTORS)
 
 
 class RedactStrategy(Strategy):
-    """Finds recognisable identifiers inside free text and replaces only those.
-
-    Detected: email addresses, phone numbers, US Social Security numbers, card
-    numbers (Luhn-checked), IBANs (checksum-checked) and IPv4 addresses, plus
-    any `patterns` of your own. `detect` narrows the built-in list.
-
-    `replacement` decides what goes in their place: `label` (the default)
-    writes `[EMAIL]`, `[PHONE]` and so on; `mask` writes a keyed value of the
-    same shape -- the same address always becomes the same masked address, as
-    with the `email` strategy, and a card keeps its last four digits.
-
-    Phone detection is deliberately broad: any run of 7 to 15 digits that
-    isn't a date counts, order numbers included. Leave `phone` out of `detect`
-    where that removes too much.
-
-    **It cannot find names**, or anything else without a recognisable shape:
-    "call Maria about her divorce" passes through untouched. Where text may
-    hold that, `null` is the safe choice.
+    """Finds recognisable identifiers inside free text and replaces only those,
+    with a label or a keyed value of the same shape. It cannot find names.
     """
 
     NAME = 'redact'
@@ -1535,16 +1416,9 @@ class RedactStrategy(Strategy):
 
 
 class ShuffleStrategy(Strategy):
-    """Shuffle the column's values among the rows of each chunk.
-
-    Keeps the column's exact distribution, which is the whole point -- and why
-    this is **not** anonymization: every real value is still in the table, on
-    another row. Only rows in the same chunk are shuffled together, since a
-    streamed job never holds more than one chunk.
-
-    So a small chunk hides little: a chunk of one row -- the tail of a load, or
-    an incremental run that found one changed row -- keeps its value on its own
-    row, and any row keeps its own value with probability 1/len(chunk).
+    """Shuffle the column's values among the rows of each chunk. Not
+    anonymization: every real value stays in the table, and a small chunk
+    barely moves them.
     """
 
     NAME = 'shuffle'
@@ -1568,11 +1442,8 @@ STRATEGIES: Dict[str, Type[Strategy]] = {
 
 
 def resolveStrategy(name: Any) -> Type[Strategy]:
-    """A built-in strategy by name, or your own as `module.path:ClassName`.
-
-    A custom strategy is a Strategy subclass: declare OPTIONS, and implement
-    mask() for one non-NULL value, deriving it from self.keyedHash so it stays
-    keyed and consistent. It must be importable wherever jobs run.
+    """A built-in strategy by name, or your own Strategy subclass as
+    `module.path:ClassName`.
     """
 
     if isinstance(name, str) and name in STRATEGIES:
@@ -1599,10 +1470,8 @@ POLICY_FIELDS = ('strategy', 'domain')
 
 
 def validateColumnPolicy(policy: Any) -> Dict[str, Any]:
-    """Normalizes one column's policy, raising ValueError if it's invalid.
-
-    Accepts the shorthand `email: hash` as well as the mapping form, and returns
-    the mapping form with the strategy's options checked and converted.
+    """One column's policy in mapping form, with its options checked. Accepts
+    the shorthand `email: hash`. Raises ValueError.
     """
 
     if isinstance(policy, str):
@@ -1645,20 +1514,11 @@ class ColumnMasking(NamedTuple):
 class MaskingPlan:
     """A validated policy, bound to the columns a query actually returned.
 
-    Binding is where fail-by-default happens. Every returned column must be
-    covered, by name or by `defaultStrategy`, or bind() raises before a single
-    row is written. The failure this guards against is the common one: a
-    developer adds a column to production, and it flows into a non-production
-    copy unmasked because nobody updated the policy. A column named in the
-    policy but not returned is an error too, since it's almost always a typo
-    that leaves the real column uncovered.
-
-    Column names match case-insensitively, because Oracle reports unquoted
-    identifiers in upper case whatever the policy says.
-
-    The domain defaults to the column's own lower-cased name, so `email` in two
-    tables already masks consistently. Set it explicitly to join differently
-    named columns -- `orders.customerId` and `customers.id`.
+    bind() raises unless every returned column is covered, by name or by
+    defaultStrategy, and every named column is returned -- so a new production
+    column stops the job instead of being copied unmasked. Names match
+    case-insensitively, for Oracle. A domain defaults to the lower-cased
+    column name.
     """
 
     def __init__(self, key: str, columns: Mapping[str, Mapping[str, Any]], defaultStrategy: Optional[Mapping[str, Any]] = None) -> None:
@@ -1725,13 +1585,8 @@ class BoundMasking:
 
 
     def apply(self, rows: Sequence[Tuple[Any, ...]], chunkIndex: Optional[int] = None) -> List[Tuple[Any, ...]]:
-        """`chunkIndex` identifies the chunk within the job, and `shuffle` keys
-        its permutation on it.
-
-        Passed in by a caller that reads chunks ahead of masking them, where a
-        counter kept here would number them by the order they happened to be
-        masked in. Left out, it counts calls, which is the same thing whenever
-        chunks are masked one after another in source order.
+        """`chunkIndex` is the chunk's position in the source, which `shuffle`
+        keys on. Left out, it counts calls.
         """
 
         if chunkIndex is None:
@@ -1753,14 +1608,11 @@ class BoundMasking:
 
 def buildMaskingManifest(outcomes: Sequence[Any], declared: Mapping[str, Mapping[str, Any]],
                          generatedAt: Optional[datetime.datetime] = None) -> Dict[str, Any]:
-    """What was masked, how, and under which key -- the artifact an auditor asks for.
+    """What was masked, how, and under which key, for an auditor. Never a value
+    or the key.
 
-    `declared` maps each masked job to what its configuration says (target and
-    key fingerprint). A completed job's outcome adds what actually happened: the
-    strategy and domain applied to each column the query returned, and the row
-    count. A masked job that failed or was skipped is still listed, with its
-    status and no columns, because "this copy was not refreshed" is something
-    an auditor needs to see too. Never a value, and never the key.
+    `declared` maps each masked job to its configured target and key
+    fingerprint. A failed or skipped job is still listed, with no columns.
     """
 
     jobs = []
@@ -1778,15 +1630,9 @@ def buildMaskingManifest(outcomes: Sequence[Any], declared: Mapping[str, Mapping
 
     timestamp = generatedAt or datetime.datetime.now(datetime.timezone.utc)
 
-    # Which implementation produced these masks. The two are tested to agree
-    # (tests/test_nativeMasking.py, mask-rs/vectors), so this is not expected to
-    # matter -- but a divergence would otherwise be invisible: the key
-    # fingerprint covers the key, not the code, so masks could change while
-    # every fingerprint stayed the same. An auditor comparing two manifests can
-    # see that here.
+    # The implementation, for the reason given in maskingIdentity.
     manifest: Dict[str, Any] = {'generatedAt': timestamp.isoformat(timespec='seconds'), 'jobs': jobs}
-    native = nativeVersion()
-    manifest['maskedBy'] = 'understudy-mask {}'.format(native) if native else 'python'
+    manifest['maskedBy'] = maskingImplementation()
 
     return manifest
 
@@ -1807,8 +1653,7 @@ class ManifestVerification(NamedTuple):
 
 def _canonicalManifest(manifest: Mapping[str, Any]) -> bytes:
     """The bytes a manifest's digest covers: every field but `integrity`, as
-    sorted, compact JSON -- so whitespace and key order don't matter, and any
-    change to a value does.
+    sorted, compact JSON.
     """
 
     body = {name: value for name, value in manifest.items() if name != INTEGRITY_FIELD}
@@ -1817,16 +1662,10 @@ def _canonicalManifest(manifest: Mapping[str, Any]) -> bytes:
 
 
 def sealManifest(manifest: Mapping[str, Any], signingKey: Optional[str] = None) -> Dict[str, Any]:
-    """The manifest with an `integrity` section: a SHA-256 digest of its
-    content and, given a signing key, an HMAC-SHA256 signature.
+    """The manifest with an `integrity` section: a SHA-256 digest and, given a
+    signing key, an HMAC-SHA256 signature with the key's fingerprint.
 
-    The digest shows a manifest hasn't been altered since it was written; only
-    the signature shows who wrote it, since anyone can recompute a digest.
-    The signing key should differ from any masking key -- the manifest records
-    its fingerprint, so verifiers know which key to ask for.
-
-    The manifest is passed through JSON first, so what is sealed is exactly
-    what a verifier will read back from the file.
+    Passed through JSON first, so what is sealed is what a verifier reads back.
     """
 
     sealed: Dict[str, Any] = json.loads(json.dumps(dict(manifest), default=str))
@@ -1844,9 +1683,8 @@ def sealManifest(manifest: Mapping[str, Any], signingKey: Optional[str] = None) 
 
 
 def verifyManifest(manifest: Mapping[str, Any], signingKey: Optional[str] = None) -> ManifestVerification:
-    """Checks a sealed manifest. A signed one is only checked against a key
-    with the fingerprint it records; with no key, or another key, its
-    signature counts as not valid.
+    """Checks a sealed manifest. A signature is only valid against the key
+    whose fingerprint it records.
     """
 
     integrity = manifest.get(INTEGRITY_FIELD)

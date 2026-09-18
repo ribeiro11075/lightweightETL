@@ -530,15 +530,49 @@ def test_run_keeps_its_memory_beside_the_configuration(workspace):
     assert not (workspace / 'memory.yaml').exists()
 
 
-def test_run_still_uses_a_memory_file_left_in_the_working_directory(workspace, caplog):
-    """An upgrade must not forget the run state an earlier version kept in ./memory.yaml."""
-    (workspace / 'memory.yaml').write_text('lastRun: {}\nwatermarks: {}\n')
+def test_the_jobs_file_says_where_run_state_lives(workspace, monkeypatch):
+    """`memory` is relative to jobs.yaml, not to the working directory, so a run
+    from anywhere finds the same file -- and nothing lands in configuration/.
+    """
+    (workspace / 'configuration' / 'jobs.yaml').write_text('memory: ../transaction/memory.yaml\n' + JOBS_YAML)
+    (workspace / 'configuration' / 'database.yaml').write_text('demo:\n  type: sqlite\n  database: {}\n'.format(workspace / 'demo.db'))
+    elsewhere = workspace / 'elsewhere'
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    assert main(['run', '--quiet', '--config', str(workspace / 'configuration')]) == EXIT_SUCCESS
+
+    assert 'loadRows' in (workspace / 'transaction' / 'memory.yaml').read_text()
+    assert (workspace / 'transaction' / 'memory.yaml.run.lock').exists()
+    assert {path.name for path in (workspace / 'configuration').iterdir()} == {'jobs.yaml', 'database.yaml'}
+    assert not any(elsewhere.iterdir())
+
+
+def test_memory_on_the_command_line_wins_over_the_jobs_file(workspace):
+    (workspace / 'configuration' / 'jobs.yaml').write_text('memory: ../transaction/memory.yaml\n' + JOBS_YAML)
+
+    assert main(['run', '--quiet', '--memory', 'chosen.yaml']) == EXIT_SUCCESS
+
+    assert (workspace / 'chosen.yaml').exists()
+    assert not (workspace / 'transaction').exists()
+
+
+def test_a_memory_file_in_the_working_directory_is_not_used(workspace):
+    """Only the configuration decides where run state lives."""
+    (workspace / 'memory.yaml').write_text('lastRun: {}\n')
 
     assert main(['run', '--quiet']) == EXIT_SUCCESS
 
-    assert 'loadRows' in (workspace / 'memory.yaml').read_text()
-    assert not (workspace / 'configuration' / 'memory.yaml').exists()
-    assert 'Move the file there' in caplog.text
+    assert (workspace / 'memory.yaml').read_text() == 'lastRun: {}\n'
+    assert (workspace / 'configuration' / 'memory.yaml').exists()
+
+
+def test_validate_says_where_run_state_lives(workspace, capsys):
+    (workspace / 'configuration' / 'jobs.yaml').write_text('memory: ../transaction/memory.yaml\n' + JOBS_YAML)
+
+    assert main(['validate', '--quiet']) == EXIT_SUCCESS
+
+    assert 'run state: transaction/memory.yaml' in capsys.readouterr().out
 
 
 def test_a_second_run_sharing_the_memory_file_refuses_to_start(workspace, caplog):
@@ -779,12 +813,16 @@ def test_run_memory_can_live_in_a_database(workspace):
     connection.commit()
     connection.close()
 
+    (workspace / 'configuration' / 'jobs.yaml').write_text('memory: ../transaction/memory.yaml\n' + JOBS_YAML)
+
     assert main(['run', '--quiet', '--memory-database', 'demo']) == EXIT_SUCCESS
 
     connection = sqlite3.connect(str(workspace / 'demo.db'))
     assert {row[0] for row in connection.execute('SELECT job FROM understudy_memory')} == {'loadRows', 'dependent'}
     connection.close()
-    assert not (workspace / 'configuration' / 'memory.yaml').exists()
+    assert not (workspace / 'transaction' / 'memory.yaml').exists()
+    # The run lock still needs a file; it goes where the memory file would.
+    assert (workspace / 'transaction' / 'memory.run.lock').exists()
 
 
 def test_a_rotated_masking_key_needs_clear_or_acknowledgement(workspace, monkeypatch, caplog):

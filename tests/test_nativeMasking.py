@@ -121,10 +121,14 @@ def test_the_extension_can_be_turned_off(monkeypatch):
     import understudy_data.masking as masking
 
     monkeypatch.setenv('UNDERSTUDY_NATIVE', '0')
-    monkeypatch.setattr(masking, '_NATIVE_MODULE', masking._UNSET)
+    masking._nativeModule.cache_clear()
 
-    assert masking.nativeVersion() is None
-    assert STRATEGIES['key'](KeyedHash(KEY, 'off'), {})._native is None
+    try:
+        assert masking.nativeVersion() is None
+        assert STRATEGIES['key'](KeyedHash(KEY, 'off'), {})._native is None
+    finally:
+        # Or every later test would find the extension off.
+        masking._nativeModule.cache_clear()
 
 
 @native

@@ -1,21 +1,14 @@
 """The `understudy` command.
 
-This is the one place in the package that knows about file paths. Everything
-under it stays I/O-free -- Configuration validates dicts it is handed, and the
-runners take already-validated objects -- so the CLI is where YAML loading,
-path defaults and environment lookups live, and nowhere else.
+The only place in the package that reads files and the environment; the
+modules under it take already-loaded, validated objects.
 
-Exit codes, because for anything that schedules work the exit code *is* the
-interface:
+Exit codes, which are the interface for anything that schedules work:
 
     0    every active job completed
     1    at least one job failed or was skipped, or the command itself failed
     2    invalid configuration, or a usage error
     130  interrupted
-
-Single-shot is the default. `--forever` exists for freshness below cron's
-one-minute floor, or where there is no scheduler to hook into -- see runner.py's
-runDataJobs for the reasoning.
 """
 from __future__ import annotations
 
@@ -56,13 +49,7 @@ class UsageError(Exception):
 
 
 def _loadYaml(path: Path) -> Any:
-    """Load a YAML file, expanding ${NAME} from the environment.
-
-    Expansion happens here rather than in Configuration because reading the
-    environment is I/O, and this module is where this package does its I/O.
-    A library caller who loads their own YAML calls expandEnvironmentVariables
-    themselves -- see docs/library.md.
-    """
+    """Load a YAML file, expanding ${NAME} from the environment."""
 
     try:
         with open(path) as file:
@@ -91,45 +78,37 @@ def _resolveConfigurationPaths(arguments: argparse.Namespace) -> Tuple[Path, Pat
     return jobsPath, databasesPath
 
 
-def _resolveMemoryPath(arguments: argparse.Namespace, log: Log) -> Path:
-    """--memory, else memory.yaml in the config directory.
-
-    Beside the configuration rather than in the working directory, so that a
-    cron entry or a container that starts somewhere else still finds the same
-    run state -- losing it silently means every incremental job re-extracts
-    from watermarkInitial. A memory.yaml left in the working directory by an
-    earlier version is still used, with a warning, until it is moved.
+def _resolveMemoryPath(arguments: argparse.Namespace, jobsFile: DataJobsFile) -> Path:
+    """--memory, else the jobs file's `memory`, else memory.yaml beside the jobs
+    file. The last two are relative to the jobs file, not the working
+    directory, so cron, a shell and CI find the same run state wherever they
+    start.
     """
 
     if arguments.memory:
         return Path(arguments.memory)
 
-    path = _configDirectory(arguments) / 'memory.yaml'
-    legacy = Path('memory.yaml')
+    jobsPath, _ = _resolveConfigurationPaths(arguments)
 
-    if not path.exists() and legacy.exists() and legacy.resolve() != path.resolve():
-        log.logging.warning('Using ./memory.yaml from the working directory; run state now defaults to {}. '
-                            'Move the file there, or pass --memory'.format(path))
-        return legacy
-
-    return path
+    return Path(os.path.normpath(jobsPath.parent / (jobsFile.memory or 'memory.yaml')))
 
 
-def _memoryBackend(arguments: argparse.Namespace, databaseConfiguration: Dict[str, DatabaseConnectionConfig],
-                   log: Log) -> Tuple[MemoryBackend, Path]:
-    """The run memory to use, and the file a run holds as its lock.
+def _memoryBackend(arguments: argparse.Namespace, jobsFile: DataJobsFile,
+                   databaseConfiguration: Dict[str, DatabaseConnectionConfig]) -> Tuple[MemoryBackend, Path]:
+    """The run memory to use, and the file a run holds as its lock, beside it.
 
-    With --memory-database the lock can only sit in the config directory, so
-    it keeps overlapping runs apart on one machine only; across machines, let
-    the scheduler do it (a CronJob's concurrencyPolicy: Forbid).
+    With --memory-database the lock still needs a file, so it goes where a
+    memory file would, and keeps overlapping runs apart on one machine only;
+    across machines, let the scheduler do it (a CronJob's concurrencyPolicy:
+    Forbid).
     """
+
+    memoryPath = _resolveMemoryPath(arguments, jobsFile)
 
     if arguments.memory_database:
         _requireAlias(databaseConfiguration, arguments.memory_database)
         memory = DatabaseMemory(connectionSettings=databaseConfiguration[arguments.memory_database], table=arguments.memory_table)
-        return memory, _configDirectory(arguments) / 'memory.run.lock'
-
-    memoryPath = _resolveMemoryPath(arguments, log)
+        return memory, memoryPath.with_name('memory.run.lock')
 
     return FileMemory(memoryFile=memoryPath), memoryPath.with_name(memoryPath.name + '.run.lock')
 
@@ -175,12 +154,7 @@ def _cycleReporter(arguments: argparse.Namespace, databaseConfiguration: Dict[st
 
 
 def _configureLogging(arguments: argparse.Namespace) -> Log:
-    """stdout by default; --log additionally writes a file.
-
-    This inverts the library's file-first default deliberately. In a container
-    logs have to reach stdout to be collected at all, and a CLI that writes its
-    only output to a file nobody named is a CLI that looks like it did nothing.
-    """
+    """stderr unless --quiet, where a container collects it; --log adds a file."""
 
     level = getattr(logging, arguments.log_level.upper())
     log = Log(logFile=arguments.log, level=level, logFormat=arguments.log_format)
@@ -209,13 +183,7 @@ def _loadDataJobs(arguments: argparse.Namespace) -> Tuple[DataJobsFile, Dict[str
 
 
 def _selectJobs(jobs: Dict[str, DataJobConfig], requested: Optional[List[str]], log: Log) -> Dict[str, DataJobConfig]:
-    """Narrow a job map to --job selections, warning about predecessors dropped.
-
-    Running only what was asked for is the right default here: the use case is
-    iterating on one job and wanting a fast loop. But silently ignoring a
-    declared dependency is how a --job ends up in a cron and produces a
-    stale-upstream incident months later, so every skipped predecessor is named.
-    """
+    """Narrow a job map to --job selections, naming each predecessor left out."""
 
     if not requested:
         return jobs
@@ -236,11 +204,7 @@ def _selectJobs(jobs: Dict[str, DataJobConfig], requested: Optional[List[str]], 
 
 
 def _applyJobSelection(jobsFile: DataJobsFile, arguments: argparse.Namespace, log: Log) -> DataJobsFile:
-    """--job also forces the selected jobs to run, ignoring `refresh`.
-
-    Asking for a job explicitly and getting nothing because it ran four minutes
-    ago is baffling behaviour to debug, so the selection implies --force.
-    """
+    """--job also forces the selected jobs to run, ignoring `refresh`."""
 
     jobs = _selectJobs(jobsFile.jobs, arguments.job, log)
 
@@ -278,7 +242,7 @@ def _commandRun(arguments: argparse.Namespace, log: Log) -> int:
     if arguments.dry_run:
         return _dryRunDataJobs(jobsFile, databaseConfiguration, log)
 
-    memory, lockFile = _memoryBackend(arguments, databaseConfiguration, log)
+    memory, lockFile = _memoryBackend(arguments, jobsFile, databaseConfiguration)
     lockFile.parent.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -308,14 +272,9 @@ def _toolVersion() -> str:
 
 
 def _writeManifest(path: Path, result: RunResult, jobsFile: DataJobsFile, arguments: argparse.Namespace, log: Log) -> None:
-    """Writes the run's masking manifest as JSON, sealed.
-
-    Written even when a job failed -- a record that a masked copy was *not*
-    refreshed is as much a part of the audit trail as one that it was.
-
-    It records the tool version and a digest of the jobs file, so a reviewer
-    can tell which policy produced it, and is sealed with a digest of its own
-    -- signed, too, when the signing key's variable is set.
+    """Writes the run's masking manifest as sealed JSON, even when a job
+    failed, with the tool version and a digest of the jobs file. Signed when
+    the signing key's variable is set.
     """
 
     jobsPath, _ = _resolveConfigurationPaths(arguments)
@@ -333,10 +292,8 @@ def _writeManifest(path: Path, result: RunResult, jobsFile: DataJobsFile, argume
 
 
 def _commandVerifyManifest(arguments: argparse.Namespace, log: Log) -> int:
-    """Checks a manifest's digest, and its signature if it has one.
-
-    A signed manifest can't be vouched for without its key, so asking to verify
-    one without the key is a usage error rather than a half-answer.
+    """Checks a manifest's digest, and its signature if it has one -- which
+    needs the key, or it's a usage error.
     """
 
     path = Path(arguments.manifest)
@@ -413,17 +370,15 @@ def _commandValidate(arguments: argparse.Namespace, log: Log) -> int:
         raise ConfigurationError('invalid configuration:\n' + '\n'.join(problems))
 
     print('configuration is valid: {} database alias(es), {} job(s)'.format(len(databaseConfiguration), len(jobsFile.jobs)))
+    if not arguments.memory_database:
+        print('run state: {}'.format(_resolveMemoryPath(arguments, jobsFile)))
 
     return EXIT_SUCCESS
 
 
 def _dryRunDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, DatabaseConnectionConfig], log: Log) -> int:
     """Everything `validate` does, plus what needs a connection: that each alias
-    actually connects, that its driver is installed, that target tables exist,
-    and that upsert targets have a primary key.
-
-    The last is a real trap -- without a key the column buckets come back empty,
-    and the generated upsert silently degrades rather than failing loudly.
+    connects, target tables exist, and upsert targets have a primary key.
     """
 
     problems: List[str] = []
@@ -466,11 +421,8 @@ def _dryRunDataJobs(jobsFile: DataJobsFile, databaseConfiguration: Dict[str, Dat
 
 
 def _sourceQueryColumns(job: DataJobConfig, databaseConfiguration: Dict[str, DatabaseConnectionConfig]) -> List[str]:
-    """The columns a job's sourceQuery returns.
-
-    Finding them means running the query, so this reads a single row -- and
-    discards it unexamined -- rather than trusting a WHERE 1=0 rewrite of
-    arbitrary SQL to be valid on every dialect.
+    """The columns a job's sourceQuery returns, by reading and discarding one
+    row, since rewriting arbitrary SQL isn't portable.
     """
 
     with Database(connectionSettings=databaseConfiguration[job.sourceDatabase]) as database:
@@ -568,10 +520,8 @@ def _nextSteps(source: str, target: str, tables: Sequence[str], related: bool = 
 
 
 def _commandDiscover(arguments: argparse.Namespace, log: Log) -> int:
-    """Proposes a masking policy for each table, from its schema and a sample.
-
-    Offline in the sense that matters: it reads, and writes nothing to any
-    database. The proposal goes to stdout or --output for review.
+    """Proposes a masking policy for each table from its schema and a sample,
+    writing nothing to any database.
     """
 
     from .discovery import JobDraft, proposeTable, renderJobs
@@ -825,7 +775,7 @@ def _commandClear(arguments: argparse.Namespace, log: Log) -> int:
     if not arguments.dry_run:
         # Emptied targets hold nothing masked under the old key any more, so
         # a key change is no longer a reason to refuse these jobs.
-        memory, _ = _memoryBackend(arguments, databaseConfiguration, log)
+        memory, _ = _memoryBackend(arguments, jobsFile, databaseConfiguration)
         for name, job in jobs.items():
             if job.masking is not None:
                 memory.recordKeyFingerprint(name, None)
@@ -922,13 +872,12 @@ def _commandHistory(arguments: argparse.Namespace, log: Log) -> int:
 
 
 def _commandJobs(arguments: argparse.Namespace, log: Log) -> int:
-    """Prints the graph as the scheduler sees it right now, including which jobs
-    are suppressed by their refresh window -- the fastest way to find out why a
-    job isn't running.
+    """Prints the graph as the scheduler sees it now, including which jobs
+    their refresh window holds back.
     """
 
     jobsFile, databaseConfiguration = _loadDataJobs(arguments)
-    memory, _ = _memoryBackend(arguments, databaseConfiguration, log)
+    memory, _ = _memoryBackend(arguments, jobsFile, databaseConfiguration)
     graph = DependencyGraph(jobs=jobsFile.jobs, memory=memory.read())
     watermarks = memory.readWatermarks()
 
@@ -958,7 +907,7 @@ def _addCommonArguments(parser: argparse.ArgumentParser, jobs: bool = True) -> N
         parser.add_argument('--jobs', help='explicit path to the jobs file, overriding --config')
     parser.add_argument('--databases', help='explicit path to the database file, overriding --config')
     if jobs:
-        parser.add_argument('--memory', help='path to the run-memory file (default: memory.yaml in the --config directory)')
+        parser.add_argument('--memory', help='path to the run-memory file (default: jobs.yaml\'s `memory`, else memory.yaml beside jobs.yaml)')
         parser.add_argument('--memory-database', metavar='ALIAS',
                             help='keep run memory in this database instead of a file (see docs/operations.md)')
         parser.add_argument('--memory-table', default='understudy_memory', help='the --memory-database table (default: understudy_memory)')

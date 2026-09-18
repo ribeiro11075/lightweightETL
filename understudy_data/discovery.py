@@ -1,13 +1,8 @@
 """Proposes masking policies from a live schema, for `understudy discover`.
 
-A proposal is a starting point for review, never a finished policy. Each
-column's suggestion carries the reason it was made, and the rendered YAML puts
-that reason next to the column, so a reviewer can see what was inferred and
-from what.
-
-Classification uses column names first, then sampled values. Sampled values
-are only ever examined in memory: nothing here prints, logs or writes one, so
-running discovery against production can't leak what it's looking for.
+A proposal is for review: each suggestion carries its reason, rendered beside
+the column. Classification uses column names, then sampled values, which are
+only examined in memory -- never printed, logged or written.
 """
 from __future__ import annotations
 
@@ -38,11 +33,9 @@ PERSONAL_TABLE_WORDS = {'customer', 'customers', 'user', 'users', 'person', 'peo
 
 FREE_TEXT_AVERAGE_LENGTH = 60
 
-# (words any of which must be in the column name, policy, reason). The first
-# match wins, so more specific entries come first. Words are matched against
-# the name split on underscores and camelCase, and against the whole name
-# joined back together, so `first_name`, `firstName` and `FIRSTNAME` all match
-# `firstname`.
+# (words any of which must be in the column name, policy, reason). First match
+# wins, so specific entries come first. Names are matched split on underscores
+# and camelCase and joined whole, so `first_name` and `FIRSTNAME` both match.
 NAME_RULES: Tuple[Tuple[Tuple[str, ...], Dict[str, Any], str], ...] = (
     (('email', 'emailaddress', 'mail'), {'strategy': 'email'}, 'name suggests an email address'),
     (('password', 'passwd', 'pwd', 'secret', 'token', 'apikey', 'salt'), {'strategy': 'hash'}, 'name suggests a credential'),
@@ -208,12 +201,8 @@ def _isIsoDate(text: str) -> bool:
 
 
 def _compatible(strategy: str, values: Sequence[Any], category: Optional[ColumnCategory]) -> bool:
-    """Whether a name-based guess fits what the column actually holds.
-
-    A name is weak evidence -- `place_of_birth` is not a date, `token_count` is
-    not a credential -- and proposing a strategy that fails on the column's type
-    would only turn into a failed run. With no category and no sampled values
-    there's nothing to contradict the name, so it stands.
+    """Whether a name-based guess fits what the column holds (`token_count` is
+    not a credential). With nothing to contradict it, the name stands.
     """
 
     present = [value for value in values if value is not None]
@@ -241,12 +230,9 @@ def suggestColumn(table: str, column: str, category: Optional[ColumnCategory], v
                   keyReference: Optional[Tuple[str, bool]] = None) -> Suggestion:
     """One column's proposed policy.
 
-    `keyReference` is set for a primary-key column, a column a foreign key
-    references, or a foreign-key column: the domain it must share with the other
-    end, and whether that end is numeric. Keys are decided before anything
-    else, because their two ends have to agree or the relationship breaks. A
-    numeric key is proposed as `keep` -- a surrogate id says little on its own
-    -- and a text key as `key`, since natural keys are often the identifier.
+    `keyReference`, for a key column, is the domain it shares with the other
+    end and whether that end is numeric. Keys are decided first, since both
+    ends must agree: `keep` for a numeric surrogate, `key` for text.
     """
 
     if keyReference is not None:
@@ -371,14 +357,9 @@ class JobDraft(NamedTuple):
 
 def renderJobs(drafts: Sequence[JobDraft], sourceDatabase: str, targetDatabase: str, heading: Sequence[str],
                keyVariable: str = 'MASKING_KEY', chunkSize: int = 5000) -> str:
-    """A jobs.yaml document, with each suggestion's reason as a comment.
-
-    Written by hand rather than with yaml.dump, which can't emit comments --
-    and the comments are the part a reviewer needs.
-
-    Loading into a different database upserts, parents first. Masking in place
-    swaps through a stage table instead, since upserting a masked key would add
-    rows rather than replace them.
+    """A jobs.yaml document, with each suggestion's reason as a comment, which
+    yaml.dump can't emit. Masking in place swaps, since upserting a masked key
+    would add rows rather than replace them.
     """
 
     inPlace = sourceDatabase == targetDatabase

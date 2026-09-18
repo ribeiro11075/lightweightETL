@@ -77,12 +77,8 @@ def _columnDefinitions(rows: Sequence[Sequence[Any]]) -> List[ColumnDefinition]:
 
 
 def splitTableName(table: str) -> Tuple[Optional[str], str]:
-    """`schema.table` -> ('schema', 'table'); a bare `table` -> (None, 'table').
-
-    None means the connection's current schema, which is what every catalog
-    lookup below falls back to. Looking a table up without a schema at all is
-    how a same-named table in another schema used to leak its key columns into
-    an upsert.
+    """`schema.table` -> ('schema', 'table'); a bare `table` -> (None, 'table'),
+    None meaning the connection's current schema.
     """
 
     schema, _, name = table.rpartition('.')
@@ -103,12 +99,8 @@ class ColumnCategory(str, Enum):
 
 
 def _mergeUpdateInsertClause(targetAlias: str, sourceAlias: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
-    """The shared ON/WHEN MATCHED/WHEN NOT MATCHED tail of a MERGE statement, used
-    by both OracleDialect and MSSQLDialect.
-
-    WHEN MATCHED is omitted entirely when there are no non-primary-key columns,
-    since an empty UPDATE SET is invalid syntax on both -- a table of only
-    primary-key columns has nothing to match/update against, so insert-only.
+    """The ON/WHEN MATCHED/WHEN NOT MATCHED tail of an Oracle or SQL Server
+    MERGE. A key-only table gets no WHEN MATCHED, since an empty SET is invalid.
     """
 
     onClause = ' AND '.join('{}.{} = {}.{}'.format(targetAlias, column, sourceAlias, column) for column in primaryKeyColumns)
@@ -160,11 +152,8 @@ class DatabaseDialect(ABC):
 
     @abstractmethod
     def connect(self, settings: DatabaseConnectionConfig) -> Tuple[Any, Any]:
-        """Returns (connection, cursor).
-
-        Implementations import their driver lazily, inside this method, so that
-        `import understudy_data` doesn't require every database driver to be installed --
-        only the one you actually connect with.
+        """Returns (connection, cursor). Drivers are imported here, so only the
+        one in use needs installing.
         """
 
     @abstractmethod
@@ -172,13 +161,9 @@ class DatabaseDialect(ABC):
         """The driver keyword arguments the connection fields map to."""
 
     def connectArguments(self, settings: DatabaseConnectionConfig, resolvePassword: bool = True) -> Dict[str, Any]:
-        """Everything passed to the driver's connect(): the fields' own
-        arguments, plus settings.options.
-
-        An option that names an argument a field already sets is refused rather
-        than silently winning or losing -- set the field instead. Needs no
-        connection, so `validate` checks it offline -- with resolvePassword
-        False, so that checking never runs a passwordCommand.
+        """The fields' driver arguments plus settings.options, refusing an
+        option that duplicates a field. resolvePassword=False lets `validate`
+        check this without running a passwordCommand.
         """
 
         own = self._ownConnectArguments(settings, settings.plainPassword() if resolvePassword else None)
@@ -191,32 +176,17 @@ class DatabaseDialect(ABC):
         return {**own, **settings.options}
 
     def streamingCursor(self, connection: Any, chunkSize: int) -> Any:
-        """A cursor that does *not* buffer the whole result set client-side.
-
-        This is what bounds an extract's memory to one chunk rather than the
-        whole table, and it can only be decided per driver: a plain DB-API
-        cursor.fetchmany() bounds how many rows *Python* builds objects for, but
-        says nothing about how many the driver already pulled off the socket. A
-        client-buffered cursor has spent the memory before fetchmany() is ever
-        called.
-
-        The default is a plain cursor, which is correct for the drivers that
-        already stream row-by-row off the connection (sqlite3, pymssql).
-        Dialects whose driver buffers by default override this.
+        """A cursor that doesn't buffer the whole result set client-side, which
+        fetchmany() alone doesn't prevent. A plain cursor already streams on
+        sqlite3 and pymssql.
         """
 
         return connection.cursor()
 
 
     def discardRemaining(self, connection: Any, cursor: Any) -> None:
-        """Release rows left unread on `cursor`, so `connection` stays usable.
-
-        Called when a stream is abandoned before exhaustion. The default is a
-        no-op, which is correct wherever the *server* still owns the unsent rows
-        and closing the cursor is enough to discard them: PostgreSQL's
-        server-side cursor gets a CLOSE, and Oracle and sqlite3 drop their
-        remaining rows on close. Only a driver that has already pulled rows onto
-        the client connection needs to do anything here.
+        """Release rows left unread by an abandoned stream, so `connection` stays
+        usable. Closing the cursor is enough everywhere but MySQL.
         """
 
 
@@ -232,19 +202,15 @@ class DatabaseDialect(ABC):
         return False
 
     def isEncrypted(self, cursor: Any) -> Optional[bool]:
-        """Whether this connection is encrypted in transit, as the server
-        reports it -- which is what an auditor wants, rather than what the
-        connection settings asked for. None where there is no network (SQLite)
-        or no way to tell.
+        """Whether the server reports this connection as encrypted in transit;
+        None where there's no network or no way to tell.
         """
 
         return None
 
     def bulkInsert(self, cursor: Any, table: str, columns: List[str], rows: Sequence[Sequence[Any]]) -> bool:
-        """Loads `rows` in fewer round trips than one statement per row, where
-        the driver doesn't already do that for executemany (psycopg2 and
-        pymssql don't). False means nothing was sent, and the caller should
-        insert them statement by statement instead.
+        """Loads `rows` in fewer round trips than executemany, for drivers whose
+        executemany sends a statement per row. False means nothing was sent.
         """
 
         return False
@@ -258,22 +224,13 @@ class DatabaseDialect(ABC):
         return False
 
     def truncateQuery(self, table: str) -> str:
-        """Standard ANSI TRUNCATE TABLE, which every dialect but SQLite supports --
-        overridden there, since SQLite has no TRUNCATE statement at all.
-        """
+        """TRUNCATE TABLE, which every dialect but SQLite has."""
 
         return 'TRUNCATE TABLE {}'.format(table)
 
     def columnCategory(self, dataType: Any) -> Optional[ColumnCategory]:
-        """Maps one raw value from cursor.description's type_code field (a shape
-        that's entirely up to the driver -- a type-name string, a numeric OID, a
-        driver-specific type object, ...) to a NUMBER/DATE/TEXT ColumnCategory, for
-        discovery.py to classify columns without knowing or caring which
-        database the data came from.
-
-        None means "not recognized" -- the default here, for any dialect that
-        hasn't overridden this -- and discovery then infers a category from
-        sampled values instead.
+        """The category of a driver-specific cursor.description type_code, for
+        discovery. None means unrecognized, and discovery samples values instead.
         """
 
         return None
@@ -282,11 +239,8 @@ class DatabaseDialect(ABC):
     # the table, from splitTableName. A NULL schema means the current one.
 
     def primaryKeyQuery(self) -> str:
-        """One table's primary-key columns, in key order.
-
-        The declared primary key only. UNIQUE constraints are left out: an
-        upsert matching on (id, email) treats a row whose email changed as a new
-        row, and PostgreSQL rejects an ON CONFLICT list no single index matches.
+        """One table's declared primary-key columns, in key order. Not UNIQUE
+        constraints, which would make an upsert treat a changed row as new.
         """
 
         raise NotImplementedError('{} cannot describe primary keys'.format(type(self).__name__))
@@ -330,8 +284,8 @@ class DatabaseDialect(ABC):
         raise NotImplementedError('{} cannot list foreign keys'.format(type(self).__name__))
 
     def foreignKeys(self, cursor: Any) -> List[ForeignKey]:
-        """Used to plan referentially complete subsets. Dialects that can't
-        express this as one query (SQLite) override this instead.
+        """For planning subsets. SQLite, which can't do it in one query,
+        overrides this.
         """
 
         cursor.execute(self.foreignKeysQuery())
@@ -365,16 +319,11 @@ class DatabaseDialect(ABC):
 
 
 class _OnConflictDialect(DatabaseDialect):
-    """PostgreSQL and SQLite share `INSERT ... ON CONFLICT` word for word.
+    """PostgreSQL and SQLite share `INSERT ... ON CONFLICT` word for word. A
+    key-only table gets DO NOTHING, since an empty SET is invalid.
 
-    A table whose every column is part of the primary key has nothing to update
-    on a conflict, and an empty SET clause is a syntax error, so the conflict
-    action becomes DO NOTHING. The MERGE dialects drop WHEN MATCHED instead.
-
-    The stage form's `WHERE true` is SQLite's documented workaround for a
-    grammar ambiguity: without a clause after FROM, it reads ON as the start of
-    a join constraint and rejects the statement. PostgreSQL accepts it as the
-    no-op it is.
+    The stage form's `WHERE true` is SQLite's documented workaround for reading
+    ON as the start of a join constraint.
     """
 
     @staticmethod
@@ -420,36 +369,17 @@ class MySQLDialect(DatabaseDialect):
 
 
     def streamingCursor(self, connection: Any, chunkSize: int) -> Any:
-        """The inverse of connect()'s cursor: buffered=False.
-
-        connect() deliberately uses buffered=True, which fetches the entire
-        result set at execute() time -- that's what makes row counts and
-        re-iteration cheap for the small metadata queries Database runs, and
-        it's exactly what has to be turned off to stream a large extract.
-
-        The trade-off an unbuffered cursor brings: it holds the connection until
-        it is fully drained, so no other statement can run on this connection
-        while a stream is open. _executeDataJob is safe because it reads through
-        the *source* connection and writes through a separate target one --
-        anything that interleaves a second query onto a streaming connection
-        will raise InternalError: Unread result found.
+        """Unbuffered, unlike connect()'s cursor. It holds the connection until
+        drained: no other statement may run on it while a stream is open.
         """
 
         return connection.cursor(buffered=False)
 
 
     def discardRemaining(self, connection: Any, cursor: Any) -> None:
-        """mysql.connector queues unread rows on the *connection*, not the cursor.
-
-        Closing an unbuffered cursor does not drop them, so the next statement on
-        that connection fails with "InternalError: Unread result found" -- the
-        connection is effectively poisoned by an abandoned stream. consume_results()
-        is the driver's own remedy: it reads and discards whatever is outstanding.
-
-        That costs a network transfer of the rows nobody wanted, which is the
-        price of leaving the connection usable; it is bounded in memory, not in
-        bandwidth. Abandoning a stream over a very large result set is therefore
-        cheap in RAM and expensive in time on this dialect alone.
+        """mysql.connector queues unread rows on the connection, where they fail
+        the next statement ("Unread result found"). consume_results() reads and
+        discards them -- bounded in memory, but it transfers every unread row.
         """
 
         connection.consume_results()
@@ -461,10 +391,7 @@ class MySQLDialect(DatabaseDialect):
 
 
     def columnCategory(self, dataType: Any) -> Optional[ColumnCategory]:
-        """mysql.connector's cursor.description reports type names as strings
-        (e.g. "VARCHAR") -- a non-string dataType (shouldn't happen for this
-        driver, but cheaper to guard than assume) is simply unrecognized.
-        """
+        """mysql.connector reports type names as strings, e.g. "VARCHAR"."""
 
         if not isinstance(dataType, str):
             return None
@@ -516,11 +443,9 @@ class MySQLDialect(DatabaseDialect):
 
     @staticmethod
     def _onDuplicateKey(table: str, primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str]) -> str:
-        """A key-only table has nothing to update, so the update is a no-op
-        assignment of its own key -- an empty SET clause is a syntax error.
-
-        Not INSERT IGNORE, which also downgrades truncation, NOT NULL and
-        foreign-key errors to warnings, silently dropping or mangling rows.
+        """A key-only table gets a no-op assignment of its key, since an empty
+        SET is invalid. Not INSERT IGNORE, which also silences truncation,
+        NOT NULL and foreign-key errors.
         """
 
         if not nonPrimaryKeyColumns:
@@ -613,10 +538,8 @@ class PostgreSQLDialect(_OnConflictDialect):
         connection = psycopg2.connect(**self.connectArguments(settings))
         cursor = connection.cursor()
 
-        # Only the one schema: a fallback such as `public` would send an
-        # unqualified write to a table there while every catalog lookup
-        # (current_schema()) looked here. Committed, since a SET inside a
-        # transaction that is later rolled back is undone with it.
+        # Only this schema, with no fallback such as `public` that catalog
+        # lookups wouldn't see. Committed, or a later rollback would undo it.
         if settings.currentSchema:
             cursor.execute('SET search_path TO {}'.format(settings.currentSchema))
             connection.commit()
@@ -631,18 +554,9 @@ class PostgreSQLDialect(_OnConflictDialect):
 
 
     def streamingCursor(self, connection: Any, chunkSize: int) -> Any:
-        """psycopg2 only streams through a *named* cursor.
-
-        An unnamed cursor is client-side: psycopg2 pulls the entire result set
-        into the client at execute() time, so fetchmany() on one bounds nothing.
-        Passing a name creates a server-side cursor (a real PostgreSQL DECLARE
-        ... CURSOR), which fetches in batches of `itersize`.
-
-        The name has to be unique within the session, hence the uuid suffix --
-        two concurrent streams on one connection would otherwise collide. Note a
-        server-side cursor lives inside a transaction and is invalidated by a
-        commit on its connection, which is why the extract side never commits
-        (Database.query/alter commit; stream() does not).
+        """A named, server-side cursor: psycopg2 buffers everything through an
+        unnamed one. A commit on the connection invalidates it, so the extract
+        side never commits.
         """
 
         cursor = connection.cursor(name='understudy_{}'.format(uuid.uuid4().hex))
@@ -688,12 +602,8 @@ class PostgreSQLDialect(_OnConflictDialect):
 
     def bulkUpsert(self, cursor: Any, table: str, allColumns: List[str], primaryKeyColumns: List[str], nonPrimaryKeyColumns: List[str],
                    rows: Sequence[Sequence[Any]]) -> bool:
-        """COPY into a temporary table shaped like the target's columns, then
-        one INSERT ... ON CONFLICT from it.
-
-        The temporary table takes only the columns' types -- no constraints,
-        defaults or identity -- and empties itself at every commit, so it is
-        created once per connection and column list, and reused by each chunk.
+        """COPY into a temporary table, then one INSERT ... ON CONFLICT from it.
+        The table empties at every commit, so each chunk reuses it.
         """
 
         stream = _copyText(rows)
@@ -740,9 +650,8 @@ class PostgreSQLDialect(_OnConflictDialect):
                 "ORDER BY cl.relname, con.conname, k.position")
 
 
-    # PostgreSQL folds unquoted names to lower case, so a table created as
-    # Customers is stored as customers; the lookups below fold the same way.
-    # The ::text casts give a NULL schema a type, which lower() needs.
+    # The lookups fold names to lower case, as PostgreSQL does unquoted ones.
+    # ::text gives a NULL schema the type lower() needs.
 
     def columnsQuery(self) -> str:
 
@@ -788,18 +697,10 @@ class PostgreSQLDialect(_OnConflictDialect):
         "AND view.oid <> dependency.refobjid AND view.relkind = 'v'")
 
     def swap(self, cursor: Any, targetTable: str, stageTable: str, tempTable: str) -> None:
-        """Renames, then points the target's views at the new target.
-
-        A PostgreSQL view is bound to the table it was created on, not to that
-        table's name, so after the renames it would read what is now the stage
-        table -- the old data, emptied by the next run. Each view built directly
-        on the target is recreated from its own definition, captured before the
-        renames, whose table name now resolves to the new target. CREATE OR
-        REPLACE keeps the view itself, so its grants and any views built on it
-        stay as they were. It all happens in the swap's transaction.
-
-        Materialized views and foreign keys referencing the target aren't
-        rebound; see docs/design.md.
+        """Renames, then recreates each view on the target from its definition
+        captured beforehand, since a PostgreSQL view follows the table, not the
+        name. CREATE OR REPLACE keeps grants and views built on it. See "How a
+        swap works" in docs/design.md.
         """
 
         cursor.execute(self.DEPENDENT_VIEWS_QUERY, (targetTable,))
@@ -812,13 +713,9 @@ class PostgreSQLDialect(_OnConflictDialect):
 
 
 def _oracleLobsAsValues(cursor: Any, metadata: Any) -> Any:
-    """Fetch CLOB, NCLOB and BLOB columns as str and bytes, not LOB handles.
-
-    oracledb returns LOB locators by default, which no other driver can bind
-    and which are only readable while their connection is open -- neither
-    works for a value on its way to another database. Set per connection, as
-    an output type handler, rather than through oracledb's process-wide
-    defaults, so an application embedding this package keeps its own setting.
+    """Fetch CLOB, NCLOB and BLOB columns as str and bytes, not LOB handles,
+    which no other driver can bind. Per connection, rather than oracledb's
+    process-wide default, so an embedding application keeps its own setting.
     """
 
     import oracledb
@@ -848,11 +745,9 @@ class OracleDialect(DatabaseDialect):
     _DATE_TYPE_NAMES = {'DB_TYPE_DATE', 'DB_TYPE_TIMESTAMP', 'DB_TYPE_TIMESTAMP_TZ', 'DB_TYPE_TIMESTAMP_LTZ'}
     _TEXT_TYPE_NAMES = {'DB_TYPE_VARCHAR', 'DB_TYPE_CHAR', 'DB_TYPE_NVARCHAR', 'DB_TYPE_NCHAR', 'DB_TYPE_CLOB', 'DB_TYPE_NCLOB', 'DB_TYPE_LONG'}
 
-    # ISO 8601 for every implicit conversion between text and a date. Oracle's
-    # default (DD-MON-RR) can't read the ISO text other databases hand over --
-    # SQLite stores dates that way -- or a watermarkInitial written as
-    # '1970-01-01 00:00:00'. Values that arrive as datetime objects are
-    # unaffected; this only changes how text is read and written.
+    # ISO 8601 for implicit text-date conversions, so ISO text from other
+    # databases, or a watermarkInitial, loads into a DATE. See "Moving values
+    # between drivers" in docs/design.md.
     SESSION_FORMATS = ("ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS' "
                        "NLS_TIMESTAMP_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF' "
                        "NLS_TIMESTAMP_TZ_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF TZH:TZM'")
@@ -879,13 +774,8 @@ class OracleDialect(DatabaseDialect):
 
 
     def streamingCursor(self, connection: Any, chunkSize: int) -> Any:
-        """oracledb already streams; arraysize is what makes it stream *efficiently*.
-
-        A plain cursor fetches 100 rows per round trip by default, so a large
-        extract at a large chunkSize would otherwise spend most of its time on
-        network latency rather than data. prefetchrows is set one above arraysize
-        -- oracledb's documented pairing, which lets the first fetch and the
-        describe share a single round trip.
+        """A chunk per round trip rather than oracledb's default 100 rows.
+        prefetchrows one above arraysize is oracledb's documented pairing.
         """
 
         cursor = connection.cursor()
@@ -901,11 +791,8 @@ class OracleDialect(DatabaseDialect):
 
 
     def columnCategory(self, dataType: Any) -> Optional[ColumnCategory]:
-        """oracledb's cursor.description reports types as oracledb.DB_TYPE_* --
-        singleton objects, not strings, so this matches on their own `.name`
-        attribute (e.g. "DB_TYPE_NUMBER") rather than importing oracledb just to
-        compare against its constants directly -- keeps the driver import lazy and
-        confined to connect(), like every other dialect here.
+        """Matches oracledb's DB_TYPE_* objects by `.name`, so the driver isn't
+        imported here.
         """
 
         typeName = getattr(dataType, 'name', None)
@@ -931,9 +818,8 @@ class OracleDialect(DatabaseDialect):
                 "ORDER BY c.table_name, c.constraint_name, cc.position")
 
 
-    # The all_* views, filtered to one owner: the bound schema, or else the
-    # session's current schema -- which ALTER SESSION SET CURRENT_SCHEMA moves
-    # and the user_* views would not follow.
+    # all_* views filtered to the bound schema or the session's current one,
+    # which user_* views wouldn't follow after ALTER SESSION SET CURRENT_SCHEMA.
     OWNER = "COALESCE(UPPER({}), SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA'))"
 
     def columnsQuery(self) -> str:
@@ -979,11 +865,8 @@ class OracleDialect(DatabaseDialect):
 
 
     def swapQueries(self, targetTable: str, stageTable: str, tempTable: str) -> List[str]:
-        """Three separate statements: Oracle's cursor.execute() runs exactly one.
-
-        Oracle commits every DDL statement on its own, so unlike the other
-        dialects this swap is not atomic. A failure between the renames leaves
-        the target under the temporary name, and the job's error says so.
+        """Three statements, since cursor.execute() runs one. Not atomic:
+        Oracle commits each DDL statement.
         """
 
         return _renameInThreeSteps(targetTable, stageTable, tempTable)
@@ -1002,9 +885,8 @@ class MSSQLDialect(DatabaseDialect):
 
 
     def _ownConnectArguments(self, settings: DatabaseConnectionConfig, password: Optional[str]) -> Dict[str, Any]:
-        """pymssql's port is a str, and unlike the other drivers it doesn't fall
-        back to its own default ('1433') when passed None, so it's left out
-        entirely when unset.
+        """pymssql takes the port as a str, and fails on None, so it's left out
+        when unset.
         """
 
         arguments: Dict[str, Any] = {'server': settings.host, 'user': settings.user, 'password': password, 'database': settings.database}
@@ -1113,45 +995,27 @@ class MSSQLDialect(DatabaseDialect):
 
 
     def swapQueries(self, targetTable: str, stageTable: str, tempTable: str) -> List[str]:
-        """sp_rename is a stored procedure, not DDL -- EXEC calls chain fine in one
-        execute(), so (unlike Oracle) this doesn't need three separate statements.
-        It runs inside the connection's transaction, so the swap is atomic.
-
-        The new name is taken literally: a qualified one would create a table
-        whose name contains the dot.
+        """One execute(), inside the transaction, so atomic. sp_rename takes the
+        new name literally, so it must be unqualified.
         """
 
         return ["EXEC sp_rename '{}', '{}'; EXEC sp_rename '{}', '{}'; EXEC sp_rename '{}', '{}';".format(
             stageTable, unqualifiedName(tempTable), targetTable, unqualifiedName(stageTable), tempTable, unqualifiedName(targetTable))]
 
-    # columnCategory isn't overridden here -- pymssql's cursor.description type
-    # codes are its own DBAPITypeObject constants (pymssql.NUMBER, .STRING, ...),
-    # not reliably distinguishable without importing pymssql itself (unlike
-    # Oracle's DB_TYPE_* objects, which expose a stable, driver-import-free `.name`
-    # string). Falls back to the base class's None, so discovery infers each
-    # column's category from sampled values instead.
+    # No columnCategory: pymssql's type codes can't be told apart without
+    # importing it, so discovery samples values instead.
 
 
 class MariaDBDialect(MySQLDialect):
-    """MariaDB is wire- and SQL-compatible with MySQL for everything this library
-    does with it -- `INSERT ... ON DUPLICATE KEY UPDATE`, `RENAME TABLE`, and the
-    same information_schema primary-key query -- so this reuses MySQLDialect's
-    connect()/queries wholesale (including mysql.connector as the driver, which
-    speaks MariaDB's wire protocol fine) rather than duplicating them.
+    """MySQL's dialect and driver, unchanged: MariaDB is compatible with
+    everything this uses.
     """
 
 
 def _registerSqliteAdapters(sqlite3: Any) -> None:
-    """Teach sqlite3 the value types other drivers hand back.
-
-    sqlite3 refuses a Decimal outright -- which PostgreSQL, MySQL and SQL
-    Server return for every NUMERIC column -- and its built-in date and
-    timestamp adapters are deprecated since Python 3.12. Everything is stored
-    as the text SQLite's own date functions read, and a Decimal as its exact
-    text, which a NUMERIC column then stores as a number.
-
-    register_adapter is process-wide, which is fine: these are the conversions
-    any caller of sqlite3 would want, and registering twice is harmless.
+    """Teach sqlite3 the value types other drivers hand back: Decimal, which it
+    refuses, and dates, whose built-in adapters are deprecated since 3.12.
+    Process-wide, which is harmless for these.
     """
 
     import datetime
@@ -1165,14 +1029,8 @@ def _registerSqliteAdapters(sqlite3: Any) -> None:
 
 
 class SQLiteDialect(_OnConflictDialect):
-    """settings.database is a filesystem path (or ":memory:") -- SQLite is an
-    embedded, file-based database with no server, so user/password/host/port are
-    unused (DatabaseConnectionConfig only requires them for every other type).
-
-    columnCategory isn't overridden here -- sqlite3's cursor.description always
-    reports None for a column's type (SQLite is dynamically typed; there's no
-    fixed type to report), so there's nothing to categorize. Falls back to the
-    base class's None, and discovery infers a category from sampled values.
+    """settings.database is a file path or ":memory:". No columnCategory:
+    sqlite3 reports no column types.
     """
 
     def connect(self, settings: DatabaseConnectionConfig) -> Tuple[Any, Any]:
@@ -1181,22 +1039,9 @@ class SQLiteDialect(_OnConflictDialect):
 
         _registerSqliteAdapters(sqlite3)
 
-        # WAL, because this library reads and writes the same SQLite file from
-        # two places at once. In SQLite's default rollback-journal mode a reader
-        # holds a SHARED lock for as long as its statement is open, and a writer
-        # on any other connection fails outright with "database is locked" --
-        # which a streaming extract hits immediately whenever sourceDatabase and
-        # targetDatabase are the same file, since _executeDataJob opens a
-        # separate connection for each side and the read stays open across every
-        # write. (This was latent before streaming too: runDataJobs runs multiple
-        # worker *processes*, so two jobs writing the same file contended the
-        # same way.) WAL lets one writer proceed alongside readers, which is
-        # exactly that shape.
-        #
-        # Note this is a persistent property of the database file, not of the
-        # connection -- opening a database in WAL leaves it in WAL afterwards. It
-        # is a no-op for ":memory:", and requires a local filesystem: WAL uses
-        # shared memory, so it does not work over NFS or SMB.
+        # WAL, so a writer can proceed while a stream reads the same file; the
+        # default journal fails it with "database is locked". It persists in
+        # the file, and needs a local filesystem, not NFS or SMB.
         connection = sqlite3.connect(**self.connectArguments(settings))
         connection.execute('PRAGMA journal_mode=WAL')
         cursor = connection.cursor()
@@ -1215,9 +1060,7 @@ class SQLiteDialect(_OnConflictDialect):
 
 
     def supportsMaterializedSelections(self) -> bool:
-        """SQLite 3.35 and later, which is what Python's own sqlite3 links
-        against on most platforms -- but not all, hence the check.
-        """
+        """SQLite 3.35 and later, which not every Python links against."""
 
         import sqlite3
 
@@ -1225,9 +1068,7 @@ class SQLiteDialect(_OnConflictDialect):
 
 
     def truncateQuery(self, table: str) -> str:
-        """SQLite has no TRUNCATE statement; DELETE FROM with no WHERE clears every
-        row and is the documented equivalent.
-        """
+        """SQLite has no TRUNCATE; DELETE FROM is its equivalent."""
 
         return 'DELETE FROM {}'.format(table)
 
@@ -1305,10 +1146,8 @@ class SQLiteDialect(_OnConflictDialect):
 
 
     def swapQueries(self, targetTable: str, stageTable: str, tempTable: str) -> List[str]:
-        """Three statements, since sqlite3's cursor.execute() runs one at a time,
-        inside an explicit transaction. sqlite3 doesn't open one implicitly
-        before DDL, so without the BEGIN each rename would commit on its own and
-        a failure part-way would leave the target missing.
+        """Three statements in an explicit transaction: sqlite3 doesn't open
+        one before DDL, so each rename would otherwise commit alone.
         """
 
         return ['BEGIN'] + _renameInThreeSteps(targetTable, stageTable, tempTable)

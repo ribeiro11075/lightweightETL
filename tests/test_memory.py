@@ -80,6 +80,14 @@ def test_watermarks_and_run_times_are_stored_independently(tmp_path):
     assert memory.readWatermarks() == {'job1': '2026-09-15 10:00:00', 'job2': 4711}
 
 
+def test_the_first_write_creates_the_memory_files_directory(tmp_path):
+    memory = FileMemory(memoryFile=tmp_path / 'transaction' / 'memory.yaml')
+
+    memory.recordRun('loadOrders')
+
+    assert 'loadOrders' in memory.read()
+
+
 def test_a_missing_memory_file_reads_as_no_watermarks(tmp_path):
     assert FileMemory(memoryFile=tmp_path / 'nope.yaml').readWatermarks() == {}
 

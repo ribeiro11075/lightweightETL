@@ -1,20 +1,9 @@
 """Creates target tables from source ones, and empties targets before a refresh.
 
-`understudy schema` reads a table's columns, primary key and foreign keys
-from the source catalog and writes CREATE TABLE statements in the *target's*
-dialect. Types go through a small portable vocabulary on the way -- integer,
-decimal, text, timestamp and so on -- because six dialects can't be mapped
-pairwise. Anything the vocabulary can't express becomes text, and the
-statement says so in a comment rather than failing, since one odd column
-shouldn't block creating the rest.
-
-This is deliberately table *shape* only: columns, nullability, the primary key
-and foreign keys. Indexes, defaults, check constraints, triggers and
-permissions aren't copied -- a non-production copy rarely needs them, and
-translating them across dialects is where schema tools go wrong.
-
-`understudy clear` empties the target tables of a set of jobs, children
-before parents so foreign keys don't block it.
+Source types map through a small portable vocabulary into the target's
+dialect; anything it can't express becomes text, with a comment. Only a
+table's shape is copied: columns, nullability, primary and foreign keys --
+not indexes, defaults, checks, triggers or grants.
 """
 from __future__ import annotations
 
@@ -308,14 +297,8 @@ def orderParentsFirst(tables: Iterable[str], foreignKeys: Sequence[ForeignKey]) 
 
 def createStatements(sourceType: DatabaseType, targetType: DatabaseType, tables: Sequence[TableDefinition],
                      includeForeignKeys: bool = True, stageSuffix: Optional[str] = None, stagesOnly: bool = False) -> List[Statement]:
-    """CREATE TABLE statements for `tables`, parents first.
-
-    Foreign keys are declared inline, and only between tables in the set: a
-    reference to a table that isn't being created is left out and noted, since
-    the target may not have it. Stage tables -- `<table><stageSuffix>`, what a
-    swap loads into -- get the same columns and primary key but no foreign
-    keys, because a stage table is emptied and swapped, and nothing should
-    reference it.
+    """CREATE TABLE statements for `tables`, parents first. Foreign keys only
+    between tables in the set; stage tables (`<table><stageSuffix>`) get none.
     """
 
     order = orderParentsFirst([table.name for table in tables], [foreignKey for table in tables for foreignKey in table.foreignKeys]
@@ -375,12 +358,8 @@ def _createTable(sourceType: DatabaseType, targetType: DatabaseType, table: Tabl
 
 
 def _constraintName(targetType: DatabaseType, name: str) -> str:
-    """Source constraint names, kept where the target accepts them.
-
-    Names are only guaranteed unique within their own source schema, and
-    PostgreSQL's system-generated ones can contain characters that need
-    quoting, so anything outside [A-Za-z0-9_] is replaced, and the result is
-    kept within the shortest identifier limit among the dialects (63).
+    """Source constraint names, with anything outside [A-Za-z0-9_] replaced and
+    cut to 63 characters, the shortest limit among the dialects.
     """
 
     cleaned = re.sub(r'[^A-Za-z0-9_]', '_', name)
@@ -409,14 +388,9 @@ def clearOrder(tables: Iterable[str], foreignKeys: Sequence[ForeignKey]) -> List
 
 
 def clearTables(database: Any, tables: Sequence[str]) -> List[Tuple[str, int]]:
-    """Deletes every row of `tables`, in one transaction, children first.
-
-    DELETE rather than TRUNCATE: PostgreSQL, SQL Server and Oracle refuse to
-    truncate a table that a foreign key references, even when the referencing
-    table is empty. One transaction, so a failure part-way -- a table outside
-    the set still referencing these rows, say -- leaves every table as it was.
-
-    Returns (table, rows deleted) in the order they were emptied.
+    """Deletes every row of `tables`, in one transaction, children first, and
+    returns (table, rows deleted). DELETE, since three dialects won't
+    TRUNCATE a table a foreign key references.
     """
 
     order = clearOrder(tables, database.getForeignKeys())

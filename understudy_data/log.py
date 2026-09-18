@@ -23,16 +23,8 @@ _RESERVED_RECORD_FIELDS = frozenset({
 
 
 class JsonFormatter(logging.Formatter):
-    """One JSON object per line, for a log collector rather than a person.
-
-    The point isn't the encoding, it's the fields: job runs emit `job`,
-    `status`, `rowCount` and `durationSeconds` through extra={...}, so a
-    collector can alert on `status="failed"` or chart rows moved per job without
-    anyone parsing a message string. Text output stays the default, because a
-    human reading a terminal is the more common case.
-
-    Anything unserializable falls back to str() rather than failing -- losing a
-    log line to a TypeError while reporting an error is a poor trade.
+    """One JSON object per line, for a log collector, carrying each record's
+    extra={...} fields. Anything unserializable falls back to str().
     """
 
     def format(self, record: logging.LogRecord) -> str:
@@ -60,12 +52,8 @@ class JsonFormatter(logging.Formatter):
 
 class ScrubbingFilter(logging.Filter):
     """Removes quoted data values from a record's message and exception text.
-
-    A filter on the package logger, rather than on its handlers, so it covers
-    handlers a caller adds too, and records forwarded from job processes, which
-    Logger.handle filters again on arrival. The exception is rendered to text
-    here, since its message is what quotes the values; formatters print
-    exc_text when there is no exc_info.
+    On the logger rather than its handlers, so it covers handlers a caller
+    adds and records forwarded from job processes.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -101,13 +89,9 @@ _installScrubbing()
 
 
 def portableRecord(record: logging.LogRecord) -> logging.LogRecord:
-    """A copy of `record` that can be pickled into another process, unformatted.
-
-    Formatting here would bake a text layout into what the receiving process
-    may want as JSON, so this only does what pickling requires: resolves the
-    message's arguments, and turns the exception into text, since a traceback
-    can't cross a process boundary. The receiver's formatter renders both --
-    logging.Formatter appends exc_text by itself, and JsonFormatter reads it.
+    """A copy of `record` that can be pickled into another process: arguments
+    resolved and the exception as text, but unformatted, so the receiver can
+    still write JSON.
     """
 
     record = copy.copy(record)
@@ -121,15 +105,11 @@ def portableRecord(record: logging.LogRecord) -> logging.LogRecord:
 
 
 class ConnectionForwarder(logging.Handler):
-    """Sends a job process's records to the main process over its own pipe.
+    """Sends a job process's records to the main process over its own pipe --
+    not a shared queue, whose lock a killed job could leave held.
 
-    One pipe per job, owned by that job alone. A queue shared by every job has
-    a lock shared by every job too, and a job stopped while holding it -- past
-    its timeout, or killed for memory -- would leave every other job unable to
-    log or exit. Nothing here outlives the process that owns it.
-
-    `send` shares the handler's lock, so the job's outcome, sent on the same
-    pipe, never interleaves with a record being written from another thread.
+    `send` shares the handler's lock, so the outcome never interleaves with a
+    record.
     """
 
     def __init__(self, connection: Any) -> None:
@@ -156,10 +136,7 @@ class ConnectionForwarder(logging.Handler):
 
 def forwardToConnection(connection: Any, level: int) -> ConnectionForwarder:
     """Routes this process's package records to `connection`, and nowhere else.
-
-    Called in each job process. A forked process inherits its parent's
-    handlers; they are detached (not closed -- the parent still owns them), so
-    every record reaches a destination exactly once, through the parent.
+    Called in each job process. Any existing handlers are detached, not closed.
     """
 
     logger = logging.getLogger(LOGGER_NAME)
@@ -175,8 +152,7 @@ def forwardToConnection(connection: Any, level: int) -> ConnectionForwarder:
 
 def handleForwardedRecord(record: logging.LogRecord) -> None:
     """Writes a record forwarded from a job process with this process's own
-    handlers -- so it gets the same destinations, format and levels as
-    everything else: a file, stderr, JSON, --quiet.
+    handlers.
     """
 
     logging.getLogger(LOGGER_NAME).handle(record)
@@ -185,22 +161,12 @@ def handleForwardedRecord(record: logging.LogRecord) -> None:
 class Log:
 
     def __init__(self, logFile: Optional[Path] = None, level: int = logging.INFO, logFormat: str = 'text') -> None:
-        """Configures the package's own named logger.
+        """Configures the package's own logger, which doesn't propagate, so a
+        host application's logging is left alone.
 
-        The logger is named, with propagate=False, so this package's records stay
-        in its own handlers and a host application's logging is left alone.
-        Configuring the root logger instead would capture everyone's records.
-
-        Handlers are deduplicated on the resolved file path, because the logger is
-        process-wide: the CLI and runDataJobs both build a Log for the same file.
-        Re-instantiating for an existing destination updates its level and leaves
-        its format alone. Job processes don't build one at all; their records
-        come back through handleForwardedRecord.
-
-        logFile is optional so a caller that wants a stream -- the CLI, since a
-        container only collects stdout/stderr -- needn't name a file. logFormat is
-        'text' for a person or 'json' for a collector. At DEBUG, the runner adds
-        resolved columns, adhoc SQL and per-chunk progress.
+        Handlers are deduplicated by destination, since the logger is
+        process-wide: configuring one again only updates its level. logFormat
+        is 'text' or 'json'.
         """
 
         formatter: logging.Formatter = JsonFormatter() if logFormat == 'json' else logging.Formatter(fmt=TEXT_FORMAT, datefmt=DATE_FORMAT)
@@ -227,11 +193,8 @@ class Log:
 
 
     def addStreamHandler(self, stream: Any, level: int = logging.INFO) -> None:
-        """Send records to a stream as well as (or instead of) a file.
-
-        Deduplicated on the stream object for the same reason file handlers are
-        deduplicated on their path: this logger is process-wide, so a second
-        call for the same destination would double every record.
+        """Send records to a stream as well as, or instead of, a file.
+        Deduplicated on the stream.
         """
 
         for handler in self.logging.handlers:
@@ -246,12 +209,7 @@ class Log:
 
 
     def _findHandler(self, path: Path) -> Optional[logging.FileHandler]:
-        """The handler already writing to `path`, if this logger has one.
-
-        FileHandler.baseFilename is set by FileHandler itself via
-        os.path.abspath, so it's already absolute -- resolve() on both sides
-        makes the comparison agree through symlinks too.
-        """
+        """The handler already writing to `path`, compared through symlinks."""
 
         for handler in self.logging.handlers:
             if isinstance(handler, logging.FileHandler) and Path(handler.baseFilename).resolve() == path:

@@ -14,27 +14,12 @@ class TransformResolutionError(Exception):
 
 
 class TransformError(Exception):
-    """Raised when applying a resolved transformer actually fails.
+    """A transform names a column the source query doesn't return, or a
+    transformer raised on a value.
 
-    Two distinct cases surface here, both eagerly rather than as a bare traceback
-    deep inside a row loop: (1) columnTransforms names a column that isn't in
-    `columns` at all -- for understudy's own job-running path (see
-    runner.py's _executeDataJob), `columns` there is sourceQuery's own result
-    columns (from cursor.description -- whatever it actually selected, explicit
-    list or `select *` alike), not the target table, since a transform runs on a
-    value as extracted from the source, before it's mapped onto any target column
-    name -- checked up front, before touching any row, so it fails the same way
-    every time instead of being silently skipped; (2) a transformer raises on a
-    particular value (e.g. a `str`-only transform handed a row where that column
-    is an int) -- caught per-value and re-raised with the column name and the
-    value's *type* attached, since the original exception alone doesn't say
-    which column caused it.
-
-    Never the value itself. Transforms run on raw production rows, before
-    masking, and this message ends up in logs, the run result and the job's
-    outcome -- one bad value would otherwise copy personal data into all three.
-    The original exception isn't chained for the same reason: drivers and
-    transformers routinely put the value in their own message.
+    Names the column and the value's type, never the value: transforms see
+    unmasked production rows. The original exception isn't chained, since it
+    may quote the value.
     """
 
 
@@ -43,11 +28,8 @@ _CALL = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\((.*)\))?\s*$', re.DOTAL
 
 
 def _parseArguments(reference: str, text: str) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
-    """The literal arguments in `truncate(50, suffix='...')`.
-
-    Parsed as Python syntax, but only literals are accepted -- numbers,
-    strings, True, False, None, and tuples or lists of those -- so a
-    configuration file can't run code this way.
+    """The literal arguments in `truncate(50, suffix='...')`. Only literals,
+    so configuration can't run code this way.
     """
 
     try:
@@ -93,12 +75,7 @@ def _withArguments(function: Transformer, reference: str, arguments: Tuple[Any, 
 
 def resolveTransformer(reference: str) -> Transformer:
     """Import a Transformer from a "module.path:function_name" reference.
-
-    Lets a job configuration name a function defined anywhere importable --
-    understudy_data/builtinTransforms.py, or any module of the user's own -- without the caller
-    having to pre-register it in a lookup table.
-
-    Arguments after the column value go in parentheses, as literals:
+    Arguments after the value go in parentheses, as literals:
     "understudy_data.builtinTransforms:truncate(50)" calls truncate(value, 50).
     """
 
@@ -134,13 +111,8 @@ def resolveTransformer(reference: str) -> Transformer:
 
 
 class Transform:
-    """Applies per-column transformers to rows.
-
-    Split into validate()/apply() so a streaming job can check its configuration
-    once, up front, and then transform an unbounded number of chunks without
-    re-checking anything. transform() is the whole-dataset convenience that does
-    both, and `data` is optional precisely so the streaming path can build one of
-    these from columns alone, before a single row has been fetched.
+    """Applies per-column transformers to rows: validate() once, then apply()
+    per chunk. transform() does both for a whole `data`.
     """
 
     def __init__(self, columns: List[str], columnTransforms: Dict[str, List[Transformer]],
@@ -152,12 +124,8 @@ class Transform:
 
 
     def validate(self) -> None:
-        """Raises TransformError if any transform names a column that isn't there.
-
-        Kept separate from apply() so it can run *before the first write*, which
-        is the guarantee that matters: a streaming job that validated per-chunk
-        would already have loaded rows into the target by the time it noticed a
-        misconfigured column name.
+        """Raises TransformError if any transform names a column that isn't
+        there. Run before the first write.
         """
 
         unknownColumns = [column for column in self.columnTransforms if column not in self.columns]

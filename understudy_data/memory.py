@@ -58,13 +58,9 @@ class RunInProgressError(Exception):
 
 @contextlib.contextmanager
 def exclusiveRun(lockFile: Union[str, Path]) -> Iterator[None]:
-    """Holds `lockFile` for the life of a run, or raises RunInProgressError.
-
-    Two runs sharing run state must not overlap -- a cron interval shorter than
-    a slow run is enough to cause it. Both would run the same jobs at once:
-    two swaps renaming the same tables, two upserts racing, and each recording
-    watermarks the other then moves. The second run refuses to start instead.
-    The lock is released by the operating system if the process dies.
+    """Holds `lockFile` for the life of a run, or raises RunInProgressError, so
+    two runs sharing run state can't run the same jobs at once. The operating
+    system releases it if the process dies.
     """
 
     try:
@@ -75,14 +71,10 @@ def exclusiveRun(lockFile: Union[str, Path]) -> Iterator[None]:
 
 
 class MemoryBackend(ABC):
-    """Tracks each job's last-run time, wherever an implementation chooses to keep it.
+    """Tracks each job's last-run time, wherever an implementation keeps it.
 
-    Implementations must be picklable -- runDataJobs hands the same instance to
-    every job it runs in a worker process, which pickles it and reconstructs a
-    separate copy there. Concretely: hold picklable settings (a Path, connection
-    settings, ...), not a live file handle or database connection, and open
-    whatever resource you need inside read()/recordRun() itself -- the same
-    contract Database's dialects follow for the ETL databases.
+    Must be picklable, since each job's process gets a copy: hold settings,
+    not an open file or connection, and open resources inside each method.
     """
 
     @abstractmethod
@@ -94,24 +86,15 @@ class MemoryBackend(ABC):
         """Records that `job` just ran, now."""
 
     def readWatermarks(self) -> Dict[str, Any]:
-        """Every job's stored watermark, keyed by job name.
-
-        Not abstract, so a backend written before watermarks existed keeps
-        working for every job that doesn't use one. Returning nothing here means
-        an incremental job falls back to its watermarkInitial on every run, which
-        is safe (it re-reads from the beginning and upserts) but not incremental
-        -- so recordWatermark raises rather than letting that pass silently.
+        """Every job's stored watermark, keyed by job name. Not abstract, so older
+        backends keep working for jobs without one.
         """
 
         return {}
 
     def recordWatermark(self, job: str, value: Any) -> None:
-        """Records the high-water mark `job` reached, for its next run to resume from.
-
-        The default raises: a backend that cannot persist this cannot run
-        incremental jobs correctly, and failing loudly beats a job that silently
-        re-extracts its whole source forever. runDataJobs checks for this up
-        front, before starting any work.
+        """Records the high-water mark `job` reached, for its next run to resume
+        from. The default raises, and runDataJobs checks for it before starting.
         """
 
         raise NotImplementedError(
@@ -131,13 +114,9 @@ class MemoryBackend(ABC):
 
 
 def _yamlSafe(value: Any) -> Any:
-    """Coerce a driver's value into something yaml.safe_dump/safe_load round-trips.
-
-    Dates, ints, floats and strings all survive as themselves. Decimal is the
-    one that doesn't -- Oracle hands back every NUMBER as a Decimal, so an
-    integer id column watermarks as Decimal('4711'), which safe_dump refuses.
-    An integral Decimal becomes an int (exact, no precision lost, which matters
-    for ids beyond float's 53-bit range); a fractional one becomes a float.
+    """Coerce a driver's value into something YAML round-trips. Only Decimal,
+    which Oracle returns for every NUMBER, needs it: an integral one becomes
+    an exact int, a fractional one a float.
     """
 
     if isinstance(value, decimal.Decimal):
@@ -152,18 +131,9 @@ SECTIONS = ('lastRun', 'watermarks', 'maskingKeys')
 class FileMemory(MemoryBackend):
     """The default MemoryBackend: a YAML file, safe to share across worker processes.
 
-    Every write re-reads the file under a lock rather than trusting a cached
-    snapshot, since multiple worker processes each hold their own FileMemory
-    instance -- without this, two workers finishing around the same time would
-    each write back a stale copy of the whole file, silently losing each other's
-    update.
-
-    A write goes to a temporary file that then replaces the original, so a
-    process killed mid-write leaves the previous version intact rather than a
-    truncated file that no later run could parse. The lock lives beside it, in
-    `<file>.lock`.
-
-    The document is namespaced:
+    Every write re-reads the file under `<file>.lock`, so concurrent workers
+    don't lose each other's updates, and replaces it through a temporary file,
+    so a process killed mid-write leaves the previous version. The document:
 
         lastRun:
           loadOrders: 1726400000.0
@@ -172,9 +142,7 @@ class FileMemory(MemoryBackend):
         maskingKeys:
           maskCustomers: d5930cf83dea
 
-    A file written before watermarks existed is a bare job -> timestamp mapping
-    with neither key, and is read as lastRun so an existing deployment's refresh
-    windows survive the upgrade rather than every job firing at once.
+    A bare job -> timestamp mapping, from before watermarks, is read as lastRun.
     """
 
     def __init__(self, memoryFile: Union[str, Path]) -> None:
@@ -216,6 +184,7 @@ class FileMemory(MemoryBackend):
     def _write(self, section: str, job: str, value: Any) -> None:
 
         temporary = self.memoryFile.with_name(self.memoryFile.name + '.tmp')
+        self.memoryFile.parent.mkdir(parents=True, exist_ok=True)
 
         with exclusiveLock(self._lockFile):
             document = self._load()
@@ -276,35 +245,15 @@ KEY_FINGERPRINT_TYPE = 'maskingKey'
 
 
 class DatabaseMemory(MemoryBackend):
-    """A MemoryBackend that keeps run state in a database table rather than a file.
+    """A MemoryBackend that keeps run state in a database table, for wherever
+    no filesystem persists between runs and is shared by every worker. See
+    "Where watermarks are kept" in docs/design.md.
 
-    Use this wherever FileMemory's assumption -- a filesystem that persists
-    between runs, shared by every worker -- doesn't hold. That covers more
-    deployments than it sounds: a container with no volume, anything horizontally
-    scaled across machines, and serverless in particular, where /tmp is scoped to
-    one execution environment and vanishes on a cold start. FileMemory there
-    doesn't fail loudly; it silently forgets every watermark and re-extracts from
-    watermarkInitial, which is the exact failure incremental loads exist to avoid.
-
-    The table must already exist -- see DATABASE_MEMORY_SCHEMA for the shape, and
-    adjust the types to your database. Nothing in this package issues DDL a job
-    config didn't ask for, and this follows that rule. The database's own UPSERT
-    atomicity is what makes it safe across concurrent workers; unlike FileMemory
-    there is no locking to do here.
-
-    Every write names its columns explicitly rather than letting Database
-    introspect them, which is what keeps recordRun and recordWatermark from
-    clobbering each other: an upsert limited to (job, last_run) updates only
-    last_run and leaves the watermark columns alone, and vice versa. It's also
-    why last_run is nullable -- a worker records a watermark before it records
-    the run, so the first write for a new job inserts a row with no last_run yet.
-
-    Storing a watermark is the part a database-backed backend has to solve that
-    FileMemory gets for free: YAML round-trips a datetime or an int as itself,
-    while a SQL column has one type and a watermark may be a timestamp, an id or
-    a string depending on the job. A type tag is kept alongside the text and the
-    original rebuilt on the way out, so what gets bound into the next run's
-    predicate is the same type the source column is compared against.
+    The table must already exist, shaped like DATABASE_MEMORY_SCHEMA. Each
+    write upserts only its own columns, so recordRun and recordWatermark don't
+    clobber each other -- and last_run is nullable, since a watermark is
+    recorded first. A watermark is stored as text with a type tag, so it comes
+    back as the type the source compares against.
     """
 
     def __init__(self, connectionSettings: DatabaseConnectionConfig, table: str = 'understudy_memory') -> None:
@@ -356,9 +305,8 @@ class DatabaseMemory(MemoryBackend):
 
 
     def read(self) -> Dict[str, float]:
-        """Rows whose last_run is still NULL are skipped -- a job can have a
-        watermark recorded before it has ever recorded a completed run, and
-        DependencyGraph expects a number it can subtract from time.time().
+        """Skips rows whose last_run is still NULL: a watermark recorded
+        before a run.
         """
 
         with Database(connectionSettings=self.connectionSettings) as database:

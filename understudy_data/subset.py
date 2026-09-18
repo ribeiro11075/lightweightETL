@@ -1,26 +1,12 @@
 """Plans referentially complete subsets, for `understudy subset`.
 
-A subset starts from one root table and a filter -- "customers created this
-year" -- and becomes one source query per table, so that every foreign key in
-the copied rows points at a row that was copied too. A copy that isn't
-referentially complete fails to load into a target with its constraints
-enabled, or loads and breaks the application that reads it.
+From a root table and a filter, one source query per table, so every foreign
+key in the copied rows points at a copied row. Followed up always (what the
+selected rows reference) and down optionally (what references them).
 
-Two directions are followed:
-
-- Down, optionally: rows of tables that reference the selected rows. A
-  customer's orders, and those orders' line items.
-- Up, always: the rows that anything selected references. The products those
-  line items point at, and whatever the products point at in turn.
-
-Each table's query is plain SQL: EXISTS subqueries over named common table
-expressions (WITH), so it runs on all six dialects -- MySQL from 8.0, MariaDB
-from 10.2 -- and needs nothing materialized between tables. Each selection is
-defined once, so a query grows linearly with the size of the graph.
-
-Cycles -- including a table that references itself, like employees.managerId --
-can't be closed without recursive SQL, which the dialects don't share. They're
-reported, and the caller breaks each one by ignoring a foreign key.
+Queries are EXISTS over named common table expressions, which all six
+dialects run. Cycles, self-references included, need recursive SQL the
+dialects don't share, so they're reported for the caller to break.
 """
 from __future__ import annotations
 
@@ -34,11 +20,8 @@ class SubsetError(Exception):
     """The schema can't be subset as asked: a cycle, or a chain too deep."""
 
 
-# The longest chain of selections, each built on the next, that a query may
-# carry. A chain of N tables followed down and back up needs 2N - 1: 31 for 16
-# tables, which MySQL accepts, and 33 for 17, which it refuses ("Too high
-# level of nesting"). SQL Server's planning time grows steeply past this too,
-# and gives out by 24 tables.
+# The longest chain of selections a query may carry. N tables followed down
+# and back up need 2N - 1; MySQL refuses 33 ("Too high level of nesting").
 MAX_SELECTION_DEPTH = 32
 
 
@@ -72,14 +55,8 @@ def parseIgnore(entries: Iterable[str]) -> Set[Tuple[str, str]]:
 
 class _Builder:
     """Builds each table's selection once, as a named common table expression.
-
-    A table's rows are chosen by EXISTS over the selections of the tables it
-    is connected to. Writing those selections inline would copy each one into
-    every query that needs it -- and into every selection built on it -- so a
-    query grows exponentially with the depth of the schema, until a database
-    refuses it or, as PostgreSQL did, runs out of memory planning it. Named
-    once in a WITH clause and referred to by name, every query nests only
-    three levels deep and grows linearly.
+    Inline, each would be copied into everything built on it, and queries
+    would grow exponentially with the schema's depth.
     """
 
     def __init__(self, names: Dict[str, str], materialize: bool, quote: Callable[[str], str]) -> None:
@@ -210,27 +187,13 @@ def relatedTables(foreignKeys: Sequence[ForeignKey], roots: Iterable[str], follo
 
 def planSubset(foreignKeys: Sequence[ForeignKey], root: str, where: str, followChildren: bool = True,
                ignore: Iterable[str] = (), materialize: bool = False, quote: Optional[Callable[[str], str]] = None) -> SubsetPlan:
-    """The per-table queries for a subset rooted at `root`, filtered by `where`.
+    """The per-table queries for a subset rooted at `root`, filtered by `where`,
+    which is embedded verbatim, like a sourceQuery.
 
-    `where` is SQL in the root table's own terms, and is embedded verbatim --
-    it comes from the person running the command, like a sourceQuery does.
-    Table names match case-insensitively, and the generated SQL uses each
-    table's name as the database reports it.
-
-    `materialize` writes each selection as `AS MATERIALIZED`, so the database
-    computes it once instead of copying it into every query that uses it --
-    without it, PostgreSQL took minutes to plan a 12-table chain. Only
-    PostgreSQL and SQLite 3.35+ accept the keyword; see
-    DatabaseDialect.supportsMaterializedSelections.
-
-    A subset whose selections would nest deeper than MAX_SELECTION_DEPTH raises
-    SubsetError before any query is written.
-
-    `quote` quotes a column name for the source database, so a reserved word
-    works as a foreign-key column: pass
-    `lambda name: quoteIdentifier(database.type, name)`. The names are the
-    catalog's, so quoting keeps them meaning the same columns. Without it,
-    names are written as they are.
+    `materialize` writes `AS MATERIALIZED`, where the dialect supports it (see
+    DatabaseDialect.supportsMaterializedSelections). `quote` quotes column
+    names, e.g. `lambda name: quoteIdentifier(database.type, name)`. Raises
+    SubsetError past MAX_SELECTION_DEPTH.
     """
 
     ignoreSet = parseIgnore(ignore)

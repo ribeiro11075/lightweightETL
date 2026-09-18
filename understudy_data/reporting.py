@@ -55,11 +55,8 @@ def historyRecords(result: RunResult, runId: str) -> List[Dict[str, Any]]:
 
 
 class RunHistory(ABC):
-    """An append-only record of every job's outcome, run after run.
-
-    Unlike MemoryBackend, nothing reads this to decide what to run: it is for
-    people asking what happened last night. Same pickling contract, though
-    only the main process uses it.
+    """An append-only record of every job's outcome, for people rather than
+    the scheduler.
     """
 
     @abstractmethod
@@ -121,12 +118,9 @@ _HISTORY_COLUMNS = ['run_id', 'job', 'status', 'row_count', 'attempts', 'started
 
 
 class DatabaseHistory(RunHistory):
-    """History in a table -- for the same deployments DatabaseMemory is for.
-
-    The table must already exist; see DATABASE_HISTORY_SCHEMA, whose types all
-    six dialects accept (Oracle has no BIGINT). Times are epoch seconds, like
-    DatabaseMemory's, since that's the one timestamp every dialect stores the
-    same way.
+    """History in a table, which must exist, shaped like
+    DATABASE_HISTORY_SCHEMA. Times are epoch seconds, which every dialect
+    stores alike.
     """
 
     def __init__(self, connectionSettings: DatabaseConnectionConfig, table: str = 'understudy_history') -> None:

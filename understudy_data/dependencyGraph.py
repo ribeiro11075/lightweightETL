@@ -14,18 +14,8 @@ class JobStatus(str, Enum):
 
 
 class JobOutcome(NamedTuple):
-    """What became of one job in one cycle.
-
-    Workers return this from another process, so every field has to pickle.
-    That's why `error` is a formatted string rather than the exception:
-    database drivers raise exception types that don't reliably survive
-    pickling, and losing the whole outcome to a pickling error while reporting
-    a failure would be a poor trade.
-
-    SKIPPED is distinct from FAILED on purpose. A job whose predecessor failed
-    never ran at all, and telling an operator it "failed" sends them looking for
-    an error it doesn't have. Both are still terminal non-success, so both count
-    against a run's overall success.
+    """What became of one job in one cycle. Crosses processes, so `error` is
+    a string: driver exceptions don't reliably pickle.
     """
 
     job: str
@@ -48,14 +38,8 @@ class JobOutcome(NamedTuple):
 
 class DependencyGraph:
     """Which of one cycle's jobs may start, given which have finished.
-
-    Bookkeeping only -- no processes, queues or sleeping. The runner takes the
-    ready jobs, runs them however it likes, and reports each outcome back with
-    finish(); the graph never waits on anything, so it can't hang.
-
-    A cycle among the active jobs raises ConfigurationError here, whether or
-    not the caller validated the configuration first: no job in a cycle could
-    ever become ready.
+    Bookkeeping only; it never waits. A cycle among the active jobs raises
+    ConfigurationError.
     """
 
     def __init__(self, jobs: Mapping[str, BaseJobConfig], memory: Optional[Dict[str, float]] = None) -> None:
@@ -97,11 +81,8 @@ class DependencyGraph:
 
     def takeReady(self, limit: Optional[int] = None) -> List[str]:
         """Jobs that may start now -- at most `limit` of them -- marked as running.
-
-        A job whose predecessor failed or was skipped is recorded as SKIPPED
-        instead, and counts as unsuccessful itself, so the skip cascades down
-        the graph -- in this same call, and whatever the limit, since a skip is
-        decided without waiting on anything.
+        A job whose predecessor failed or was skipped is marked SKIPPED, which
+        cascades in this same call.
         """
 
         ready: List[str] = []

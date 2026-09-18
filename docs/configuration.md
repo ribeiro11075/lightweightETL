@@ -1,8 +1,6 @@
 # Configuration
 
-Everything Understudy does is described by YAML. This is the field reference; for *why* things behave as they do, see [design.md](design.md).
-
-`example/configuration/` holds a complete, valid set of these files. It's validated on every test run, so it can't drift from what the code accepts — copying it is the fastest start.
+The field reference. For *why* things behave as they do, see [design.md](design.md). `example/starter/configuration/` is a complete set of these files, validated on every test run — copying it is the fastest start.
 
 - [Where configuration is found](#where-configuration-is-found)
 - [Credentials](#credentials)
@@ -14,7 +12,7 @@ Everything Understudy does is described by YAML. This is the field reference; fo
 
 ## Where configuration is found
 
-The CLI looks for a directory holding `database.yaml` and `jobs.yaml`, in this order. `discover`, `subset` and `schema` read only `database.yaml`.
+The CLI looks for a directory holding `database.yaml` and `jobs.yaml`, in this order. `discover`, `subset`, `schema` and `synthesize` read only `database.yaml`.
 
 1. `--config DIR`
 2. `$UNDERSTUDY_CONFIG`
@@ -22,7 +20,16 @@ The CLI looks for a directory holding `database.yaml` and `jobs.yaml`, in this o
 
 `--jobs FILE` and `--databases FILE` override either file individually.
 
-`run` and `jobs` keep run state (last-run times and watermarks) in `memory.yaml` in the same directory, or wherever `--memory FILE` says. It sits beside the configuration rather than in the working directory, so a cron entry and a shell that start in different places still share it. A `memory.yaml` left in the working directory by an earlier version is still used, with a warning, until you move it.
+Run state (last-run times and watermarks) goes where `jobs.yaml`'s [`memory`](#file-level) says, or `memory.yaml` beside `jobs.yaml` without it; `--memory FILE` overrides both. Either way it's found relative to the configuration, not the working directory, so a cron entry and a shell started elsewhere share it. See [operations.md](operations.md#run-state).
+
+A layout that keeps what you write apart from what runs write:
+
+```
+configuration/    database.yaml, jobs.yaml (with memory: ../transaction/memory.yaml)
+transaction/      memory.yaml and its locks; point --log, --manifest and --history here too
+```
+
+`example/starter/configuration/` is set up this way. Logs, manifests and history are only written where you name them, relative to the working directory like any other command-line path.
 
 
 ## Credentials
@@ -39,12 +46,10 @@ key: ${file:/run/secrets/masking-key}
 | --- | --- |
 | `${NAME}` | The variable's value. If it's unset, the run **stops before connecting to anything**, naming every missing variable at once. |
 | `${NAME:-default}` | The variable, or `default` if unset. Use for ports, hosts and schema names — **never for a secret**, which would just put the credential back in the file. |
-| `${file:/path}` | The file's content, without a trailing newline. This is how Docker and Kubernetes mount secrets, and how the Vault agent, the AWS Secrets Manager and Azure Key Vault CSI drivers, and similar tools hand them over. An unreadable file stops the run like an unset variable. |
-| `$${NAME}` | A literal `${NAME}` (and `$${file:...}` a literal `${file:...}`). Needed because `sourceQuery` is arbitrary SQL. PostgreSQL dollar-quoting (`$$body$$`) is never followed by a brace, so it needs no escaping. |
+| `${file:/path}` | The file's content, without a trailing newline — how Docker, Kubernetes and secret-store drivers mount secrets. An unreadable file stops the run like an unset variable. |
+| `$${NAME}` | A literal `${NAME}`, for SQL that contains one. PostgreSQL dollar-quoting (`$$body$$`) needs no escaping. |
 
-An unset variable or unreadable file raises rather than expanding to an empty string: a blank password fails later with the driver's own unhelpful message, and a blank host connects somewhere unintended.
-
-Kept this way, `database.yaml` holds *references* to secrets rather than secrets, and is safe to commit alongside your jobs.
+Kept this way, `database.yaml` holds references to secrets rather than secrets, and is safe to commit.
 
 
 ## `database.yaml`
@@ -151,6 +156,7 @@ jobs:
 | --- | --- | --- |
 | `workers` | required | Worker processes to run jobs concurrently, at least 1. |
 | `cycleSleepSeconds` | optional, `0.5` | Pause between cycles under `--forever`. |
+| `memory` | optional, `memory.yaml` | Where the CLI keeps run state, relative to this file: `../transaction/memory.yaml` keeps it out of the configuration directory. `--memory FILE` overrides it; `validate` prints where it resolves. |
 | `jobs` | required | A map of job name to job definition. |
 
 ### Scheduling
@@ -170,7 +176,7 @@ jobs:
 | --- | --- | --- |
 | `sourceDatabase` | required | An alias from `database.yaml`. |
 | `sourceQuery` | required | The query to extract with. |
-| `chunkSize` | required, at least 1 | Rows per batch. Extracts stream, so this is the **memory dial**: peak memory is a few times `chunkSize` × row width however large the source is. A job reads, masks and writes at the same time rather than in turn, so it holds about three chunks — one on each. |
+| `chunkSize` | required, at least 1 | Rows per batch. Extracts stream, so this is the **memory dial**: peak memory is about `chunkSize` × row width however large the source is — three times that where the [native masker](masking.md#the-native-masker) overlaps reading, masking and writing. |
 | `watermarkColumn` | optional | Makes the job incremental. See [incremental loads](design.md#incremental-loads). |
 | `watermarkInitial` | required with `watermarkColumn` | The value bound on the first run, before anything is stored. |
 
@@ -182,7 +188,7 @@ A job with `watermarkColumn` must also put a `{{ watermark }}` placeholder in `s
 | --- | --- | --- |
 | `sourceQueryColumnTransforms` | optional | A map of column name to a list of transformer references, applied in order. |
 
-A reference is `module.path:function_name` — any importable function taking the column value and returning the new one. Further arguments go in parentheses after the name, as literal values (numbers, quoted strings, `true`-style `True`/`False`, `None`):
+A reference is `module.path:function_name` — any importable function taking the column value and returning the new one. Further arguments go in parentheses after the name, as Python literals (numbers, quoted strings, `True`, `False`, `None`):
 
 ```yaml
 sourceQueryColumnTransforms:
@@ -227,9 +233,7 @@ These ship with the package, in `understudy_data.builtinTransforms`. Every one p
 | `toString` | Text: dates as ISO 8601, bytes decoded as UTF-8. |
 | `toJson` | A document or list as JSON text, with sorted keys; text passes through as it is. |
 
-None of them is privileged; your own module works the same way, arguments included.
-
-Transforms apply to **`sourceQuery`'s own result columns**, not the target's — they act on a value as extracted, before it's mapped to a target column. Naming a column the query doesn't return fails before anything is written. A transformer that raises on a value fails the job; the error names the column and the value's type, but never the value, since transforms see raw rows before any masking.
+Transforms apply to **`sourceQuery`'s own result columns**, not the target's. Naming a column the query doesn't return fails before anything is written. A transformer that raises fails the job; the error names the column and the value's type, never the value.
 
 ### Load
 

@@ -1,14 +1,8 @@
 """What a set of jobs does with data, for a reviewer -- `understudy audit`.
 
-A policy that passes validation can still be a poor one: a column named `email`
-kept as it is, a defaultStrategy of `keep` that lets any new column through, a
-job that copies from a production database without masking while its
-neighbours mask. None of that is an error, so nothing else reports it. This
-does, as findings a person reviews -- and, with --strict, a CI gate.
-
-Everything here works on plain data. The CLI supplies what needs a connection:
-the columns each masked query really returns, the columns of each target, the
-foreign keys, and whether each connection is encrypted.
+Findings a valid policy can still deserve -- an `email` column kept as it is,
+a defaultStrategy of `keep` -- for a person, or with --strict a CI gate.
+Works on plain data; the CLI supplies whatever needs a connection.
 """
 from __future__ import annotations
 

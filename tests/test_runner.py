@@ -1,11 +1,13 @@
+import contextlib
 import json
+import logging
 import os
 import pickle
 import signal
 import sqlite3
 import threading
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterator, List, Tuple
 
 import pytest
 
@@ -1190,11 +1192,13 @@ def _maskedSqliteJob(databases, key='an-original-masking-key', **overrides):
 
 
 def test_a_masked_job_records_the_key_it_completed_under(tmp_path, sqliteDatabase):
-    from understudy_data.masking import keyFingerprint
+    from understudy_data.masking import keyFingerprint, splitMaskingIdentity
 
     _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
 
-    assert FileMemory(tmp_path / 'memory.yaml').readKeyFingerprints() == {'masked': keyFingerprint('an-original-masking-key')}
+    recorded = FileMemory(tmp_path / 'memory.yaml').readKeyFingerprints()
+    assert list(recorded) == ['masked']
+    assert splitMaskingIdentity(recorded['masked'])[0] == keyFingerprint('an-original-masking-key')
 
 
 def test_a_changed_key_stops_an_upsert_job_before_anything_runs(tmp_path, sqliteDatabase):
@@ -1208,7 +1212,7 @@ def test_a_changed_key_stops_an_upsert_job_before_anything_runs(tmp_path, sqlite
 
 
 def test_a_changed_key_is_accepted_when_acknowledged_and_then_recorded(tmp_path, sqliteDatabase):
-    from understudy_data.masking import keyFingerprint
+    from understudy_data.masking import keyFingerprint, splitMaskingIdentity
 
     _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
     jobsFile = Configuration.validateJobConfiguration(
@@ -1218,7 +1222,86 @@ def test_a_changed_key_is_accepted_when_acknowledged_and_then_recorded(tmp_path,
                          acceptKeyChange=True)
 
     assert result.succeeded
-    assert FileMemory(tmp_path / 'memory.yaml').readKeyFingerprints() == {'masked': keyFingerprint('a-rotated-masking-key')}
+    recorded = FileMemory(tmp_path / 'memory.yaml').readKeyFingerprints()
+    assert splitMaskingIdentity(recorded['masked'])[0] == keyFingerprint('a-rotated-masking-key')
+
+
+@contextlib.contextmanager
+def _warningsFromThePackage() -> Iterator[List[str]]:
+    """The package's own warnings. Its logger doesn't propagate -- log.py keeps
+    its records out of a host application's handlers -- so caplog, which listens
+    at the root, never sees them.
+    """
+
+    messages: List[str] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            messages.append(record.getMessage())
+
+    handler = _Collect(level=logging.WARNING)
+    packageLogger = logging.getLogger('understudy_data')
+    packageLogger.addHandler(handler)
+    try:
+        yield messages
+    finally:
+        packageLogger.removeHandler(handler)
+
+
+def test_a_masked_job_records_which_implementation_masked_it(tmp_path, sqliteDatabase):
+    """The key fingerprint covers the key, not the code that applied it. If the
+    two implementations ever disagreed, the fingerprint would not change, and
+    nothing else would show it.
+    """
+    from understudy_data.masking import maskingImplementation, splitMaskingIdentity
+
+    _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
+
+    recorded = FileMemory(tmp_path / 'memory.yaml').readKeyFingerprints()
+    assert splitMaskingIdentity(recorded['masked'])[1] == maskingImplementation()
+
+
+def test_a_changed_implementation_is_noted_but_does_not_stop_an_upsert_job(tmp_path, sqliteDatabase, monkeypatch):
+    """Installing or removing the extension changes the implementation and
+    nothing else: the two are tested to produce identical masks. Refusing every
+    upsert job on that would be friction for no safety, so it warns instead --
+    the warning being the only trace there would be if they ever disagreed.
+    """
+    import understudy_data.masking as masking
+
+    monkeypatch.setattr(masking, 'maskingImplementation', lambda: 'python')
+    monkeypatch.setattr('understudy_data.runner.maskingImplementation', lambda: 'python')
+    _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
+
+    monkeypatch.setattr(masking, 'maskingImplementation', lambda: 'understudy-mask/9.9.9')
+    monkeypatch.setattr('understudy_data.runner.maskingImplementation', lambda: 'understudy-mask/9.9.9')
+    with _warningsFromThePackage() as warnings:
+        result = _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
+
+    assert result.succeeded
+    noted = [message for message in warnings if 'Masking implementation changed' in message]
+    assert len(noted) == 1, warnings
+    assert 'now understudy-mask/9.9.9' in noted[0]
+
+
+def test_state_recorded_before_the_implementation_was_still_reads(tmp_path, sqliteDatabase):
+    """Memory written before the implementation was recorded holds a bare
+    fingerprint. It must still guard the key, and must not read as an
+    implementation change -- which would warn on every job the first run after
+    an upgrade.
+    """
+    from understudy_data.masking import keyFingerprint
+
+    FileMemory(tmp_path / 'memory.yaml').recordKeyFingerprint('masked', keyFingerprint('an-original-masking-key'))
+
+    with _warningsFromThePackage() as warnings:
+        result = _runJobs({'masked': _maskedSqliteJob(sqliteDatabase)}, sqliteDatabase, tmp_path)
+    assert result.succeeded
+    assert not [message for message in warnings if 'Masking implementation changed' in message]
+
+    FileMemory(tmp_path / 'memory.yaml').recordKeyFingerprint('masked', keyFingerprint('an-original-masking-key'))
+    with pytest.raises(ConfigurationError, match='masking key changed since the last run of upsert job'):
+        _runJobs({'masked': _maskedSqliteJob(sqliteDatabase, key='a-rotated-masking-key')}, sqliteDatabase, tmp_path)
 
 
 def test_a_changed_key_does_not_stop_a_swap_job(tmp_path, sqliteDatabase):

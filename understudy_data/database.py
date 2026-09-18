@@ -20,12 +20,9 @@ DIALECTS: Dict[DatabaseType, DatabaseDialect] = {
 class RowStream:
     """The chunks of one streamed query, and the cursor they come from.
 
-    close() releases the cursor, and any rows left unread on the connection,
-    whether or not iteration ever started -- which a generator's `finally`
-    can't promise, since closing a generator that never started skips it. On
-    MySQL and MariaDB, rows left unread make the connection refuse every
-    later statement. The stream closes itself once exhausted, or when reading
-    fails, and its Database closes it if nothing else has.
+    A class rather than a generator, whose `finally` is skipped if it never
+    started: close() must always release unread rows, which on MySQL would
+    otherwise block the connection. Closes itself when exhausted or failing.
     """
 
     def __init__(self, database: 'Database', cursor: Any, chunkSize: int, firstChunk: List[Tuple[Any, ...]]) -> None:
@@ -151,13 +148,8 @@ class Database:
 
 
     def substituteWatermarkPlaceholder(self, query: str) -> str:
-        """Rewrite the {{ watermark }} token into this dialect's bind placeholder.
-
-        The token exists so one sourceQuery is portable across dialects whose
-        paramstyles disagree (%s for mysql/postgresql/mssql, :1 for oracle, ?
-        for sqlite) -- and so the watermark arrives as a *bound value* rather
-        than interpolated text, which keeps it typed by the driver and keeps a
-        string watermark from being able to alter the statement.
+        """Rewrite the {{ watermark }} token into this dialect's bind placeholder,
+        so the watermark is bound rather than interpolated.
         """
 
         return WATERMARK_PLACEHOLDER.sub(self.dialect.placeholders(1)[0], query)
@@ -167,29 +159,12 @@ class Database:
         """Runs `query` and returns (columnNames, chunks), chunks being a
         RowStream to iterate and, if it isn't read to the end, to close.
 
-        The memory ceiling of an extract becomes chunkSize * row width, whatever
-        the table's size -- where query()/fetchall() builds Python objects for
-        every row at once. Prefer this for anything that isn't known to be small;
-        query() remains the right call for metadata.
+        The first chunk is fetched eagerly, since psycopg2's server-side cursors
+        only describe their columns once rows are fetched. Nothing here commits,
+        which would invalidate such a cursor.
 
-        Two deliberate details:
-
-        The first chunk is fetched eagerly, before returning. That's what makes
-        `columnNames` trustworthy: cursor.description is only reliably populated
-        once rows have actually been fetched on some drivers (notably psycopg2's
-        server-side cursors), so describing off a bare execute() can hand back
-        None. Fetching one bounded chunk costs nothing and removes the driver
-        dependence.
-
-        Nothing here commits. A commit would invalidate a PostgreSQL server-side
-        cursor mid-iteration; the extract side has nothing to commit anyway.
-
-        `parameters` are bound by the driver, not interpolated. One caveat comes
-        with them on the %s-paramstyle dialects (mysql, postgresql, mssql): once
-        a statement carries parameters, a literal % elsewhere in it (a LIKE
-        '%foo%', say) is read as a format specifier and has to be doubled to %%.
-        Passing no parameters leaves the query untouched, so this only applies to
-        a query that actually binds something.
+        With `parameters`, on the %s dialects, a literal % elsewhere in the
+        query must be doubled to %%.
         """
 
         cursor = self.dialect.streamingCursor(self.connection, chunkSize=chunkSize)
@@ -246,13 +221,8 @@ class Database:
 
     def catalogColumns(self, table: str, columns: Optional[Sequence[str]] = None) -> List[str]:
         """`columns` as the catalog spells them -- or all of the table's, in its
-        order -- for writing quoted into a statement.
-
-        Quoting is what lets a reserved word (`rank`, `order`) be a column, and
-        it makes a name case-sensitive on Oracle and PostgreSQL, so a
-        configured `job` has to become the catalog's `JOB` first. An exact
-        match wins; otherwise the one match ignoring case. Memoized like the
-        primary key, since a load asks once per chunk.
+        order -- since quoting makes names case-sensitive on Oracle and
+        PostgreSQL. An exact match wins, else the one match ignoring case.
         """
 
         if table not in self.columnNameCache:
@@ -283,17 +253,8 @@ class Database:
 
 
     def getPrimaryColumnNames(self, table: str) -> List[str]:
-        """The table's declared primary key, in key order.
-
-        Looked up in the table's own schema -- `schema.table`, or the
-        connection's current schema -- so a same-named table elsewhere can't
-        contribute columns.
-
-        Memoized for the life of this Database (which is one job). A streaming
-        upsert calls this once per chunk through _getColumnBuckets, which would
-        otherwise put a catalog query between every batch of rows. A table's
-        primary key doesn't change under a running job, and a Database is opened
-        per job and closed with it.
+        """The table's declared primary key, in key order, from its own schema.
+        Memoized for this Database's life, one job, since upsert asks per chunk.
         """
 
         if table not in self.primaryKeyCache:
@@ -333,10 +294,8 @@ class Database:
 
 
     def sample(self, query: str, rows: int) -> Tuple[List[str], List[Tuple[Any, ...]]]:
-        """Column names and up to `rows` rows of `query`, without reading the rest.
-
-        Built on stream(), so it needs no dialect-specific LIMIT syntax: one
-        bounded chunk is fetched and the stream abandoned.
+        """Column names and up to `rows` rows of `query`, without reading the
+        rest or needing dialect-specific LIMIT syntax.
         """
 
         columns, chunks = self.stream(query=query, chunkSize=rows)
@@ -346,38 +305,13 @@ class Database:
         return columns, list(firstChunk)
 
 
-    def getNonPrimaryColumnNames(self, table: str) -> List[str]:
-
-        allColumns = self.getAllColumnNames(table=table)
-        primaryColumns = self.getPrimaryColumnNames(table=table)
-
-        return [column for column in allColumns if column not in primaryColumns]
-
-
     def _getColumnBuckets(self, table: str, columns: Optional[List[str]] = None) -> Tuple[List[str], List[str], List[str]]:
-        """allColumns defaults to introspecting the table, but an explicit columns
-        list (e.g. DataJobConfig.targetColumns) overrides it -- primaryColumns
-        always comes from the table itself, since a primary key is a property of
-        the destination, not something a job config redefines.
+        """(all, primary-key, non-primary-key) columns for an upsert. `columns`
+        overrides the table's own list; the key always comes from the table.
 
-        The primary-key split is case-insensitive because this is the one place
-        that compares a *caller's* spelling of a column against the *database's*,
-        and the two disagree by default: Oracle reports unquoted identifiers as
-        JOB, PostgreSQL as job, MySQL as declared. A config naming `job` against
-        an Oracle table would otherwise find no match, leaving the key column in
-        the non-primary bucket -- which puts it in a MERGE's UPDATE SET while the
-        ON clause is already joining on it (ORA-38104), and on other dialects
-        silently writes the key column as if it were data.
-
-        Only the comparison is normalized; the returned lists keep the spelling
-        each side supplied, which is what the generated SQL needs. Unquoted
-        identifiers are case-insensitive to every dialect here, so `job` in the
-        statement still resolves to a JOB column.
-
-        A table without a primary key can't be upserted into: there is nothing
-        to match rows on, and the generated statement would either be invalid
-        or, on MySQL, silently insert duplicates on every run. That's a
-        ConfigurationError, so the job fails once instead of being retried.
+        The split ignores case: a key column left in the non-primary bucket
+        would be updated while being joined on (ORA-38104 on Oracle). A table
+        without a primary key is a ConfigurationError, so it isn't retried.
         """
 
         allColumns = self.catalogColumns(table=table, columns=columns)
@@ -403,14 +337,9 @@ class Database:
 
 
     def insert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100, columns: Optional[List[str]] = None) -> None:
-        """columns defaults to introspecting the table (its full column list, in
-        the table's own order); pass an explicit list to insert into a specific
-        subset/order instead -- data's tuples must be in that same order.
-
-        Each batch goes through the dialect's bulk path where it has one
-        (PostgreSQL's COPY), and through executemany otherwise. A batch is
-        committed on its own, so it is the unit of work that survives a
-        mid-job failure.
+        """`columns` defaults to all of the table's, in its order; `data` must
+        match. Each batch uses the dialect's bulk path where it has one, and
+        commits on its own.
         """
 
         resolvedColumns = self.quoted(self.catalogColumns(table=table, columns=columns))
@@ -423,12 +352,8 @@ class Database:
 
 
     def upsert(self, table: str, data: List[Tuple[Any, ...]], chunkSize: int = 100, columns: Optional[List[str]] = None) -> None:
-        """Like insert(), with the bulk path loading a temporary table that is
-        then merged in one statement.
-
-        One statement can't update the same row twice, where executemany just
-        applies each row in turn -- so a batch's rows are first collapsed to the
-        last one per key, which is what applying them in turn leaves behind.
+        """Like insert(). For the bulk path, a batch is first reduced to its
+        last row per key, since one statement can't update a row twice.
         """
 
         allColumns, primaryKeyColumns, nonPrimaryKeyColumns = self._getColumnBuckets(table=table, columns=columns)
@@ -459,11 +384,8 @@ class Database:
 
 
     def swap(self, targetTable: str, stageTable: str) -> None:
-        """Exchanges the two tables by renaming, in one transaction where the
-        dialect allows it (every dialect but Oracle).
-
-        The temporary name lives in the stage table's schema, since renaming the
-        stage table is what creates it.
+        """Exchanges the two tables by renaming, atomically everywhere but
+        Oracle, through a temporary name in the stage table's schema.
         """
 
         stageSchema, _ = splitTableName(stageTable)
