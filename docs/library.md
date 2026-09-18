@@ -2,7 +2,7 @@
 
 Most deployments should use the `understudy` command. Embed the library when a load needs to be one step inside a larger Python program.
 
-The package does no file I/O of its own: you load configuration however you like and hand it over as plain data. It also never requires every driver — each is imported only when a connection of that type is opened.
+You load configuration however you like and hand it over as plain data. Each driver is imported only when a connection of its type opens.
 
 - [Running jobs](#running-jobs)
 - [Results](#results)
@@ -53,12 +53,9 @@ runDataJobs(jobsFile, databaseConfiguration, memory,
 
 - **`onCycle`** is called with each cycle's `RunResult` as the cycle ends, including under `runForever`. See [below](#history-metrics-and-notifications). An exception it raises is logged, not raised.
 - **`acceptKeyChange=True`** runs upsert jobs whose masking key changed since their last run; see [the key](masking.md#the-key).
-
 - **`runForever=False`** makes one pass and returns. `True` keeps running, honouring `refresh`, until `SIGINT` or `SIGTERM`. Either signal stops new jobs from starting and lets running ones finish; see [stopping](design.md#single-runs-not-a-daemon).
 - **`logFile`** is optional. Without one, attach a stream yourself: `Log(level=...).addStreamHandler(sys.stderr)`. Workers' records are written by the calling process's handlers, whichever those are.
 - **`logFormat='json'`** writes structured records — see [design.md](design.md#structured-logs).
-
-Worker processes, the pool and the dependency graph are managed for you, including a worker that dies mid-job: see [workers](design.md#workers).
 
 To keep two runs that share run state from overlapping, as the CLI does, hold `exclusiveRun(path)` around the call. It raises `RunInProgressError` if another process holds the same lock file.
 
@@ -67,7 +64,7 @@ Validation raises `ConfigurationError`. `runDataJobs` also raises it before star
 
 ## Results
 
-`runDataJobs` returns a `RunResult`. It's returned, never written anywhere — turning it into an exit code, an alert or a log line is up to you, and needs no configuration.
+`runDataJobs` returns a `RunResult`, for you to turn into an exit code, an alert or a log line.
 
 | `RunResult` | |
 | --- | --- |
@@ -88,9 +85,7 @@ Validation raises `ConfigurationError`. `runDataJobs` also raises it before star
 | `durationSeconds` | Wall-clock time. |
 | `masking` | For a masked job that completed, the policy applied to each column, as plain dicts. |
 
-`RunResult.maskingManifest(jobsFile.jobs)` builds the [masking manifest](masking.md#the-manifest) for the run. It takes the job configurations because a skipped job has no outcome of its own to describe itself with.
-
-`error` is a string rather than the exception because outcomes cross a process boundary, and database drivers raise exceptions that don't reliably survive pickling.
+`RunResult.maskingManifest(jobsFile.jobs)` builds the [masking manifest](masking.md#the-manifest) for the run.
 
 A run with `runForever=True` returns only once it has been stopped, with the last cycle's outcomes.
 
@@ -104,20 +99,7 @@ A `MemoryBackend` holds what the scheduler needs *before* a job runs: when it la
 | `FileMemory(memoryFile=...)` | A filesystem persists between runs and every worker shares it. |
 | `DatabaseMemory(connectionSettings=..., table=...)` | It doesn't: a container without a volume, anything across several machines, or serverless. |
 
-`FileMemory` in the wrong environment doesn't fail loudly. It silently forgets every watermark and re-extracts from `watermarkInitial`, which is exactly what incremental loads exist to avoid.
-
-`DatabaseMemory` needs its table to exist first — the library never creates tables you didn't ask for. `DATABASE_MEMORY_SCHEMA` is the shape; adjust the column types for your database:
-
-```sql
-CREATE TABLE understudy_memory (
-    job VARCHAR(255) PRIMARY KEY,
-    last_run DOUBLE PRECISION,
-    watermark_value VARCHAR(255),
-    watermark_type VARCHAR(32)
-    )
-```
-
-Watermarks are stored with a type tag, so a timestamp comes back as a timestamp and an id as an integer.
+`FileMemory` in the wrong environment doesn't fail loudly: it forgets every watermark and re-extracts from `watermarkInitial`. `DatabaseMemory`'s table must exist first; its shape is `DATABASE_MEMORY_SCHEMA`, shown in [operations.md](operations.md#run-state).
 
 ### Writing your own
 
@@ -131,8 +113,6 @@ Subclass `MemoryBackend`:
 | `recordWatermark(job, value)` | store a watermark; defaults to raising |
 | `readKeyFingerprints()` | each masked job's last key fingerprint; defaults to none, which turns the key-change check off |
 | `recordKeyFingerprint(job, fingerprint)` | store one, or forget it with `None`; defaults to doing nothing |
-
-The watermark pair isn't abstract, so a backend that predates incremental loads still works for every job that doesn't use them.
 
 **One constraint:** the same instance is pickled into every worker process. Hold settings — a path, connection details — rather than an open file or connection, and open what you need inside each method.
 
@@ -161,7 +141,7 @@ runDataJobs(jobsFile, databases, memory, onCycle=report)
 | `FileHistory(path)`, `DatabaseHistory(connectionSettings, table=...)` | `RunHistory` backends: `append(result, runId)`, and `read(limit=20, job=None)` newest first. `DATABASE_HISTORY_SCHEMA` is the table. |
 | `writeMetricsFile(path, result)` | Prometheus text for the textfile collector, keeping jobs that weren't in this cycle. |
 | `pushMetrics(gatewayUrl, result)` | The same, to a Pushgateway. |
-| `notify(url, result, always=False)` | Posts `notificationPayload(result)` if the cycle didn't succeed, or always; returns whether it posted. |
+| `notify(url, result, always=False)` | Posts `reporting.notificationPayload(result)` if the cycle didn't succeed, or always; returns whether it posted. |
 
 See [operations.md](operations.md) for the metrics and payload.
 
@@ -192,13 +172,13 @@ with Database(connectionSettings=databases['prod']) as database:
 | `keyFingerprint(key)` | The same fingerprint, for a key on its own. |
 | `buildMaskingManifest(outcomes, declared)` | The manifest from outcomes and each masked job's declared target and fingerprint. `RunResult.maskingManifest` wraps it. |
 | `sealManifest(manifest, signingKey=None)`, `verifyManifest(manifest, signingKey=None)` | Add a manifest's digest (and signature), and check them. `verifyManifest` returns `digestValid`, `signed`, `signatureValid` and the signing key's fingerprint, and raises `ValueError` for a manifest with no integrity section. See [sealing and verifying](masking.md#sealing-and-verifying). |
-| `auditJobs(jobs, returnedColumns=None, encryption=None, unreachable=None)`, `renderAudit(report)` | The `audit` report as a dict, and as text. The optional arguments carry what `audit --connect` learns from the databases. |
+| `auditJobs(jobs, returnedColumns=None, encryption=None, unreachable=None, targetColumns=None, foreignKeys=None)`, `renderAudit(report)` | The `audit` report as a dict, and as text. The optional arguments carry what `audit --connect` learns from the databases. |
 | `Database.getForeignKeys()` | Every foreign key in the connection's current schema, as `ForeignKey(table, columns, referencedTable, referencedColumns, name)`. |
 | `Database.sample(query, rows)` | Column names and at most `rows` rows, without reading the rest. |
 | `Database.isEncrypted()` | Whether the server reports the connection as encrypted; `None` if it can't say. |
 | `proposeTable(database, table, sampleSize=1000)` | A `TableProposal` with a suggested policy and the reason for it, per column. |
 | `Database.getColumnDefinitions(table)`, `getPrimaryColumnNames(table)`, `tableExists(table)` | The catalog facts `schema` and upserts use. `table` may be `schema.table`; otherwise the connection's current schema is searched, and no other. |
-| `relatedTables(foreignKeys, roots, followChildren=True)` | Every table a subset from `roots` would copy. |
+| `subset.relatedTables(foreignKeys, roots, followChildren=True)` | Every table a subset from `roots` would copy. |
 | `schema.readTable`, `schema.createStatements`, `schema.renderScript` | A table's shape, CREATE TABLE statements for a target dialect, and the script form. |
 | `schema.clearTables(database, tables)` | Empties tables children-first, in one transaction. |
 | `planSubset(foreignKeys, root, where, followChildren=True, ignore=(), materialize=False, quote=None)` | A `SubsetPlan`: tables in load order, a query for each, each table's parents, and the foreign keys ignored. Raises `SubsetError` on a cycle, or on a chain deeper than 16 tables. Pass `materialize=database.dialect.supportsMaterializedSelections()`, and `quote=lambda name: quoteIdentifier(database.type, name)` (from `understudy_data.databaseDialects`) so reserved-word columns work. |

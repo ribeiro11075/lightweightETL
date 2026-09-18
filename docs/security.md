@@ -102,6 +102,11 @@ How that is held:
   error messages.
 - **The whole suite, twice.** CI runs it with the extension and with
   `UNDERSTUDY_NATIVE=0`.
+- **A trace if they ever didn't.** Every masked job records the implementation
+  beside its key fingerprint, and an upsert job run under a different one logs a
+  warning naming both, rather than refusing. The fingerprint alone couldn't show
+  it, since the key hasn't changed — and it is the evidence an operator would
+  need if rows masked before and after stopped joining.
 - **Published vectors.** FF1 is checked against NIST's sample vectors on both
   sides, and the keyed hash against RFC 4231.
 
@@ -135,6 +140,7 @@ These follow from masking being deterministic and shape-preserving. They are why
 - **Fingerprints.** Logs, manifests and `audit` show a key fingerprint: the first 48 bits of `HMAC-SHA256(K, fixed text)`. It identifies which key was used without revealing it, provided the key is strong; it is exactly the kind of known pair that makes a weak key searchable.
 - **Storage.** Read keys from the environment or a mounted file (`${MASKING_KEY}`, `${file:/run/secrets/masking-key}`); never commit them. Keys are held as secrets in the configuration model, so they don't appear in its `repr`, logs or tracebacks.
 - **Rotation.** A new key changes every mask. Masked upsert jobs refuse to run when their key has changed until the change is acknowledged, since their targets would otherwise mix masks from two keys. See [the key](masking.md#the-key).
+- **Implementation.** Each masked job also records which implementation masked it; a change is warned about, not refused. See [two implementations](#two-implementations).
 - **Separation.** Use different keys for copies that must not be linkable to each other, and a separate key, never a masking key, to sign manifests.
 
 

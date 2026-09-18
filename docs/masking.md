@@ -170,12 +170,7 @@ If `mask()` depends on nothing but the value, set `CACHEABLE = True` on the clas
 
 ### Speed
 
-Masking runs a column at a time, in pure Python or — where the optional
-`understudy-mask` extension is installed — in a native masker that computes the
-same masks several times faster. See [the native masker](#the-native-masker).
-
-**The policy is what decides throughput, by about sevenfold.** One million rows
-of six masked columns, with the extension, on one core:
+**The policy decides throughput, by about sevenfold.** One million rows of six masked columns, with the [native masker](#the-native-masker), on one core:
 
 | Policy | Rows a second |
 | --- | --- |
@@ -184,66 +179,31 @@ of six masked columns, with the extension, on one core:
 | two `fpe` columns, four cheap ones | 86,000 |
 | five `key` columns | 43,000 |
 
-`key` costs the most because it is the only strategy that has to be a
-*permutation*: it runs a Feistel network per value, where `hash` takes one
-digest. Roughly thirty times the work. Where a column doesn't have to stay
-one-to-one — where nothing joins on it — `hash` does the same hiding far
-cheaper.
+`key` costs the most because it has to be a *permutation*: a Feistel network per value, about thirty times the work of `hash`'s one digest. Where nothing joins on a column, `hash` hides as much far more cheaply.
 
-`key`'s own cost also varies about threefold with the *shape* of the value,
-because the permutation is cycle-walked into range and some shapes waste more of
-the walk than others. A twelve-digit identifier masks in 3.5 µs and an
-eleven-digit one in 7.0 µs. Nothing to act on; just don't expect two similar
-columns to cost the same.
-
-Six strategies remember what they've masked, up to 16,384 values per column:
-text of up to 256 characters, integers and UUIDs, which are the types whose
-equal values always mask the same way. A foreign key or a low-cardinality column
-repeats values constantly, so this makes them many times faster; a column of
-unique values, such as a primary key, gains nothing. A column's cache holds a
-few megabytes at most, and nothing that isn't already in the job's memory. The
-native masker deduplicates within each chunk instead.
+`key`, `fpe`, `hash`, `email`, `digits` and the `fake*` strategies remember up to 16,384 masked values per column (text up to 256 characters, integers and UUIDs), so foreign keys and low-cardinality columns mask many times faster. The native masker deduplicates within each chunk instead. For how `chunkSize` and latency interact, see [throughput](operations.md#throughput).
 
 ### The native masker
 
-`understudy-mask` is an optional extension that masks in Rust. It is not
-required, it changes no result, and everything works without it.
-
-It lives in `mask-rs/` and is not published yet. Until it is, build and install
-it from the repository:
+`understudy-mask` is an optional extension that masks in Rust. It changes no result, and everything works without it. It isn't published yet, so install it from a clone, which needs Rust 1.83 or newer; pip compiles it:
 
 ```
-cd mask-rs/py && maturin build --release
-pip install target/wheels/understudy_mask-*.whl
+pip install ./mask-rs/py
 ```
 
-It builds an abi3 wheel, so one build covers every supported Python.
+To build a wheel to install elsewhere instead, `cd mask-rs/py && maturin build --release`; it lands in `mask-rs/target/wheels/`, and as an abi3 wheel covers every supported Python.
 
-It covers `key`, `fpe`, `hash`, `email` and `digits`, which is where the time
-goes. Everything else, and every custom strategy, stays in Python. So do
-individual values it doesn't handle — `Decimal`, `UUID`, dates, and text outside
-ASCII — which pass back to the Python implementation one at a time, so a value
-that Python would refuse still refuses, with the same message.
+It covers `key`, `fpe`, `hash`, `email` and `digits`, which is where the time goes. Everything else stays in Python, and so do values it doesn't handle (`Decimal`, `UUID`, dates, non-ASCII text), so a value Python would refuse still refuses with the same message.
 
-Measured on one million rows of six masked columns, SQLite to SQLite:
+One million rows of six masked columns, SQLite to SQLite:
 
 | | Rows a second |
 | --- | --- |
 | Python | 21,000 |
-| `understudy-mask` | 93,000 |
-| `understudy-mask`, overlapped with the database | 112,000 |
+| Rust (`understudy-mask`) | 93,000 |
+| Rust, overlapped with the database | 112,000 |
 
-Ten million rows of the same shape take 99 seconds, holding 80 MB.
-
-**The two implementations compute identical masks**, which is a release
-requirement rather than an aspiration: a difference would not be a wrong answer
-but a silently changed key, and every join between an old copy and a new one
-would stop matching. See [two implementations](security.md#two-implementations)
-for how that is held.
-
-`UNDERSTUDY_NATIVE=0` ignores an installed extension and masks in Python. Use it
-to rule the extension out while diagnosing a difference. The masking manifest
-records which one ran, as `maskedBy`.
+**The two implementations compute identical masks**, a release requirement: a difference would silently break joins between old and new copies. See [two implementations](security.md#two-implementations). `UNDERSTUDY_NATIVE=0` masks in Python even with the extension installed, and the manifest records which one ran as `maskedBy`.
 
 
 ## Domains: keeping joins intact
@@ -349,6 +309,7 @@ This writes a record of what was masked, how, and under which key fingerprint. I
       ]
     }
   ],
+  "maskedBy": "understudy-mask/0.1.0",
   "tool": {"name": "understudy-data", "version": "0.1.0"},
   "configuration": {"jobsFile": "configuration/jobs.yaml", "sha256": "9f2c…"},
   "integrity": {
@@ -364,8 +325,8 @@ This writes a record of what was masked, how, and under which key fingerprint. I
 - `columns` lists the columns the query actually returned, and the policy applied to each. `source` says whether a column was listed in `columns` or fell to `defaultStrategy`.
 - A masked job that failed or was skipped is still listed, with its status and no columns. "This copy was not refreshed" belongs in the record too.
 - The manifest is written even when the run fails. It never contains a value or the key.
-
 - `configuration` names the jobs file and its SHA-256, so a reviewer can tell which policy produced the run.
+- `maskedBy` is `python`, or the native masker and its version.
 
 From Python, `RunResult.maskingManifest(jobsFile.jobs)` returns the manifest before sealing, without `tool`, `configuration` or `integrity`; `sealManifest` adds the last.
 

@@ -27,7 +27,12 @@ Streaming is per-driver, because `fetchmany()` bounds nothing if the driver has 
 | oracle | `arraysize` tuned to the chunk |
 | mssql, sqlite | plain — both already stream |
 
-Loads are written a chunk at a time too, each chunk in its own transaction. The MySQL, MariaDB and Oracle drivers already send a chunk in a few round trips; psycopg2 and pymssql send one statement per row, so those two get a bulk path. **PostgreSQL targets use `COPY`**: one round trip per chunk, which measured about 100 times faster on 50,000 rows. **SQL Server targets use multi-row statements**, a thousand rows each (the most one `VALUES` list may hold): about 6 times faster for inserts and 28 for upserts in testing. An upsert copies into a temporary table and merges it with one `INSERT ... ON CONFLICT`; since one statement can't update a row twice, rows repeating a key within a chunk are first reduced to the last of them, which is what applying them in turn would leave. A chunk holding a value `COPY` can't spell safely (an array, a JSON object, an interval) is sent row by row as before. SQL Server's `MERGE` has the same one-update-per-row rule, and gets the same reduction.
+Loads are written a chunk at a time too, each chunk in its own transaction. The MySQL, MariaDB and Oracle drivers already send a chunk in a few round trips; psycopg2 and pymssql send one statement per row, so those two get a bulk path:
+
+- **PostgreSQL uses `COPY`**, about 100 times faster on 50,000 rows. An upsert copies into a temporary table and merges it with one `INSERT ... ON CONFLICT`. A chunk holding a value `COPY` can't spell safely (an array, a JSON object, an interval) goes row by row instead.
+- **SQL Server uses multi-row statements** of up to a thousand rows: about 6 times faster for inserts and 28 for upserts.
+
+One statement can't update a row twice, so for both, rows repeating a key within a chunk are first reduced to the last of them — what applying them in turn would leave.
 
 Where the [native masker](masking.md#the-native-masker) is installed, the three stages overlap rather than taking turns: masking moves to a worker thread while the reader and writer keep the database connections, which they must — `mysqlclient` and PyMySQL forbid a connection being used by a thread other than its own, and SQLite enforces the same. Drivers release the GIL while they wait on a socket and the native masker releases it for a whole chunk, so the waiting and the masking genuinely overlap. A job then holds about three chunks rather than one. Pure-Python masking is slow enough to swamp any wait worth hiding, so it stays sequential; `UNDERSTUDY_PIPELINE` overrides either default.
 
@@ -179,11 +184,11 @@ Masked data jobs retry like any other data job. The watermark is read again on e
 `--log-format json` writes one object per line, for a log collector (for history, metrics and alerts, see [operations.md](operations.md)):
 
 ```json
-{"timestamp": "2026-09-16 01:00:12.514", "level": "INFO", "message": "loadOrders: completed in 12.5s, 4200 row(s)",
- "job": "loadOrders", "status": "completed", "rowCount": 4200, "durationSeconds": 12.5, "attempts": 1}
+{"timestamp": "2026-09-16 01:00:12.514", "level": "INFO", "logger": "understudy_data", "message": "Completed loadOrders (4200 row(s))",
+ "file": "runner.py", "line": 432, "job": "loadOrders", "status": "completed", "rowCount": 4200, "attempts": 1}
 ```
 
-The fields are the point. Completions, failures, skips and each cycle's summary carry `job`, `status`, `rowCount` and `durationSeconds`, so a collector can alert on `status="failed"` or chart rows per job without parsing messages. Logs go to stderr by default, since a container only collects stdout and stderr; `--log FILE` adds a file.
+The fields are the point. Completions, failures and skips carry `job` and `status`; completions add `rowCount` and `attempts`, failures `error` and `durationSeconds`, and each cycle's summary its totals. A collector can alert on `status="failed"` or chart rows per job without parsing messages. Logs go to stderr unless `--quiet`; `--log FILE` adds a file.
 
 
 ## Masking

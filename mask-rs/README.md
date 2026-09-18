@@ -26,6 +26,7 @@ Needs Rust 1.83 or newer.
 ```
 cargo test --release
 cd py && maturin build --release
+pip install ../target/wheels/understudy_mask-*.whl
 ```
 
 `--release` matters for the tests: two of them measure SHA-256 and AES

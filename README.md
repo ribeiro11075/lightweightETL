@@ -16,29 +16,51 @@
 
 ## Install
 
-Python 3.10+. Install with the drivers you need; each is optional and loaded only when used.
+Python 3.10 or newer. Choose the drivers you need as extras; each is loaded only when a connection uses it.
 
 ```
 pip install "understudy-data[postgresql,oracle]"
 ```
 
-Extras: `mysql`, `postgresql`, `oracle`, `mssql`, `mariadb`, `sqlite`, `fpe` (for the `fpe` masking strategy), or `all`. Oracle runs in `oracledb`'s thin mode and SQL Server through `pymssql`, so neither needs a separate client install.
-
-`understudy-mask`, an optional extension in `mask-rs/`, masks in Rust: four to five times the throughput, byte-for-byte identical masks, and nothing to configure. It isn't published yet — build it with `maturin build --release` and install the wheel. See [the native masker](docs/masking.md#the-native-masker).
-
-Or run the container image, which has every driver, with the configuration directory mounted as the working directory:
+It isn't on PyPI yet. Until the first release, install from a clone:
 
 ```
-docker run --rm -v "$PWD:/work" -e SOURCE_DB_PASSWORD -e TARGET_DB_PASSWORD -e MASKING_KEY \
-    ghcr.io/ribeiro11075/understudy-data run
+git clone https://github.com/ribeiro11075/understudy.git
+cd understudy
+pip install -e ".[postgresql,oracle]"
 ```
+
+| Extra | Driver | Needs besides pip |
+| --- | --- | --- |
+| `mysql`, `mariadb` | mysql-connector-python | nothing |
+| `postgresql` | psycopg2, built from source | a C compiler and PostgreSQL's client library (below) |
+| `oracle` | oracledb, in thin mode | nothing — no Oracle client |
+| `mssql` | pymssql | nothing |
+| `sqlite` | Python's own `sqlite3` | nothing |
+| `fpe` | cryptography, for the `fpe` masking strategy | nothing; `oracle` already brings it |
+| `all` | every driver above | as for `postgresql` |
+
+**Building psycopg2.** pip compiles it, so it needs a compiler and `pg_config`:
+
+- macOS: `xcode-select --install`, then `brew install libpq` and `export PATH="$(brew --prefix libpq)/bin:$PATH"` (Homebrew doesn't put libpq on the path by itself).
+- Debian or Ubuntu: `apt install build-essential libpq-dev`.
+
+To skip the build, leave `postgresql` (and `all`) out and install the prebuilt driver beside the other extras: `pip install "understudy-data[mysql,oracle,mssql]" psycopg2-binary`. psycopg2's maintainers recommend the source build for production.
+
+**The native masker (optional).** `understudy-mask`, in `mask-rs/`, masks in Rust: four to five times the throughput, identical masks, nothing to configure. With [Rust](https://rustup.rs) 1.83 or newer, pip builds it in the same command as the rest:
+
+```
+pip install -e ".[all]" ./mask-rs/py
+```
+
+Without Rust, leave `./mask-rs/py` off; everything works, only slower. See [the native masker](docs/masking.md#the-native-masker).
 
 
 ## Quickstart
 
 ```
 mkdir configuration
-cp example/configuration/*.yaml configuration/
+cp example/starter/configuration/*.yaml configuration/
 ```
 
 Edit `configuration/database.yaml` and `configuration/jobs.yaml` for your databases, then supply the credentials they reference:
@@ -54,9 +76,10 @@ understudy run               # run every job once
 To see it work without any of that, using throwaway SQLite databases:
 
 ```
-python example/walkthrough.py         # the whole workflow: discover, subset, audit, mask, verify, synthesize
-python example/incremental_demo.py    # streaming and incremental loads
-python example/masking_demo.py        # masking, discovery and a subset, from Python
+python example/walkthrough/demo.py       # the whole workflow: discover, subset, audit, mask, verify, synthesize
+python example/incremental/demo.py       # streaming and incremental loads
+python example/masking/demo.py           # masking, discovery and a subset, from Python
+python example/native-masking/demo.py    # the same job masked in Python and in Rust, compared
 ```
 
 
@@ -95,7 +118,7 @@ understudy verify-manifest  check a manifest is unaltered, and who signed it
 | `--forever` | stay running; for freshness under a minute |
 | `--log-format json` | structured logs for a collector |
 | `--log FILE` | also log to a file, in addition to stderr (`--quiet` silences stderr) |
-| `--memory FILE` | where run state (last runs, watermarks) is kept; default `memory.yaml` in the config directory |
+| `--memory FILE` | where run state (last runs, watermarks) is kept, overriding `jobs.yaml`'s [`memory`](docs/configuration.md#file-level) |
 | `--memory-database ALIAS` | keep run state in a database table instead |
 | `--history FILE` | append each job's outcome to a JSON-lines history |
 | `--metrics FILE` | write Prometheus metrics for the textfile collector (`--metrics-push URL` for a Pushgateway) |
@@ -121,8 +144,9 @@ understudy verify-manifest  check a manifest is unaltered, and who signed it
 
 | | |
 | --- | --- |
-| `understudy_data/` | the package: `cli.py`, `configuration.py`, `database.py` with per-dialect SQL in `databaseDialects.py`, `dependencyGraph.py`, `runner.py`, `transform.py`, `builtinTransforms.py`, `masking.py`, `fpe.py`, `audit.py`, `reporting.py`, `scrubbing.py`, `discovery.py`, `subset.py`, `synthesize.py`, `schema.py`, `memory.py` and `log.py` |
-| `example/` | runnable demos and a complete sample configuration — see [its README](example/README.md) |
+| `understudy_data/` | the package; `runner.py` runs jobs, `masking.py` masks, `databaseDialects.py` holds per-database SQL |
+| `mask-rs/` | the optional native masker, in Rust — see [its README](mask-rs/README.md) |
+| `example/` | runnable demos, each with its `configuration/`, and a starter configuration — see [its README](example/README.md) |
 | `docs/` | the documentation above |
 | `tests/` | the test suite |
 

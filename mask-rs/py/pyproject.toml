@@ -1,6 +1,6 @@
-# The extension ships as its own distribution: `understudy-data` keeps its
-# setuptools build and stays installable anywhere, with no Rust needed to
-# install it from source. `pip install "understudy-data[fast]"` brings this.
+# The extension ships as its own distribution, so `understudy-data` keeps its
+# setuptools build and installs anywhere without Rust. From a clone,
+# `pip install ./mask-rs/py` builds and installs this.
 [build-system]
 requires = ["maturin>=1.5,<2"]
 build-backend = "maturin"
