@@ -85,7 +85,7 @@ Run them before trusting a change to anything database-facing; they have found b
 
 `.github/workflows/ci.yml` runs mypy and the default tests on every supported Python, with the newest dependency versions the ranges allow. It runs the integration suite against the `docker-compose.yml` servers twice: with `image.txt`'s versions on Python 3.14, and with the lowest versions on Python 3.10.
 
-`.github/workflows/release.yml` publishes a release when a tag matching the version in `pyproject.toml`, and in `mask-rs/Cargo.toml`, is pushed. Bump both, and the `native` extra's pin, together:
+`.github/workflows/release.yml` publishes a release when a tag matching the version in `pyproject.toml`, and in `mask-rs/Cargo.toml`, is pushed. Bump both, and the `native` extra's pin, together, and add the release to [CHANGELOG.md](../CHANGELOG.md), breaking changes first:
 
 ```
 git tag v0.1.3 && git push origin v0.1.3      # the version in pyproject.toml

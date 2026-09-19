@@ -162,6 +162,7 @@ The ones you'd set in a deployment; [operations.md](docs/operations.md#environme
 | [Security model](docs/security.md) | what masking protects and what it doesn't, the constructions, keys, and a deployment checklist |
 | [Library](docs/library.md) | embedding it in Python, results, memory backends |
 | [Development](docs/development.md) | running the tests, including against real databases |
+| [Changelog](CHANGELOG.md) | what changed in each release, breaking changes first |
 
 
 ## Layout

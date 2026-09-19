@@ -16,7 +16,7 @@ from bauta.configuration import (Configuration, DatabaseConnectionConfig, DataJo
 from bauta.masking import STRATEGIES
 
 ROOT = Path(__file__).resolve().parents[1]
-DOCUMENTS = [ROOT / 'README.md', ROOT / 'example' / 'README.md'] + sorted((ROOT / 'docs').glob('*.md'))
+DOCUMENTS = [ROOT / 'README.md', ROOT / 'CHANGELOG.md', ROOT / 'example' / 'README.md'] + sorted((ROOT / 'docs').glob('*.md'))
 CONFIGURATION_DOC = ROOT / 'docs' / 'configuration.md'
 
 
