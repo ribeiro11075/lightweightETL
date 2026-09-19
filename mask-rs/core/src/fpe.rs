@@ -1,5 +1,5 @@
 //! The `fpe` strategy: NIST FF1, for policies that must name a published
-//! algorithm. `masking.FPEStrategy`.
+//! algorithm. `builtinMasking.FPEStrategy`.
 //!
 //! FF1 is only defined for at least a million possible values, so shorter
 //! values fall back to `key`'s permutation -- or fail, under `strict`. The two
@@ -12,7 +12,7 @@ use crate::ff1::Ff1;
 use crate::key::{decimalDigits, Charset, KeyStrategy};
 use crate::KeyedHash;
 
-/// `masking._FPE_ALPHABETS`. Unlike `key`, which masks within a character's own
+/// `builtinMasking._FPE_ALPHABETS`. Unlike `key`, which masks within a character's own
 /// class, `fpe` has one alphabet per charset -- so under `alphanumeric` a
 /// letter may become a digit.
 fn alphabetFor(charset: Charset) -> &'static [u8] {

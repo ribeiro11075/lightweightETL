@@ -1,6 +1,6 @@
 //! The `key` strategy: a one-to-one mapping, safe for primary and foreign keys.
 //!
-//! `masking.KeyStrategy`, and its shape rules are the reason the mapping is
+//! `builtinMasking.KeyStrategy`, and its shape rules are the reason the mapping is
 //! one-to-one overall -- two inputs of different shapes can never collide,
 //! and within a shape it is a permutation.
 //!
@@ -22,7 +22,7 @@ pub const LOWERCASE: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
 pub const UPPERCASE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 pub const HEX_DIGITS: &[u8] = b"0123456789abcdef";
 
-/// `masking._ALPHANUMERIC_CLASSES`, in order: a character is masked within the
+/// `builtinMasking._ALPHANUMERIC_CLASSES`, in order: a character is masked within the
 /// first class it belongs to, which is what keeps a digit a digit and a case a
 /// case.
 const ALPHANUMERIC_CLASSES: [&[u8]; 3] = [DIGITS, LOWERCASE, UPPERCASE];
@@ -178,7 +178,7 @@ impl KeyStrategy {
     }
 }
 
-/// How many decimal digits a magnitude has. `masking._digitCount`, which stops
+/// How many decimal digits a magnitude has. `builtinMasking._digitCount`, which stops
 /// short of writing out anything past MAXIMUM_KEY_LENGTH digits.
 pub fn decimalDigits(magnitude: &BigUint) -> usize {
     if magnitude.is_zero() {

@@ -166,7 +166,7 @@ The ones you'd set in a deployment; [operations.md](docs/operations.md#environme
 
 | Path | What it is |
 | --- | --- |
-| `bauta/` | the package; `runner.py` runs jobs, `masking.py` masks, `databaseDialects.py` holds per-database SQL |
+| `bauta/` | the package; `runner.py` runs jobs, `masking.py` masks with the strategies in `builtinMasking.py` and their lists in `fakeData.py`, `databaseDialects.py` holds per-database SQL |
 | `mask-rs/` | the optional native masker, in Rust — see [its README](mask-rs/README.md) |
 | `example/` | runnable demos, each with its `configuration/`, and a starter configuration — see [its README](example/README.md) |
 | `docs/` | the documentation above |

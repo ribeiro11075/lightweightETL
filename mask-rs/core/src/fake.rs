@@ -1,5 +1,5 @@
 //! The `fake*` strategies: a realistic replacement picked from lists by the
-//! keyed hash. `masking._FakeStrategy` and its subclasses.
+//! keyed hash. `builtinMasking._FakeStrategy` and its subclasses.
 //!
 //! The lists are Python's, handed over when a masker is built, so there is one
 //! copy of them to keep: changing a list changes every mask made from it, and a

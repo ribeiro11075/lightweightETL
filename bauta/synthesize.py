@@ -16,7 +16,8 @@ from typing import AbstractSet, Any, Callable, Dict, Iterator, List, NamedTuple,
 
 from .databaseDialects import ColumnDefinition, ForeignKey, quoteIdentifier
 from .discovery import BUILTIN_RULES, DiscoveryRules, nameWords
-from .masking import STRATEGIES, KeyedHash
+from .builtinMasking import STRATEGIES
+from .masking import KeyedHash
 from .schema import INTEGER_BOOLEAN_NOTE, PortableType, portableType
 
 DEFAULT_NULL_SHARE = 0.1

@@ -17,7 +17,9 @@ from .dependencyGraph import DependencyGraph, JobOutcome, JobStatus
 from .discovery import DiscoveryRules, TableProposal, discoveryRules, proposeTable
 from .log import Log
 from .audit import auditJobs, renderAudit
-from .masking import LOCALES, STRATEGIES, MaskingError, MaskingPlan, Strategy, buildMaskingManifest, keyFingerprint, resolveStrategy, sealManifest, \
+from .builtinMasking import STRATEGIES
+from .fakeData import LOCALES
+from .masking import MaskingError, MaskingPlan, Strategy, buildMaskingManifest, keyFingerprint, resolveStrategy, sealManifest, \
     verifyManifest
 from .memory import DATABASE_MEMORY_SCHEMA, DatabaseMemory, FileMemory, MemoryBackend, RunInProgressError, exclusiveRun
 from .reporting import DATABASE_HISTORY_SCHEMA, DATABASE_MANIFEST_SCHEMA, DatabaseHistory, DatabaseManifests, FileHistory, RunHistory, notify

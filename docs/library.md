@@ -165,10 +165,10 @@ with Database(connectionSettings=databases['prod']) as database:
 | Name | What it is |
 | --- | --- |
 | `MaskingPlan(key, columns, defaultStrategy=None)` | A validated policy. `bind(columns)` checks coverage and returns an object whose `apply(rows)` masks one chunk, and whose `manifest` lists what each column gets. `fingerprint` is the key's safe identifier. |
-| `STRATEGIES` | Strategy name → class, for the built-in strategies. Each `Strategy` validates its own options in `validateOptions`. |
+| `STRATEGIES` | Strategy name → class, for the built-in strategies, which are in `bauta.builtinMasking`. Each `Strategy` validates its own options in `validateOptions`. |
 | `masking.setMaskingThreads(n)` | How many threads the native masker spreads a chunk over, in this process; one until set. `runDataJobs` sets it in each job's process from `maskingThreads`, so call it only when using `MaskingPlan` directly. Results are the same for any `n`. |
 | `resolveStrategy(name)` | A built-in strategy, or your own named `module.path:ClassName`; see [your own strategies](masking.md#your-own-strategies). |
-| `LOCALES` | The fake-data locales, as name → `Locale`. |
+| `LOCALES` | The fake-data locales, as name → `Locale`, from `bauta.fakeData`, which holds every list the `fake*` strategies pick from. |
 | `keyFingerprint(key)` | The same fingerprint, for a key on its own. |
 | `buildMaskingManifest(outcomes, declared)` | The manifest from outcomes and each masked job's declared target and fingerprint. `RunResult.maskingManifest` wraps it. |
 | `sealManifest(manifest, signingKey=None)`, `verifyManifest(manifest, signingKey=None)` | Add a manifest's digest (and signature), and check them. `verifyManifest` returns `digestValid`, `signed`, `signatureValid` and the signing key's fingerprint, and raises `ValueError` for a manifest with no integrity section. See [sealing and verifying](masking.md#sealing-and-verifying). |
