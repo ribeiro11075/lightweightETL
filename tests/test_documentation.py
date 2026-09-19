@@ -114,6 +114,7 @@ def test_every_documented_flag_exists():
 
     real = set()
     for action in _buildParser()._actions:
+        real.update(action.option_strings)
         if action.dest == 'command':
             for subparser in action.choices.values():
                 for option in subparser._actions:

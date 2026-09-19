@@ -1134,9 +1134,34 @@ def _addGeneratorArguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--output', help='write the generated jobs here instead of stdout; must not already exist')
 
 
+class _PrintVersion(argparse.Action):
+    """`bauta --version`: this package's version, and which masker it would
+    use -- the two things anyone helping with a problem asks first.
+    """
+
+    def __init__(self, option_strings: Sequence[str], dest: str = argparse.SUPPRESS, default: Any = argparse.SUPPRESS,
+                 help: Optional[str] = None) -> None:
+        super().__init__(option_strings, dest=dest, default=default, nargs=0, help=help)
+
+    def __call__(self, parser: argparse.ArgumentParser, namespace: argparse.Namespace, values: Any, option_string: Optional[str] = None) -> None:
+        from .masking import nativeVersion
+
+        native = nativeVersion()
+        if native:
+            masker = 'bauta-rs {}'.format(native)
+        elif os.environ.get('BAUTA_NATIVE') == '0':
+            masker = 'python (BAUTA_NATIVE=0 turns the native masker off)'
+        else:
+            masker = 'python (pip install "bauta[native]" for the native masker)'
+        print('bauta {}'.format(_toolVersion()))
+        print('masking: {}'.format(masker))
+        parser.exit()
+
+
 def _buildParser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(prog='bauta', description='Move, mask and subset data between databases, with jobs defined in YAML.')
+    parser.add_argument('--version', action=_PrintVersion, help='print the version, and which masker it would use')
     subparsers = parser.add_subparsers(dest='command', required=True)
 
     runParser = subparsers.add_parser('run', help='run data jobs')
@@ -1160,7 +1185,8 @@ def _buildParser() -> argparse.ArgumentParser:
     validateParser.set_defaults(handler=_commandValidate)
 
     auditParser = subparsers.add_parser('audit', help='report what each job does with data, and what a reviewer should question')
-    _addCommonArguments(auditParser)
+    # Reads the jobs, never run state, so no --memory flags.
+    _addCommonArguments(auditParser, memory=False)
     auditParser.add_argument('--connect', action='store_true',
                              help='also run each masked query for its real columns, and check whether each connection is encrypted')
     auditParser.add_argument('--job', action='append', help='audit only this job (repeatable)')

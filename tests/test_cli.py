@@ -1049,3 +1049,36 @@ def test_validate_refuses_more_masking_threads_than_cores(maskedWorkspace, monke
 
     assert main(['validate']) == EXIT_BAD_CONFIGURATION
     assert 'maskingThreads is 16, but this machine has 4 core(s) available to it: set at most 4, or auto' in caplog.text
+
+
+def test_version_says_which_masker_it_would_use(capsys):
+    import importlib.metadata
+    import os
+
+    from bauta.masking import nativeVersion
+
+    with pytest.raises(SystemExit) as exited:
+        main(['--version'])
+
+    assert exited.value.code == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == 'bauta {}'.format(importlib.metadata.version('bauta'))
+
+    if nativeVersion():
+        expected = 'masking: bauta-rs {}'.format(nativeVersion())
+    elif os.environ.get('BAUTA_NATIVE') == '0':
+        expected = 'masking: python (BAUTA_NATIVE=0 turns the native masker off)'
+    else:
+        expected = 'masking: python (pip install "bauta[native]" for the native masker)'
+    assert lines[1] == expected
+
+
+@pytest.mark.parametrize('command,offers', [('run', True), ('validate', True), ('jobs', True), ('clear', True), ('audit', False)])
+def test_only_commands_that_read_run_state_offer_its_flags(command, offers):
+    """A flag a command ignores looks like it matters."""
+    from bauta.cli import _buildParser
+
+    subparsers = next(action for action in _buildParser()._actions if action.dest == 'command')
+    flags = {flag for action in subparsers.choices[command]._actions for flag in action.option_strings}
+
+    assert ({'--memory', '--memory-database', '--memory-table'} <= flags) is offers

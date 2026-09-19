@@ -84,6 +84,8 @@ bauta clear            empty the jobs' target tables, children first
 
 bauta audit            report what each job does with data, and what to question
 bauta verify-manifest  check a masking manifest is unaltered, and who signed it
+
+bauta --version        print the version, and which masker it would use
 ```
 
 | Exit code | Meaning |
